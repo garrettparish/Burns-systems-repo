@@ -1,12 +1,836 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Burns Systems</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Burns Dirt — Project Controls</title>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600;700&family=Source+Serif+4:wght@300;400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--green:#3E4D3E;--midnight:#363636;--sand:#B9AB99;--ash:#D6D6D6;--orange:#F26722;--white:#FFF;--bg:#F5F3F0;--card:#FFF;--border:#E0DCD6;--text:#363636;--text-light:#6B6B6B;--red:#C0392B;--yellow:#F39C12;--blue:#2980B9;--teal:#1ABC9C}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Source Serif 4',Georgia,serif;background:var(--bg);color:var(--text);min-height:100vh}
+.topbar{background:var(--green);color:var(--white);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);position:sticky;top:0;z-index:100}
+.topbar-brand{font-family:Oswald,sans-serif;font-weight:700;font-size:20px;letter-spacing:1px;text-transform:uppercase}
+.topbar-brand span{color:var(--orange)}
+.topbar-phase{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:2px;text-transform:uppercase;opacity:.7}
+.nav{background:var(--midnight);display:flex;gap:0;padding:0 24px;border-bottom:3px solid var(--orange)}
+.nav-tab{font-family:Oswald,sans-serif;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--sand);padding:12px 20px;cursor:pointer;border:none;background:none;transition:all .2s;position:relative}
+.nav-tab:hover{color:var(--white)}
+.nav-tab.active{color:var(--white);background:rgba(255,255,255,.08)}
+.nav-tab.active::after{content:'';position:absolute;bottom:-3px;left:0;right:0;height:3px;background:var(--orange)}
+.nav-tab .badge{background:var(--orange);color:var(--white);font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px}
+.panel{display:none;padding:24px;max-width:1400px;margin:0 auto}
+.panel.active{display:block}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.card-title{font-family:Oswald,sans-serif;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid var(--ash);display:flex;align-items:center;justify-content:space-between}
+.import-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
+.import-zone{background:var(--card);border:2px dashed var(--sand);border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:all .2s}
+.import-zone:hover{border-color:var(--orange);background:#FFF8F4}
+.import-zone.loaded{border-color:var(--green);border-style:solid;background:#F4F7F4}
+.import-zone h3{font-family:Oswald,sans-serif;font-size:16px;color:var(--midnight);margin-bottom:4px}
+.import-zone p{font-size:13px;color:var(--text-light);margin-bottom:12px}
+.import-zone .status{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:1px;text-transform:uppercase}
+.import-zone .status.pending{color:var(--sand)}
+.import-zone .status.loaded{color:var(--green)}
+.import-zone input[type="file"]{display:none}
+.job-bar{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+.job-bar label{font-family:Oswald,sans-serif;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light)}
+.job-select{font-family:'Source Serif 4',serif;font-size:14px;padding:6px 12px;border:1px solid var(--border);border-radius:4px;background:var(--white);min-width:240px}
+.btn-primary{font-family:Oswald,sans-serif;font-size:13px;letter-spacing:1px;text-transform:uppercase;background:var(--orange);color:var(--white);border:none;padding:8px 20px;border-radius:4px;cursor:pointer}
+.btn-primary:hover{background:#D95A1B}
+.btn-secondary{font-family:Oswald,sans-serif;font-size:13px;letter-spacing:1px;text-transform:uppercase;background:var(--ash);color:var(--midnight);border:none;padding:8px 20px;border-radius:4px;cursor:pointer}
+.btn-green{font-family:Oswald,sans-serif;font-size:13px;letter-spacing:1px;text-transform:uppercase;background:var(--green);color:var(--white);border:none;padding:8px 20px;border-radius:4px;cursor:pointer}
+.btn-green:hover{background:#2E3D2E}
+.btn-sm{font-size:11px;padding:3px 10px}
+.edit-btn{background:none;border:1px solid var(--sand);color:var(--text-light);font-family:Oswald,sans-serif;font-size:10px;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.edit-btn:hover{border-color:var(--orange);color:var(--orange)}
+.del-btn{background:none;border:1px solid #E8D0D0;color:#C0392B;font-family:Oswald,sans-serif;font-size:10px;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.del-btn:hover{background:#FDF2F0;border-color:var(--red)}
+.drill-btn{background:none;border:1px solid var(--blue);color:var(--blue);font-family:Oswald,sans-serif;font-size:10px;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:3px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.drill-btn:hover{background:#EBF5FB}
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;border-top:3px solid var(--green)}
+.kpi.warn{border-top-color:var(--yellow)}
+.kpi.danger{border-top-color:var(--red)}
+.kpi.good{border-top-color:var(--teal)}
+.kpi-value{font-family:Oswald,sans-serif;font-size:28px;font-weight:600;color:var(--midnight)}
+.kpi-label{font-size:12px;color:var(--text-light);margin-top:4px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:1px;text-transform:uppercase;background:var(--green);color:var(--white);padding:10px 12px;text-align:left;position:sticky;top:0;white-space:nowrap}
+td{padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+tr:hover{background:#FAF8F5}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.negative{color:var(--red);font-weight:600}
+.positive{color:var(--teal)}
+.disc-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.legend-item{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-light)}
+.legend-swatch{width:14px;height:10px;border-radius:2px}
+.cost-bars{display:flex;flex-direction:column;gap:8px;padding:4px 0}
+.cost-bar-row{display:flex;align-items:center;gap:10px}
+.cost-bar-label{font-size:12px;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);width:80px;min-width:80px;text-align:right}
+.cost-bar-fill{height:22px;border-radius:3px;transition:width .3s}
+.cost-bar-value{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.filter-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.filter-chip{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:5px 12px;border-radius:16px;border:1px solid var(--border);background:var(--white);color:var(--text-light);cursor:pointer;transition:all .15s}
+.filter-chip:hover{border-color:var(--orange);color:var(--orange)}
+.filter-chip.active{background:var(--green);color:var(--white);border-color:var(--green)}
+.search-input{font-family:'Source Serif 4',serif;font-size:13px;padding:5px 12px;border:1px solid var(--border);border-radius:16px;width:200px}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;align-items:center;justify-content:center}
+.modal-bg.show{display:flex}
+.modal{background:var(--white);border-radius:8px;padding:24px;width:90%;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+.modal.wide{max-width:720px;max-height:85vh;overflow-y:auto}
+.modal h3{font-family:Oswald,sans-serif;font-size:18px;margin-bottom:16px;color:var(--green)}
+.modal label{display:block;font-size:13px;margin-bottom:4px;color:var(--text-light)}
+.modal input,.modal select{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-family:'Source Serif 4',serif;font-size:14px;margin-bottom:12px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.edit-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
+.edit-grid .full{grid-column:span 2}
+.staging-banner{background:linear-gradient(135deg,#FFF3E0,#FFF8F0);border:2px solid var(--orange);border-radius:8px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.staging-banner h3{font-family:Oswald,sans-serif;font-size:16px;color:var(--orange);margin:0}
+.staging-banner p{font-size:13px;color:var(--text-light);margin:4px 0 0 0}
+.staging-actions{display:flex;gap:8px}
+.empty-state{text-align:center;padding:60px 20px;color:var(--text-light)}
+.empty-state h2{font-family:Oswald,sans-serif;font-size:22px;color:var(--sand);margin-bottom:8px}
+.drill-panel{background:#F8FBFF;border:1px solid #D0E3F5;border-radius:8px;padding:16px;margin-top:12px}
+.drill-panel .card-title{color:var(--blue);border-bottom-color:#D0E3F5}
+.back-btn{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:1px;text-transform:uppercase;background:none;border:none;color:var(--blue);cursor:pointer;padding:0;margin-bottom:12px}
+.back-btn:hover{color:var(--orange)}
+.map-banner{background:linear-gradient(135deg,#EBF5FB,#F0F7FD);border:2px solid var(--blue);border-radius:8px;padding:16px 20px;margin-bottom:16px}
+.map-banner h3{font-family:Oswald,sans-serif;font-size:16px;color:var(--blue);margin:0 0 4px 0}
+.map-banner p{font-size:13px;color:var(--text-light);margin:0}
+.map-table select{font-family:'Source Serif 4',serif;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--white);max-width:260px;width:100%}
+.map-table select.mapped{border-color:var(--green);background:#F4F7F4}
+.map-table select.unmapped{border-color:var(--yellow);background:#FFFDF0}
+.map-summary{display:flex;gap:16px;margin:12px 0;font-family:Oswald,sans-serif;font-size:13px;letter-spacing:.5px;text-transform:uppercase}
+.map-summary .count{font-weight:600}
+.map-summary .mapped-count{color:var(--green)}
+.map-summary .unmapped-count{color:var(--yellow)}
+.map-auto-btn{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;background:var(--blue);color:var(--white);border:none;padding:6px 14px;border-radius:4px;cursor:pointer}
+.map-auto-btn:hover{background:#1A6DAA}
+@media(max-width:768px){.import-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.nav-tab{padding:10px 12px;font-size:11px}}
+</style>
 </head>
 <body>
-    <h1>Burns Systems</h1>
-    <p>Site is live.</p>
+
+<div class="topbar">
+  <div class="topbar-brand">Burns Dirt <span>Project Controls</span></div>
+  <div class="topbar-phase">Phase 1A — Import & Dashboard</div>
+</div>
+
+<div class="nav">
+  <button class="nav-tab active" data-tab="import">Import Data</button>
+  <button class="nav-tab" data-tab="dashboard">Job Dashboard</button>
+  <button class="nav-tab" data-tab="global">Global View</button>
+  <button class="nav-tab" data-tab="biditems">Bid Items</button>
+  <button class="nav-tab" data-tab="schedule">Schedule</button>
+</div>
+
+<!-- IMPORT -->
+<div id="panel-import" class="panel active">
+  <div class="job-bar">
+    <label>Active Job:</label>
+    <select class="job-select" id="jobSelect" onchange="switchJob()"><option value="">— Create or select a job —</option></select>
+    <button class="btn-green btn-sm" onclick="showNewJobModal()">+ New Job</button>
+    <button class="edit-btn" id="editJobBtn" onclick="showEditJobModal()" style="display:none;">Edit Job</button>
+  </div>
+  <div id="importArea" style="display:none;">
+    <div class="import-grid">
+      <div class="import-zone" id="zone-activities" onclick="document.getElementById('file-activities').click()">
+        <h3>HeavyBid Activities</h3>
+        <p>Cost detail that rolls up into bid items</p>
+        <div class="status pending" id="status-activities">Drop .xlsx or click</div>
+        <input type="file" id="file-activities" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'activities')">
+      </div>
+      <div class="import-zone" id="zone-biditems" onclick="document.getElementById('file-biditems').click()">
+        <h3>HeavyBid Bid Items</h3>
+        <p>Pay items, unit prices, cost layers</p>
+        <div class="status pending" id="status-biditems">Drop .xlsx or click</div>
+        <input type="file" id="file-biditems" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'biditems')">
+      </div>
+      <div class="import-zone" id="zone-schedule" onclick="document.getElementById('file-schedule').click()">
+        <h3>Smartsheet Schedule</h3>
+        <p>Tasks, dates, durations, crews</p>
+        <div class="status pending" id="status-schedule">Drop .xlsx or click</div>
+        <input type="file" id="file-schedule" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'schedule')">
+      </div>
+    </div>
+    <div style="margin-top:12px;"><button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule → Bid Items</button></div>
+    <div id="stagingArea" style="display:none;"></div>
+    <div id="mappingArea" style="display:none;"></div>
+    <div class="card" style="margin-top:20px;">
+      <div class="card-title">Import Log</div>
+      <div id="importLog" style="font-size:13px;color:var(--text-light);max-height:200px;overflow-y:auto;"><em>Waiting for file uploads...</em></div>
+    </div>
+  </div>
+  <div id="noJobMsg" class="empty-state"><h2>No Job Selected</h2><p>Create a new job to get started.</p></div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="panel-dashboard" class="panel">
+  <div class="job-bar">
+    <label>Job:</label>
+    <select class="job-select" id="dashJobSelect" onchange="switchJobFromDash()"></select>
+    <button class="edit-btn" onclick="showEditJobModal()">Edit Job</button>
+  </div>
+  <div id="dashContent"></div>
+</div>
+
+<!-- GLOBAL VIEW -->
+<div id="panel-global" class="panel"><div id="globalContent"></div></div>
+
+<!-- BID ITEMS -->
+<div id="panel-biditems" class="panel">
+  <div class="job-bar">
+    <label>Job:</label>
+    <select class="job-select" id="bidJobSelect" onchange="switchJobFromBid()"></select>
+    <input type="text" class="search-input" placeholder="Search bid items..." id="bidSearch" oninput="renderBidItems()">
+  </div>
+  <div class="filter-bar" id="bidFilters"></div>
+  <div id="bidContent"></div>
+</div>
+
+<!-- SCHEDULE -->
+<div id="panel-schedule" class="panel">
+  <div class="job-bar">
+    <label>Job:</label>
+    <select class="job-select" id="schJobSelect" onchange="switchJobFromSch()"></select>
+  </div>
+  <div id="schContent"></div>
+</div>
+
+<!-- JOB MODAL -->
+<div class="modal-bg" id="newJobModal">
+  <div class="modal">
+    <h3 id="jobModalTitle">New Job</h3>
+    <label>Job Number</label><input type="text" id="newJobNum" placeholder="e.g. 775">
+    <label>Job Name</label><input type="text" id="newJobName" placeholder="e.g. SteelDriver">
+    <label>Client</label><input type="text" id="newJobClient" placeholder="e.g. Mississippi Power">
+    <label>Billing Type</label>
+    <select id="newJobBilling"><option value="unit-price">Unit Price (DOT / Public)</option><option value="progress">Progress / % Complete (Private)</option></select>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeNewJobModal()">Cancel</button>
+      <button class="btn-primary" id="jobModalSaveBtn" onclick="createJob()">Create Job</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT ROW MODAL -->
+<div class="modal-bg" id="editRowModal">
+  <div class="modal wide">
+    <h3 id="editRowTitle">Edit Record</h3>
+    <div id="editRowFields"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeEditRow()">Cancel</button>
+      <button class="btn-primary" onclick="saveEditRow()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+// DATA STORE
+// ═══════════════════════════════════════════
+const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]} };
+
+// ═══════════════════════════════════════════
+// DISCIPLINES
+// ═══════════════════════════════════════════
+const DISCIPLINES = {
+  '01':{name:'General',color:'#7F8C8D'},'10':{name:'General',color:'#7F8C8D'},
+  '20':{name:'Erosion',color:'#27AE60'},'30':{name:'Demo',color:'#8E44AD'},
+  '40':{name:'Earthwork',color:'#D4A017'},'50':{name:'Storm',color:'#2980B9'},
+  '60':{name:'Sanitary',color:'#16A085'},'70':{name:'Water',color:'#3498DB'},
+  '80':{name:'Paving',color:'#34495E'},'90':{name:'Concrete',color:'#E67E22'},
+};
+
+function getDiscipline(code){
+  if(!code) return {name:'Other',color:'#95A5A6'};
+  const n=String(code).replace(/[^0-9]/g,'');
+  if(n.length<2) return DISCIPLINES['01']||{name:'General',color:'#7F8C8D'};
+  const b=String(Math.floor(parseInt(n.substring(0,2))/10)*10);
+  return DISCIPLINES[b]||{name:'Other',color:'#95A5A6'};
+}
+
+// Derive discipline for a schedule task from its name via keywords
+function getTaskDiscipline(taskName){
+  const n=(taskName||'').toLowerCase();
+  const map=[
+    {keys:['erosion','silt','fence','bmp','swppp','seed','mulch','turf','hydro'],disc:'20'},
+    {keys:['demo','demolition','remove','clearing','grubbing','strip'],disc:'30'},
+    {keys:['earth','grade','grading','excavat','fill','embankment','subgrade','dirt','mass','stockpile','haul','undercut','proof','compact','rough grade','fine grade','borrow'],disc:'40'},
+    {keys:['storm','drain','rcp','hdpe','catch basin','inlet','headwall','junction','culvert','ditch','flume','outfall','manhole storm','storm sewer'],disc:'50'},
+    {keys:['sanitary','sewer','ss ','san ','gravity main','force main','manhole san','lift station','sewer main'],disc:'60'},
+    {keys:['water','waterline','fire hydrant','valve','water main','tap','meter','service connection'],disc:'70'},
+    {keys:['pav','asphalt','hmac','base course','aggregate base','tack','prime','milling','overlay','roadway','shoulder','curb and gutter','curb & gutter'],disc:'80'},
+    {keys:['concrete','sidewalk','flatwork','headwall','retaining wall','barrier','median','apron','driveway','forms','rebar','pour'],disc:'90'},
+    {keys:['mob','mobiliz','bond','insurance','survey','layout','staking','traffic control','signs','testing','closeout','punchlist','substantial','final','general conditions','project manage','superintendent','submittals'],disc:'10'},
+  ];
+  for(const m of map){for(const k of m.keys){if(n.includes(k))return DISCIPLINES[m.disc]||{name:'General',color:'#7F8C8D'}}}
+  return {name:'General',color:'#7F8C8D'};
+}
+
+// Derive discipline for a bid item from its child activities
+function getBidItemDiscipline(bidItemId, activities){
+  const children = activities.filter(a=>String(a.biditem)===String(bidItemId));
+  if(!children.length) return {name:'Other',color:'#95A5A6'};
+  const map={};
+  children.forEach(a=>{const d=a.discipline.name;map[d]=(map[d]||0)+a.directTotal});
+  let best=null,bestV=0;
+  Object.entries(map).forEach(([k,v])=>{if(v>bestV){bestV=v;best=k}});
+  const disc=Object.values(DISCIPLINES).find(d=>d.name===best);
+  return disc||{name:best||'Other',color:'#95A5A6'};
+}
+
+// ═══════════════════════════════════════════
+// FORMATTERS
+// ═══════════════════════════════════════════
+const fmt=n=>n!=null?Number(n).toLocaleString('en-US',{maximumFractionDigits:1}):'—';
+const fmtD=n=>n!=null?'$'+Number(n).toLocaleString('en-US',{maximumFractionDigits:0}):'—';
+const fmtD2=n=>n!=null?'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—';
+const fmtPct=n=>n!=null?Number(n).toFixed(1)+'%':'—';
+const fmtDate=d=>{if(!d)return'—';const dt=d instanceof Date?d:new Date(d);return isNaN(dt)?'—':dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})};
+
+// ═══════════════════════════════════════════
+// NAV TABS
+// ═══════════════════════════════════════════
+document.querySelectorAll('.nav-tab').forEach(tab=>{
+  tab.addEventListener('click',()=>{
+    document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+    document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
+    ({dashboard:renderDashboard,global:renderGlobalView,biditems:renderBidItems,schedule:renderSchedule})[tab.dataset.tab]?.();
+  });
+});
+
+// ═══════════════════════════════════════════
+// JOB MANAGEMENT
+// ═══════════════════════════════════════════
+let _editingJobId=null;
+function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('newJobModal').classList.add('show')}
+function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobModal').classList.add('show')}
+function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderDashboard();log(`Job updated: #${m.number} ${m.name}`)}
+function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();updateImportPanel();log(`Job created: #${num} ${name}`)}
+
+function switchJob(){Store.activeJob=document.getElementById('jobSelect').value||null;syncSel('jobSelect');updateImportPanel()}
+function switchJobFromDash(){Store.activeJob=document.getElementById('dashJobSelect').value||null;syncSel('dashJobSelect');renderDashboard()}
+function switchJobFromBid(){Store.activeJob=document.getElementById('bidJobSelect').value||null;syncSel('bidJobSelect');renderBidItems()}
+function switchJobFromSch(){Store.activeJob=document.getElementById('schJobSelect').value||null;syncSel('schJobSelect');renderSchedule()}
+function syncSel(src){const v=Store.activeJob||'';['jobSelect','dashJobSelect','bidJobSelect','schJobSelect'].forEach(id=>{if(id!==src)document.getElementById(id).value=v})}
+function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;['jobSelect','dashJobSelect','bidJobSelect','schJobSelect'].forEach(id=>{document.getElementById(id).innerHTML=base;document.getElementById(id).value=Store.activeJob||''})}
+function updateImportPanel(){const has=!!Store.activeJob;document.getElementById('importArea').style.display=has?'block':'none';document.getElementById('noJobMsg').style.display=has?'none':'block';document.getElementById('editJobBtn').style.display=has?'inline-block':'none';if(has)updateImportZones()}
+function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(data&&data.length){zone.classList.add('loaded');st.className='status loaded';st.textContent=data.length+' records loaded'}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
+  const mapBtn=document.getElementById('mapScheduleBtn');
+  if(mapBtn){if(job.bidItems.length&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Bid Items'}else{mapBtn.style.display='none'}}
+  updateNavBadges()}
+function updateNavBadges(){document.querySelectorAll('.nav-tab .badge').forEach(b=>b.remove());if(!Store.activeJob)return;const j=Store.jobs[Store.activeJob];const c={biditems:j.bidItems.length,schedule:j.schedule.length};document.querySelectorAll('.nav-tab').forEach(t=>{if(c[t.dataset.tab]){const b=document.createElement('span');b.className='badge';b.textContent=c[t.dataset.tab];t.appendChild(b)}})}
+function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${msg}</div>`;el.scrollTop=el.scrollHeight}
+
+// ═══════════════════════════════════════════
+// IMPORT → STAGING
+// ═══════════════════════════════════════════
+function handleImport(event,type){
+  const file=event.target.files[0];if(!file||!Store.activeJob)return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+      log(`Parsing ${file.name}: ${rows.length} rows, ${Object.keys(rows[0]||{}).length} columns`);
+      let parsed;
+      if(type==='activities') parsed=parseActivitiesRaw(rows);
+      else if(type==='biditems') parsed=parseBidItemsRaw(rows);
+      else parsed=parseScheduleRaw(rows);
+      parsed.forEach(r=>r._selected=true);
+      Store.staging={type,data:parsed};
+      log(`${type}: ${parsed.length} records parsed. Review below.`);
+      renderStaging();
+    }catch(err){log(`Error parsing ${file.name}: ${err.message}`)}
+  };
+  reader.readAsArrayBuffer(file);event.target.value='';
+}
+
+function parseActivitiesRaw(rows){
+  return rows.filter(r=>r['Activity Code']||r['Activity']).map(r=>{
+    const code=String(r['Activity Code']||r['Activity']||'');
+    return{
+      biditem:String(r['Biditem']||r['Bid Item']||r['BidItem']||''),
+      code:code,description:r['Description']||'',
+      quantity:parseFloat(r['Quantity'])||0,units:r['Units']||'',
+      crew:r['Crew']||r['crew']||'',
+      crewHours:parseFloat(r['Crew Hours'])||0,
+      productivityRate:parseFloat(r['Productivity Rate'])||0,
+      manHours:parseFloat(r['Man Hours'])||0,
+      calculatedDays:parseFloat(r['Calculated Days'])||0,
+      labor:parseFloat(r['Labor'])||0,burden:parseFloat(r['Burden'])||0,
+      permMat:parseFloat(r['Perm Mat'])||0,constMat:parseFloat(r['Const Mat'])||0,
+      subs:parseFloat(r['Subs'])||0,
+      eqpOper:parseFloat(r['Eqp Oper'])||0,compEqp:parseFloat(r['Comp Eqp']||r['Co Eqp'])||0,
+      outsideEqp:parseFloat(r['Outside Eqp'])||0,
+      totalMaterial:(parseFloat(r['Perm Mat'])||0)+(parseFloat(r['Const Mat'])||0),
+      totalEquipment:(parseFloat(r['Eqp Oper'])||0)+(parseFloat(r['Comp Eqp']||r['Co Eqp'])||0)+(parseFloat(r['Outside Eqp'])||0),
+      directTotal:parseFloat(r['Direct Total'])||0,
+      discipline:getDiscipline(code),
+    };
+  });
+}
+
+function parseBidItemsRaw(rows){
+  return rows.filter(r=>r['Biditem']||r['Bid Item']||r['BidItem']).map(r=>({
+    biditem:String(r['Biditem']||r['Bid Item']||r['BidItem']),
+    description:r['Description']||'',type:r['Type']||'',
+    clientBidNum:r['Client Bid Num']||'',units:r['Units']||'',
+    bidQuantity:parseFloat(r['Bid Quantity']||r['Bid Qty'])||0,
+    takeoffQuantity:parseFloat(r['Takeoff Quantity']||r['Takeoff Qty'])||0,
+    labor:parseFloat(r['Labor'])||0,burden:parseFloat(r['Burden'])||0,
+    permMat:parseFloat(r['Perm Mat'])||0,constMat:parseFloat(r['Const Mat'])||0,
+    subs:parseFloat(r['Subs'])||0,
+    eqpOper:parseFloat(r['Eqp Oper'])||0,compEqp:parseFloat(r['Comp Eqp']||r['Co Eqp'])||0,
+    outsideEqp:parseFloat(r['Outside Eqp'])||0,
+    directTotal:parseFloat(r['Direct Total'])||0,
+    indirects:parseFloat(r['Indirects'])||0,
+    addonBond:parseFloat(r['Addon/Bond']||r['Addon']||r['Bond'])||0,
+    markup:parseFloat(r['Markup'])||0,
+    takeoffTotal:parseFloat(r['Takeoff Total'])||0,
+    balancedTotal:parseFloat(r['Balanced Total'])||0,
+    unitPrice:parseFloat(r['Unit Price'])||0,
+    manHours:parseFloat(r['Man Hours'])||0,
+    bidTotal:parseFloat(r['Bid Total'])||0,
+    _selected:true,
+  }));
+}
+
+function parseScheduleRaw(rows){
+  return rows.filter(r=>r['Task Name']||r['Task']).map((r,i)=>{
+    const s=r['Start']?new Date(r['Start']):null,f=r['Finish']?new Date(r['Finish']):null;
+    const dur=s&&f?Math.max(Math.ceil((f-s)/86400000),1):0;
+    return{
+      id:i+1,name:r['Task Name']||r['Task']||'',
+      start:s&&!isNaN(s)?s:null,finish:f&&!isNaN(f)?f:null,
+      durationDays:dur,durationStr:r['Duration']||dur+'d',
+      predecessors:r['Predecessors']||'',
+      status:r['Status']||'',atRisk:r['At Risk']||'',
+      crew:r['Crew']||r['crew']||r['Crew/Trade']||'',
+      variance:r['Variance']!=null?parseFloat(r['Variance'])||null:null,
+    };
+  });
+}
+
+// ═══════════════════════════════════════════
+// STAGING REVIEW
+// ═══════════════════════════════════════════
+function renderStaging(){
+  const el=document.getElementById('stagingArea');
+  const{type,data}=Store.staging;
+  if(!type||!data.length){el.style.display='none';return}
+  el.style.display='block';
+  let h='<div class="staging-banner"><div><h3>Review '+type.replace('biditems','Bid Items')+' — '+data.length+' records</h3><p>Uncheck, edit, or delete rows before confirming.</p></div><div class="staging-actions"><button class="btn-secondary" onclick="cancelStaging()">Cancel</button><button class="btn-green" onclick="confirmStaging()">Confirm Import</button></div></div>';
+  h+='<div class="card"><div class="table-wrap"><table>';
+  if(type==='activities'){
+    h+='<tr><th></th><th>Code</th><th>Bid Item</th><th>Description</th><th>Crew</th><th class="num">Qty</th><th>Units</th><th class="num">Man Hrs</th><th class="num">Direct Total</th><th></th></tr>';
+    data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.biditem}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.directTotal)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+  }else if(type==='biditems'){
+    h+='<tr><th></th><th>#</th><th>Description</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th></th></tr>';
+    data.forEach((b,i)=>{if(!b._selected)return;const oh=(b.indirects||0)+(b.addonBond||0);h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${b.biditem}</td><td>${b.description}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(b.takeoffTotal)}</strong></td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+  }else{
+    h+='<tr><th></th><th>#</th><th>Task</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th>Crew</th><th></th></tr>';
+    data.forEach((t,i)=>{if(!t._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+  }
+  const sel=data.filter(d=>d._selected).length;
+  h+=`</table></div><div style="font-size:12px;color:var(--text-light);margin-top:8px;">${sel} of ${data.length} selected</div></div>`;
+  el.innerHTML=h;
+}
+function toggleStagingRow(i,v){Store.staging.data[i]._selected=v;renderStaging()}
+function delStagingRow(i){Store.staging.data.splice(i,1);renderStaging()}
+function addStagingRow(){const{type,data}=Store.staging;if(type==='activities')data.push({biditem:'',code:'NEW',description:'',quantity:0,units:'',crew:'',crewHours:0,productivityRate:0,manHours:0,calculatedDays:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,totalMaterial:0,totalEquipment:0,directTotal:0,discipline:getDiscipline(''),_selected:true});else if(type==='biditems')data.push({biditem:'NEW',description:'',type:'',clientBidNum:'',units:'',bidQuantity:0,takeoffQuantity:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,directTotal:0,indirects:0,addonBond:0,total:0,balancedTotal:0,unitPrice:0,manHours:0,markup:0,takeoffTotal:0,bidTotal:0,_selected:true});else data.push({id:data.length+1,name:'',start:null,finish:null,durationDays:0,durationStr:'',predecessors:'',status:'',atRisk:'',crew:'',variance:null,_selected:true});editStagingRow(data.length-1)}
+function editStagingRow(i){const t=Store.staging.type;editRow(t==='biditems'?'biditem':t==='activities'?'activity':'schedule',i,true)}
+function cancelStaging(){Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none'}
+function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}})}else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();
+  if((type==='schedule'||type==='biditems')&&job.schedule.length&&job.bidItems.length){showMapping()}
+}
+
+// ═══════════════════════════════════════════
+// SCHEDULE → BID ITEM MAPPING
+// ═══════════════════════════════════════════
+function suggestBidItem(taskName, bidItems, activities){
+  const n=(taskName||'').toLowerCase();
+  let bestMatch=null, bestScore=0;
+  bidItems.forEach(b=>{
+    const desc=(b.description||'').toLowerCase();
+    const taskWords=n.split(/\s+/).filter(w=>w.length>=3);
+    const descWords=desc.split(/\s+/).filter(w=>w.length>=3);
+    let score=0;
+    taskWords.forEach(tw=>{if(descWords.some(dw=>dw.includes(tw)||tw.includes(dw)))score++});
+    if(desc.includes(n)||n.includes(desc))score+=3;
+    if(score>bestScore){bestScore=score;bestMatch=b.biditem}
+  });
+  if(bestScore>=2) return bestMatch;
+  const taskDisc=getTaskDiscipline(taskName);
+  if(taskDisc.name!=='General'&&taskDisc.name!=='Other'){
+    const discItems=bidItems.filter(b=>{
+      const bd=getBidItemDiscipline(b.biditem,activities);
+      return bd.name===taskDisc.name;
+    });
+    if(discItems.length===1) return discItems[0].biditem;
+    if(discItems.length>1){discItems.sort((a,b)=>(b.takeoffTotal||0)-(a.takeoffTotal||0));return discItems[0].biditem}
+  }
+  return '';
+}
+
+function autoSuggestAll(){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.taskMap)job.taskMap={};
+  job.schedule.forEach((t,i)=>{
+    if(!job.taskMap[i]){
+      const suggested=suggestBidItem(t.name,job.bidItems,job.activities);
+      if(suggested)job.taskMap[i]=suggested;
+    }
+  });
+  renderMapping();
+  const mapped=Object.keys(job.taskMap).length;
+  log(`Auto-suggest: ${mapped} of ${job.schedule.length} tasks mapped.`);
+}
+
+function clearAllMappings(){const job=Store.jobs[Store.activeJob];if(!job)return;job.taskMap={};renderMapping();log('All mappings cleared.')}
+
+function updateTaskMapping(taskIdx, bidItemId){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.taskMap)job.taskMap={};
+  if(bidItemId){job.taskMap[taskIdx]=bidItemId}else{delete job.taskMap[taskIdx]}
+  renderMapping();
+}
+
+function showMapping(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.schedule.length||!job.bidItems.length)return;
+  if(!job.taskMap)job.taskMap={};
+  document.getElementById('mappingArea').style.display='block';
+  renderMapping();
+}
+
+function hideMapping(){document.getElementById('mappingArea').style.display='none'}
+
+function confirmMapping(){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const mapped=Object.keys(job.taskMap||{}).length;
+  log(`Mapping confirmed: ${mapped} of ${job.schedule.length} tasks linked to bid items.`);
+  hideMapping();
+}
+
+function renderMapping(){
+  const el=document.getElementById('mappingArea');
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.schedule.length||!job.bidItems.length){el.style.display='none';return}
+  if(!job.taskMap)job.taskMap={};
+
+  const mapped=Object.keys(job.taskMap).length;
+  const total=job.schedule.length;
+  const pct=total>0?Math.round(mapped/total*100):0;
+
+  const biWithDisc=job.bidItems.map(b=>({...b,disc:getBidItemDiscipline(b.biditem,job.activities)}));
+  const discGroups={};
+  biWithDisc.forEach(b=>{const k=b.disc.name;if(!discGroups[k])discGroups[k]=[];discGroups[k].push(b)});
+  const discOrder=['General','Erosion','Demo','Earthwork','Storm','Sanitary','Water','Paving','Concrete','Other'];
+  const sortedGroups=discOrder.filter(d=>discGroups[d]).map(d=>({name:d,items:discGroups[d]}));
+  Object.keys(discGroups).filter(d=>!discOrder.includes(d)).forEach(d=>sortedGroups.push({name:d,items:discGroups[d]}));
+
+  let h='<div class="map-banner">';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">';
+  h+='<div><h3>Map Schedule Tasks → Bid Items</h3>';
+  h+='<p>Assign each schedule task to a bid item. This drives discipline timelines, production tracking, and earned value.</p></div>';
+  h+='<div style="display:flex;gap:8px;">';
+  h+='<button class="map-auto-btn" onclick="autoSuggestAll()">Auto-Suggest</button>';
+  h+='<button class="btn-secondary btn-sm" onclick="clearAllMappings()">Clear All</button>';
+  h+='<button class="btn-green" onclick="confirmMapping()">Confirm Mapping</button>';
+  h+='</div></div>';
+  h+=`<div style="margin-top:12px;"><div style="display:flex;justify-content:space-between;font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px;"><span class="mapped-count">${mapped} mapped</span><span class="unmapped-count">${total-mapped} unmapped</span><span>${pct}%</span></div>`;
+  h+=`<div style="height:6px;background:var(--ash);border-radius:3px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:var(--green);border-radius:3px;transition:width .3s;"></div></div></div>`;
+  h+='</div>';
+
+  h+='<div class="card" style="margin-top:12px;"><div class="table-wrap"><table class="map-table">';
+  h+='<tr><th style="width:30px">#</th><th>Task Name</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th style="min-width:260px;">Bid Item Assignment</th></tr>';
+
+  job.schedule.forEach((t,i)=>{
+    const currentMap=job.taskMap[i]||'';
+    const isMapped=!!currentMap;
+    const selClass=isMapped?'mapped':'unmapped';
+    let selHtml=`<select class="${selClass}" onchange="updateTaskMapping(${i},this.value)">`;
+    selHtml+='<option value="">— Unassigned —</option>';
+    sortedGroups.forEach(g=>{
+      selHtml+=`<optgroup label="${g.name}">`;
+      g.items.forEach(b=>{const sel=currentMap===b.biditem?'selected':'';selHtml+=`<option value="${b.biditem}" ${sel}>${b.biditem} — ${b.description}</option>`});
+      selHtml+='</optgroup>';
+    });
+    selHtml+='</select>';
+    const rowBg=isMapped?'':'background:#FFFDF0;';
+    h+=`<tr style="${rowBg}"><td>${i+1}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr||'—'}</td><td>${t.status||'—'}</td><td>${selHtml}</td></tr>`;
+  });
+
+  h+='</table></div></div>';
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// INLINE ROW EDITING
+// ═══════════════════════════════════════════
+let _editCtx={type:null,index:null,isStaging:false};
+function editRow(type,index,isStaging){
+  _editCtx={type,index,isStaging:!!isStaging};
+  const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);
+  const r=src[index];if(!r)return;let fields;
+  if(type==='activity'){fields=[{k:'code',l:'Activity Code',t:'text'},{k:'biditem',l:'Bid Item',t:'text'},{k:'description',l:'Description',t:'text',full:1},{k:'quantity',l:'Quantity',t:'number'},{k:'units',l:'Units',t:'text'},{k:'crew',l:'Crew',t:'text'},{k:'crewHours',l:'Crew Hrs',t:'number'},{k:'productivityRate',l:'Prod Rate',t:'number'},{k:'manHours',l:'Man Hours',t:'number'},{k:'calculatedDays',l:'Days',t:'number'},{k:'labor',l:'Labor ($)',t:'number'},{k:'burden',l:'Burden ($)',t:'number'},{k:'permMat',l:'Perm Mat ($)',t:'number'},{k:'constMat',l:'Const Mat ($)',t:'number'},{k:'subs',l:'Subs ($)',t:'number'},{k:'eqpOper',l:'Eqp Oper ($)',t:'number'},{k:'compEqp',l:'Co Eqp ($)',t:'number'},{k:'outsideEqp',l:'Outside Eqp ($)',t:'number'},{k:'directTotal',l:'Direct Total ($)',t:'number'}];document.getElementById('editRowTitle').textContent='Edit Activity: '+r.code}
+  else if(type==='biditem'){fields=[{k:'biditem',l:'Bid Item #',t:'text'},{k:'description',l:'Description',t:'text',full:1},{k:'units',l:'Units',t:'text'},{k:'bidQuantity',l:'Bid Qty',t:'number'},{k:'unitPrice',l:'Unit Price ($)',t:'number'},{k:'labor',l:'Labor ($)',t:'number'},{k:'permMat',l:'Perm Mat ($)',t:'number'},{k:'constMat',l:'Const Mat ($)',t:'number'},{k:'subs',l:'Subs ($)',t:'number'},{k:'directTotal',l:'Direct Total ($)',t:'number'},{k:'indirects',l:'Indirects ($)',t:'number'},{k:'addonBond',l:'Addon/Bond ($)',t:'number'},{k:'markup',l:'Profit / Markup ($)',t:'number'},{k:'takeoffTotal',l:'Contract / Takeoff Total ($)',t:'number'}];document.getElementById('editRowTitle').textContent='Edit Bid Item: '+r.biditem}
+  else{fields=[{k:'name',l:'Task Name',t:'text',full:1},{k:'durationStr',l:'Duration',t:'text'},{k:'predecessors',l:'Predecessors',t:'text'},{k:'status',l:'Status',t:'text'},{k:'atRisk',l:'At Risk',t:'text'},{k:'crew',l:'Crew',t:'text'}];document.getElementById('editRowTitle').textContent='Edit Task: '+r.name}
+  let h='<div class="edit-grid">';fields.forEach(f=>{const v=r[f.k]!=null?r[f.k]:'';h+=`<div class="${f.full?'full':''}"><label>${f.l}</label><input type="${f.t}" data-key="${f.k}" value="${v}" ${f.t==='number'?'step="any"':''}></div>`});h+='</div>';
+  document.getElementById('editRowFields').innerHTML=h;document.getElementById('editRowModal').classList.add('show');
+}
+function closeEditRow(){document.getElementById('editRowModal').classList.remove('show')}
+function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);const r=src[index];if(!r)return;document.querySelectorAll('#editRowFields input').forEach(inp=>{r[inp.dataset.key]=inp.type==='number'?(parseFloat(inp.value)||0):inp.value});if(type==='activity'){r.totalMaterial=(r.permMat||0)+(r.constMat||0);r.totalEquipment=(r.eqpOper||0)+(r.compEqp||0)+(r.outsideEqp||0);r.discipline=getDiscipline(r.code)}closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule()}}
+
+// ═══════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════
+function renderDashboard(){
+  const el=document.getElementById('dashContent');
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
+  const job=Store.jobs[Store.activeJob],m=job.meta,bids=job.bidItems,acts=job.activities,sched=job.schedule;
+  if(!bids.length){el.innerHTML='<div class="empty-state"><h2>No Data Yet</h2><p>Import bid items from the Import tab.</p></div>';return}
+
+  const bidSummaries=bids.map(b=>{
+    const disc=getBidItemDiscipline(b.biditem,acts);
+    return{...b,discipline:disc};
+  });
+
+  const totalDirect=bidSummaries.reduce((s,b)=>s+b.directTotal,0);
+  const totalOverhead=bidSummaries.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
+  const totalProfit=bidSummaries.reduce((s,b)=>s+(b.markup||0),0);
+  const contract=bidSummaries.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const totalMH=bidSummaries.reduce((s,b)=>s+b.manHours,0);
+
+  const totalLabor=bidSummaries.reduce((s,b)=>s+b.labor,0);
+  const totalBurden=bidSummaries.reduce((s,b)=>s+b.burden,0);
+  const totalMat=bidSummaries.reduce((s,b)=>s+(b.permMat||0)+(b.constMat||0),0);
+  const totalEqp=bidSummaries.reduce((s,b)=>s+(b.eqpOper||0)+(b.compEqp||0)+(b.outsideEqp||0),0);
+  const totalSubs=bidSummaries.reduce((s,b)=>s+b.subs,0);
+
+  const profitPct=contract>0?(totalProfit/contract*100):0;
+  const overheadPct=contract>0?(totalOverhead/contract*100):0;
+  const schedDur=sched.length&&m.startDate&&m.endDate?Math.ceil((m.endDate-m.startDate)/86400000):0;
+
+  const discMap={};bidSummaries.forEach(b=>{const k=b.discipline.name;if(!discMap[k])discMap[k]={name:k,color:b.discipline.color,direct:0,overhead:0,profit:0,hours:0,count:0,contract:0};discMap[k].direct+=b.directTotal;discMap[k].overhead+=(b.indirects||0)+(b.addonBond||0);discMap[k].profit+=(b.markup||0);discMap[k].hours+=b.manHours;discMap[k].count++;discMap[k].contract+=(b.takeoffTotal||0)});
+  const discList=Object.values(discMap).sort((a,b)=>b.direct-a.direct);
+
+  const costCats=[
+    {l:'Labor',v:totalLabor,c:'#2980B9'},{l:'Burden',v:totalBurden,c:'#3498DB'},
+    {l:'Material',v:totalMat,c:'#27AE60'},{l:'Equipment',v:totalEqp,c:'#D4A017'},
+    {l:'Subs',v:totalSubs,c:'#8E44AD'},
+    {l:'Overhead',v:totalOverhead,c:'#E67E22'},{l:'Profit',v:totalProfit,c:'var(--teal)'},
+  ];
+  const maxC=Math.max(...costCats.map(c=>c.v),1);
+
+  let h='<div class="kpi-row">';
+  h+=`<div class="kpi"><div class="kpi-value">${fmtD(contract)}</div><div class="kpi-label">Contract Total</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${fmtD(totalDirect)}</div><div class="kpi-label">Direct Cost</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${fmtD(totalOverhead)}</div><div class="kpi-label">Overhead · ${overheadPct.toFixed(1)}%</div></div>`;
+  h+=`<div class="kpi ${profitPct<5?'danger':profitPct<10?'warn':'good'}"><div class="kpi-value">${fmtD(totalProfit)}</div><div class="kpi-label">Profit · ${profitPct.toFixed(1)}%</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${fmt(totalMH)}</div><div class="kpi-label">Total Man Hours</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${bids.length}</div><div class="kpi-label">Bid Items</div></div>`;
+  if(schedDur) h+=`<div class="kpi"><div class="kpi-value">${schedDur}d</div><div class="kpi-label">Schedule Duration</div></div>`;
+  h+='</div>';
+
+  h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">';
+  h+='<div class="card"><div class="card-title">Cost Breakdown</div><div class="cost-bars">';
+  costCats.forEach(c=>{const w=Math.max((c.v/maxC)*100,1);h+=`<div class="cost-bar-row"><div class="cost-bar-label">${c.l}</div><div class="cost-bar-fill" style="width:${w}%;background:${c.c};"></div><div class="cost-bar-value">${fmtD(c.v)}</div></div>`});
+  h+='</div></div>';
+  h+='<div class="card"><div class="card-title">By Discipline</div><table><tr><th>Discipline</th><th class="num">Items</th><th class="num">Direct</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th></tr>';
+  discList.forEach(d=>{h+=`<tr><td><span class="disc-dot" style="background:${d.color}"></span>${d.name}</td><td class="num">${d.count}</td><td class="num">${fmtD(d.direct)}</td><td class="num">${fmtD(d.overhead)}</td><td class="num">${fmtD(d.profit)}</td><td class="num">${fmtD(d.contract)}</td></tr>`});
+  h+='</table></div></div>';
+
+  const sorted=[...bidSummaries].sort((a,b)=>(b.takeoffTotal||0)-(a.takeoffTotal||0));
+  h+='<div class="card"><div class="card-title">Bid Items</div><div class="table-wrap"><table>';
+  h+='<tr><th>#</th><th>Description</th><th>Discipline</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th></tr>';
+  sorted.forEach(b=>{
+    const bOH=(b.indirects||0)+(b.addonBond||0);
+    const bContract=b.takeoffTotal||0;
+    const pPct=bContract>0?((b.markup||0)/bContract*100):0;
+    const pClass=pPct<3?'negative':pPct<8?'':'positive';
+    h+=`<tr><td>${b.biditem}</td><td>${b.description}</td><td><span class="disc-dot" style="background:${b.discipline.color}"></span>${b.discipline.name}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(bOH)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(bContract)}</strong></td><td class="num ${pClass}">${fmtPct(pPct)}</td></tr>`;
+  });
+  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalDirect)}</td><td class="num">${fmtD(totalOverhead)}</td><td class="num">${fmtD(totalProfit)}</td><td class="num">${fmtD(contract)}</td><td class="num">${fmtPct(profitPct)}</td></tr>`;
+  h+='</table></div></div>';
+
+  if(sched.length){h+='<div class="card"><div class="card-title">Schedule Overview</div>'+renderGantt(sched,m)+'</div>'}
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// GANTT
+// ═══════════════════════════════════════════
+function renderGantt(tasks,meta){
+  const vt=tasks.filter(t=>t.start&&t.finish);if(!vt.length)return'<p style="color:var(--text-light)">No dates.</p>';
+  const mn=new Date(Math.min(...vt.map(t=>t.start))),mx=new Date(Math.max(...vt.map(t=>t.finish)));
+  const td=Math.max((mx-mn)/86400000,1);
+  let months='';const c=new Date(mn);c.setDate(1);
+  while(c<=mx){const ms=Math.max(0,(c-mn)/86400000);const nm=new Date(c);nm.setMonth(nm.getMonth()+1);const me=Math.min(td,(nm-mn)/86400000);months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;c.setMonth(c.getMonth()+1)}
+  let h=`<div style="overflow-x:auto;"><div style="min-width:800px;"><div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;">${months}</div>`;
+  vt.filter(t=>t.durationDays<td*.95).forEach(t=>{
+    const l=((t.start-mn)/86400000)/td*100,w=Math.max(((t.finish-t.start)/86400000)/td*100,.5);
+    const sc=t.status==='Complete'?'var(--teal)':t.status==='In Progress'?'var(--blue)':t.atRisk==='Yes'?'var(--red)':(t.variance!=null&&t.variance<-5)?'var(--yellow)':'var(--green)';
+    h+=`<div style="display:flex;align-items:center;margin-bottom:2px;"><div style="width:220px;min-width:220px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${t.name}">${t.name}</div><div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${sc};border-radius:2px;opacity:.8;" title="${t.name}: ${fmtDate(t.start)} — ${fmtDate(t.finish)}"></div></div><div style="width:50px;min-width:50px;text-align:right;font-size:11px;color:var(--text-light);padding-left:6px;">${t.durationStr}</div></div>`;
+  });
+  h+='</div></div>';return h;
+}
+
+// ═══════════════════════════════════════════
+// GLOBAL VIEW
+// ═══════════════════════════════════════════
+function renderGlobalView(){
+  const el=document.getElementById('globalContent');const ids=Object.keys(Store.jobs);
+  if(!ids.length){el.innerHTML='<div class="empty-state"><h2>No Jobs</h2></div>';return}
+  let allMin=null,allMax=null;ids.forEach(id=>{const j=Store.jobs[id];if(j.meta.startDate&&(!allMin||j.meta.startDate<allMin))allMin=j.meta.startDate;if(j.meta.endDate&&(!allMax||j.meta.endDate>allMax))allMax=j.meta.endDate});
+  if(!allMin||!allMax){el.innerHTML='<div class="empty-state"><h2>No Schedule Data</h2></div>';return}
+  const td=Math.max((allMax-allMin)/86400000,1);
+
+  let h='<div class="card"><div class="card-title">All Jobs — Timeline by Discipline</div>';
+  h+='<div class="legend">';Object.values(DISCIPLINES).forEach(d=>{if(d.name!=='General'||!h.includes(d.name))h+=`<div class="legend-item"><div class="legend-swatch" style="background:${d.color}"></div>${d.name}</div>`});h+='</div>';
+
+  let months='';const c=new Date(allMin);c.setDate(1);
+  while(c<=allMax){const ms=Math.max(0,(c-allMin)/86400000);const nm=new Date(c);nm.setMonth(nm.getMonth()+1);const me=Math.min(td,(nm-allMin)/86400000);months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;c.setMonth(c.getMonth()+1)}
+  h+=`<div style="overflow-x:auto;"><div style="min-width:900px;"><div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;margin-left:200px;">${months}</div>`;
+
+  ids.forEach(id=>{
+    const j=Store.jobs[id],m=j.meta;
+    const dg={};
+    const tm=j.taskMap||{};
+    const hasMappings=Object.keys(tm).length>0;
+    const validTasks=j.schedule.filter(t=>t.start&&t.finish);
+    validTasks.forEach((t)=>{
+      const origIdx=j.schedule.indexOf(t);
+      let disc;
+      if(hasMappings&&tm[origIdx]){
+        disc=getBidItemDiscipline(tm[origIdx],j.activities);
+      }else{
+        disc=getTaskDiscipline(t.name);
+      }
+      const k=disc.name;
+      if(!dg[k])dg[k]={name:k,color:disc.color,start:t.start,end:t.finish,cost:0,tasks:[]};
+      if(t.start<dg[k].start)dg[k].start=t.start;
+      if(t.finish>dg[k].end)dg[k].end=t.finish;
+      dg[k].tasks.push(t);
+    });
+    j.bidItems.forEach(b=>{
+      const d=getBidItemDiscipline(b.biditem,j.activities);
+      if(dg[d.name])dg[d.name].cost+=(b.takeoffTotal||0);
+    });
+    const bars=Object.values(dg).sort((a,b)=>a.start-b.start);
+    const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+    h+=`<div style="display:flex;align-items:flex-start;margin-bottom:2px;border-top:1px solid var(--border);padding-top:6px;"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;">${m.name} #${m.number}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(ct)}</div></div><div style="flex:1;">`;
+    bars.forEach(bar=>{const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);h+=`<div style="display:flex;align-items:center;margin-bottom:1px;"><div style="flex:1;position:relative;height:14px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${bar.name}: ${fmtD(bar.cost)} (${bar.tasks.length} tasks)"></div></div><div style="width:80px;min-width:80px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${bar.name}</div></div>`});
+    h+='</div></div>';
+  });
+  h+='</div></div></div>';
+
+  h+='<div class="card"><div class="card-title">Job Summary</div><div class="table-wrap"><table>';
+  h+='<tr><th>Job</th><th>Client</th><th>Type</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th><th class="num">Items</th><th>Schedule</th></tr>';
+  ids.forEach(id=>{const j=Store.jobs[id],m=j.meta;const dc=j.bidItems.reduce((s,b)=>s+b.directTotal,0);const oh=j.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=j.bidItems.reduce((s,b)=>s+(b.markup||0),0);const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const ppC=pp<5?'negative':pp<10?'':'positive';const dt=m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—';
+    h+=`<tr><td><strong>${m.name} #${m.number}</strong></td><td>${m.client||'—'}</td><td>${m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(dc)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(pr)}</td><td class="num"><strong>${fmtD(ct)}</strong></td><td class="num ${ppC}">${fmtPct(pp)}</td><td class="num">${j.bidItems.length}</td><td>${dt}</td></tr>`});
+  h+='</table></div></div>';
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// BID ITEMS (primary view with activity drill-down)
+// ═══════════════════════════════════════════
+let _drillBidItem = null;
+
+function renderBidItems(){
+  const el=document.getElementById('bidContent'),fEl=document.getElementById('bidFilters');
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';fEl.innerHTML='';return}
+  const job=Store.jobs[Store.activeJob];
+  if(!job.bidItems.length){el.innerHTML='<div class="empty-state"><h2>No Bid Items</h2><p>Import from the Import tab.</p></div>';fEl.innerHTML='';return}
+
+  const items=job.bidItems.map((b,i)=>{
+    const disc=getBidItemDiscipline(b.biditem,job.activities);
+    const children=job.activities.filter(a=>String(a.biditem)===String(b.biditem));
+    return{...b,discipline:disc,activityCount:children.length,actCost:children.reduce((s,a)=>s+a.directTotal,0),idx:i};
+  });
+
+  const discs=[...new Set(items.map(b=>b.discipline.name))].sort();
+  let fh='<span style="font-size:12px;color:var(--text-light);margin-right:4px;">Filter:</span>';
+  fh+=`<button class="filter-chip ${!window._bidFilter?'active':''}" onclick="window._bidFilter=null;renderBidItems()">All</button>`;
+  discs.forEach(d=>{fh+=`<button class="filter-chip ${window._bidFilter===d?'active':''}" onclick="window._bidFilter='${d}';renderBidItems()">${d}</button>`});
+  fEl.innerHTML=fh;
+
+  let filtered=items;
+  if(window._bidFilter) filtered=filtered.filter(b=>b.discipline.name===window._bidFilter);
+  const search=(document.getElementById('bidSearch').value||'').toLowerCase();
+  if(search) filtered=filtered.filter(b=>b.description.toLowerCase().includes(search)||String(b.biditem).toLowerCase().includes(search));
+
+  const tc=filtered.reduce((s,b)=>s+b.directTotal,0);
+  const ct=filtered.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+
+  let h=`<div style="font-size:13px;color:var(--text-light);margin-bottom:8px;">Showing ${filtered.length} bid items — ${fmtD(tc)} direct cost — ${fmtD(ct)} contract</div>`;
+  h+='<div class="card"><div class="table-wrap"><table>';
+  h+='<tr><th>#</th><th>Description</th><th>Discipline</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th><th class="num">Act.</th><th></th></tr>';
+
+  filtered.forEach(b=>{
+    const bOH=(b.indirects||0)+(b.addonBond||0);
+    const bContract=b.takeoffTotal||0;
+    const pPct=bContract>0?((b.markup||0)/bContract*100):0;
+    const pClass=pPct<3?'negative':pPct<8?'':'positive';
+    const isOpen=_drillBidItem===b.biditem;
+    h+=`<tr style="${isOpen?'background:#EBF5FB;':''}"><td>${b.biditem}</td><td><strong>${b.description}</strong></td><td><span class="disc-dot" style="background:${b.discipline.color}"></span>${b.discipline.name}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(bOH)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(bContract)}</strong></td><td class="num ${pClass}">${fmtPct(pPct)}</td><td class="num">${b.activityCount}</td><td><button class="drill-btn" onclick="toggleDrill('${b.biditem}')">${isOpen?'Close':'Drill'}</button> <button class="edit-btn" onclick="editRow('biditem',${b.idx},false)">Edit</button></td></tr>`;
+
+    if(isOpen){
+      const children=job.activities.filter(a=>String(a.biditem)===String(b.biditem));
+      if(children.length){
+        h+=`<tr><td colspan="13" style="padding:0 12px 12px 12px;background:#F0F7FD;"><div class="drill-panel"><div class="card-title" style="color:var(--blue);border-bottom-color:#D0E3F5;">Activities in Bid Item ${b.biditem} <span style="font-weight:300;font-size:12px;">(${children.length} activities, ${fmtD(b.actCost)} total)</span></div><table><tr><th style="background:var(--blue);">Code</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th><th style="background:var(--blue);"></th></tr>`;
+        children.forEach(a=>{const ai=job.activities.indexOf(a);h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD(a.totalMaterial)}</td><td class="num">${fmtD(a.totalEquipment)}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td><td><button class="edit-btn" onclick="editRow('activity',${ai},false)">Edit</button></td></tr>`});
+        const variance=b.directTotal-b.actCost;
+        if(Math.abs(variance)>1){h+=`<tr style="background:#FFF8E1;"><td colspan="10" style="text-align:right;font-weight:600;">Variance (Bid Item − Activities):</td><td class="num ${variance<0?'negative':'positive'}"><strong>${fmtD(variance)}</strong></td><td></td></tr>`}
+        h+='</table></div></td></tr>';
+      }else{
+        h+=`<tr><td colspan="13" style="padding:12px;background:#F0F7FD;color:var(--text-light);font-style:italic;">No activities mapped to this bid item.</td></tr>`;
+      }
+    }
+  });
+
+  const fTotalDC=filtered.reduce((s,b)=>s+b.directTotal,0),fTotalOH=filtered.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0),fTotalProfit=filtered.reduce((s,b)=>s+(b.markup||0),0),fTotalContract=filtered.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const fProfitPct=fTotalContract>0?(fTotalProfit/fTotalContract*100):0;
+  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(fTotalDC)}</td><td class="num">${fmtD(fTotalOH)}</td><td class="num">${fmtD(fTotalProfit)}</td><td class="num">${fmtD(fTotalContract)}</td><td class="num">${fmtPct(fProfitPct)}</td><td></td><td></td></tr>`;
+  h+='</table></div></div>';
+  el.innerHTML=h;
+}
+
+function toggleDrill(bidItemId){_drillBidItem=_drillBidItem===bidItemId?null:bidItemId;renderBidItems()}
+
+// ═══════════════════════════════════════════
+// SCHEDULE
+// ═══════════════════════════════════════════
+function renderSchedule(){
+  const el=document.getElementById('schContent');
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
+  const job=Store.jobs[Store.activeJob];
+  if(!job.schedule.length){el.innerHTML='<div class="empty-state"><h2>No Schedule</h2><p>Import from the Import tab.</p></div>';return}
+
+  const m=job.meta;
+  let h='';
+  if(m.startDate&&m.endDate){h+='<div class="card"><div class="card-title">Gantt Chart</div>'+renderGantt(job.schedule,m)+'</div>'}
+
+  h+='<div class="card"><div class="card-title">Task List</div><div class="table-wrap"><table>';
+  h+='<tr><th>#</th><th>Task</th><th>Start</th><th>Finish</th><th>Duration</th><th>Predecessors</th><th>Status</th><th>Crew</th><th></th></tr>';
+  job.schedule.forEach((t,i)=>{
+    const sc=t.status==='Complete'?'color:var(--teal)':t.status==='In Progress'?'color:var(--blue)':'';
+    h+=`<tr><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.predecessors||'—'}</td><td style="${sc}">${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editRow('schedule',${i},false)">Edit</button></td></tr>`;
+  });
+  h+='</table></div></div>';
+  el.innerHTML=h;
+}
+</script>
 </body>
 </html>
