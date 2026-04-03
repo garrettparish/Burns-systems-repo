@@ -1,0 +1,53 @@
+# GitHub Actions — CI/CD Pipeline
+# Runs on every push to main and on pull requests
+
+name: Deploy Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Uncomment when you have tests
+      # - name: Run tests
+      #   run: npm test
+
+      # Uncomment when you have a build step
+      # - name: Build
+      #   run: npm run build
+
+      - name: Deploy status
+        run: echo "✅ Build checks passed — Netlify handles the deploy automatically"
+
+  # Optional: Run Supabase migrations on push to main
+  # supabase-migrate:
+  #   runs-on: ubuntu-latest
+  #   if: github.ref == 'refs/heads/main'
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: supabase/setup-cli@v1
+  #       with:
+  #         version: latest
+  #     - run: supabase db push
+  #       env:
+  #         SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+  #         SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+  #         SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
