@@ -220,10 +220,10 @@ tr:hover{background:#FAF8F5}
     <div id="dashContent"></div>
   </div>
 
-  <!-- Sub-panel: Bid Items -->
+  <!-- Sub-panel: Pay Items -->
   <div id="sub-biditems" class="sub-panel">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-      <input type="text" class="search-input" placeholder="Search bid items..." id="bidSearch" oninput="renderBidItems()" style="max-width:320px;">
+      <input type="text" class="search-input" placeholder="Search pay items..." id="bidSearch" oninput="renderBidItems()" style="max-width:320px;">
     </div>
     <div class="filter-bar" id="bidFilters"></div>
     <div id="bidContent"></div>
@@ -262,7 +262,7 @@ tr:hover{background:#FAF8F5}
       </div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-      <button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule &rarr; Bid Items</button>
+      <button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule &rarr; Pay Items</button>
       <button class="btn-primary" id="sovBtn" style="display:none;background:var(--orange);" onclick="toggleSOVBuilder()">Build SOV / Pay Items</button>
     </div>
     <div id="stagingArea" style="display:none;"></div>
@@ -824,7 +824,7 @@ function buildSOVFromActivities(activities,bidItems){
 }
 
 // ═══════════════════════════════════════════
-// SCHEDULE → BID ITEM MAPPING
+// SCHEDULE → PAY ITEM MAPPING
 // ═══════════════════════════════════════════
 function suggestBidItem(taskName, bidItems, activities){
   const n=(taskName||'').toLowerCase();
@@ -862,7 +862,7 @@ function autoSuggestAll(){
   });
   renderMapping();
   const mapped=Object.keys(job.taskMap).length;
-  log(`Auto-suggest: ${mapped} of ${job.schedule.length} tasks mapped.`);
+  log(`Auto-suggest: ${mapped} of ${job.schedule.length} tasks mapped to pay items.`);
 }
 
 function clearAllMappings(){const job=Store.jobs[Store.activeJob];if(!job)return;job.taskMap={};renderMapping();log('All mappings cleared.')}
@@ -902,7 +902,7 @@ function showAddTaskForBid(biditem, desc){
     if(end) suggestedStart=end.toISOString().split('T')[0];
   }
 
-  let titleHtml='Add Schedule Task for Bid Item '+biditem+' — '+desc;
+  let titleHtml='Add Schedule Task for Pay Item '+biditem+' — '+desc;
   titleHtml+=`<div style="font-family:'Source Serif 4',serif;font-size:12px;font-weight:400;color:var(--text-light);margin-top:6px;text-transform:none;letter-spacing:0;">`;
   titleHtml+=`Based on ${biActs.length} activities: <strong>${totalCalcDays} calc days</strong>, ${fmt(totalHours)} man-hours, ${fmtD(totalCost)} direct cost`;
   titleHtml+=`</div>`;
@@ -975,7 +975,7 @@ function saveNewTask(){
   const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
   if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}
   document.getElementById('addTaskForm').style.display='none';
-  log('Added schedule task "'+name+'" and mapped to Bid Item '+biditem);
+  log('Added schedule task "'+name+'" and mapped to Pay Item '+biditem);
   saveJob(Store.activeJob);
   renderMapping();
   updateNavBadges();
@@ -991,8 +991,8 @@ function confirmMapping(){
     return job.activities.some(a=>String(a.biditem)===String(b.biditem));
   });
   if(orphanBids.length){
-    const names=orphanBids.map(b=>`  • BI ${b.biditem} — ${b.description}`).join('\n');
-    const proceed=confirm(`${orphanBids.length} bid item(s) with activities have no schedule task:\n\n${names}\n\nThese activities won't appear on the Job Cost Schedule timeline.\n\nScroll down to add schedule tasks for them, or click OK to confirm anyway.`);
+    const names=orphanBids.map(b=>`  • Pay Item ${b.biditem} — ${b.description}`).join('\n');
+    const proceed=confirm(`${orphanBids.length} pay item(s) with activities have no schedule task:\n\n${names}\n\nPhase codes under these won't appear on the Job Cost Schedule timeline.\n\nScroll down to add schedule tasks for them, or click OK to confirm anyway.`);
     if(!proceed){
       // Scroll to orphan section
       const orphanCard=document.querySelector('#mappingArea .card[style*="border-color"]');
@@ -1001,7 +1001,7 @@ function confirmMapping(){
     }
   }
   addEditLog('Confirmed schedule mapping ('+mapped+'/'+job.schedule.length+' tasks)');
-  log(`Mapping confirmed: ${mapped} of ${job.schedule.length} tasks linked to bid items.`);
+  log(`Mapping confirmed: ${mapped} of ${job.schedule.length} tasks linked to pay items.`);
   hideMapping();
   saveJob(Store.activeJob);
 }
@@ -1025,8 +1025,8 @@ function renderMapping(){
 
   let h='<div class="map-banner">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">';
-  h+='<div><h3>Map Schedule Tasks → Bid Items</h3>';
-  h+='<p>Assign each schedule task to a bid item. This drives discipline timelines, production tracking, and earned value.</p></div>';
+  h+='<div><h3>Map Schedule Tasks → Pay Items</h3>';
+  h+='<p>Assign each schedule task to a pay item. This links your schedule to phase codes, cost tracking, and earned value.</p></div>';
   h+='<div style="display:flex;gap:8px;">';
   h+='<button class="map-auto-btn" onclick="autoSuggestAll()">Auto-Suggest</button>';
   h+='<button class="btn-secondary btn-sm" onclick="clearAllMappings()">Clear All</button>';
@@ -1037,7 +1037,7 @@ function renderMapping(){
   h+='</div>';
 
   h+='<div class="card" style="margin-top:12px;"><div class="table-wrap"><table class="map-table">';
-  h+='<tr><th style="width:30px">#</th><th>Task Name</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th style="min-width:260px;">Bid Item Assignment</th></tr>';
+  h+='<tr><th style="width:30px">#</th><th>Task Name</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th style="min-width:280px;">Pay Item Assignment</th></tr>';
 
   job.schedule.forEach((t,i)=>{
     const currentMap=job.taskMap[i]||'';
@@ -1047,7 +1047,14 @@ function renderMapping(){
     selHtml+='<option value="">— Unassigned —</option>';
     sortedGroups.forEach(g=>{
       selHtml+=`<optgroup label="${g.name}">`;
-      g.items.forEach(b=>{const sel=currentMap===b.biditem?'selected':'';selHtml+=`<option value="${b.biditem}" ${sel}>${b.biditem} — ${b.description}</option>`});
+      g.items.forEach(b=>{
+        const sel=currentMap===b.biditem?'selected':'';
+        // Show phase code count if SOV items exist
+        const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
+        const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
+        const pcLabel=pcCount?` (${pcCount} phases)`:'';
+        selHtml+=`<option value="${b.biditem}" ${sel}>${b.biditem} — ${b.description}${pcLabel}</option>`;
+      });
       selHtml+='</optgroup>';
     });
     selHtml+='</select>';
@@ -1062,18 +1069,21 @@ function renderMapping(){
   const orphanBids=job.bidItems.filter(b=>!mappedBidItems.has(b.biditem));
   if(orphanBids.length){
     h+='<div class="card" style="margin-top:12px;border-color:var(--orange);">';
-    h+='<div class="card-title" style="color:var(--orange);border-bottom-color:var(--orange);">Bid Items Missing Schedule Tasks <span style="font-weight:300;font-size:12px;">('+orphanBids.length+' bid items have no schedule task — activities under these won\'t appear on the Job Cost Schedule timeline)</span></div>';
+    h+='<div class="card-title" style="color:var(--orange);border-bottom-color:var(--orange);">Pay Items Missing Schedule Tasks <span style="font-weight:300;font-size:12px;">('+orphanBids.length+' pay items have no schedule task — phase codes &amp; activities under these won\'t appear on the JCS timeline)</span></div>';
     h+='<div class="table-wrap"><table class="map-table">';
-    h+='<tr><th>Bid Item</th><th>Description</th><th>Activities</th><th>Suggested Days</th><th>Direct Cost</th><th></th></tr>';
+    h+='<tr><th>Pay Item</th><th>Description</th><th>Phase Codes</th><th>Activities</th><th>Suggested Days</th><th>Direct Cost</th><th></th></tr>';
     orphanBids.forEach(b=>{
       const biActs=job.activities.filter(a=>String(a.biditem)===String(b.biditem));
       const actCount=biActs.length;
       const actCost=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
       const calcDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0);
+      const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
+      const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
       h+=`<tr style="background:#FFF8F0;">`;
       h+=`<td><strong>${b.biditem}</strong></td>`;
       h+=`<td>${b.description||'—'}</td>`;
-      h+=`<td>${actCount} activities</td>`;
+      h+=`<td>${pcCount} phase${pcCount!==1?'s':''}</td>`;
+      h+=`<td>${actCount} activit${actCount!==1?'ies':'y'}</td>`;
       h+=`<td><strong>${calcDays}d</strong></td>`;
       h+=`<td>${fmtD(actCost)}</td>`;
       h+=`<td><button class="btn-primary btn-sm" style="background:var(--orange);white-space:nowrap;" onclick="showAddTaskForBid('${b.biditem}','${(b.description||'').replace(/'/g,"\\'")}')">+ Add Task</button></td>`;
@@ -1209,7 +1219,7 @@ function renderDashboard(){
   const el=document.getElementById('dashContent');
   if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
   const job=Store.jobs[Store.activeJob],m=job.meta,bids=job.bidItems,acts=job.activities,sched=job.schedule;
-  if(!bids.length){el.innerHTML='<div class="empty-state"><h2>No Data Yet</h2><p>Import bid items from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>.</p></div>';return}
+  if(!bids.length){el.innerHTML='<div class="empty-state"><h2>No Data Yet</h2><p>Import activities from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>.</p></div>';return}
 
   const bidSummaries=bids.map(b=>{
     const disc=getBidItemDiscipline(b.biditem,acts,job);
@@ -1260,7 +1270,7 @@ function renderDashboard(){
   // ── Alerts & Status ──
   const alerts=[];
   if(!sched.length) alerts.push({icon:'&#128197;',msg:'No schedule imported yet',action:'setup',label:'Import'});
-  else if(!Object.keys(job.taskMap||{}).length) alerts.push({icon:'&#128279;',msg:'Schedule not mapped to bid items',action:'setup',label:'Map Now'});
+  else if(!Object.keys(job.taskMap||{}).length) alerts.push({icon:'&#128279;',msg:'Schedule not mapped to pay items',action:'setup',label:'Map Now'});
   if(!job.sovItems||!job.sovItems.length) alerts.push({icon:'&#128203;',msg:'SOV / Pay Items not built yet — import activities with phase codes',action:'setup',label:'Build SOV'});
   else{
     // Check for unbilled activities
@@ -1308,7 +1318,7 @@ function renderDashboard(){
   h+=`<div class="kpi"><div class="kpi-value">${fmtD(totalOverhead)}</div><div class="kpi-label">Overhead · ${overheadPct.toFixed(1)}%</div></div>`;
   h+=`<div class="kpi ${profitPct<5?'danger':profitPct<10?'warn':'good'}"><div class="kpi-value">${fmtD(totalProfit)}</div><div class="kpi-label">Profit · ${profitPct.toFixed(1)}%</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${fmt(totalMH)}</div><div class="kpi-label">Total Man Hours</div></div>`;
-  h+=`<div class="kpi"><div class="kpi-value">${bids.length}</div><div class="kpi-label">Bid Items</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${bids.length}</div><div class="kpi-label">Pay Items</div></div>`;
   if(schedDur) h+=`<div class="kpi"><div class="kpi-value">${schedDur}d</div><div class="kpi-label">Schedule Duration</div></div>`;
   h+='</div>';
 
@@ -1338,7 +1348,7 @@ function renderDashboard(){
     h+='</table></div></div>';
   } else {
     const sorted=[...bidSummaries].sort((a,b)=>(b.takeoffTotal||0)-(a.takeoffTotal||0));
-    h+='<div class="card"><div class="card-title">Bid Items <span style="font-weight:300;font-size:12px;color:var(--orange);">(SOV not built yet)</span></div><div class="table-wrap"><table>';
+    h+='<div class="card"><div class="card-title">Pay Items <span style="font-weight:300;font-size:12px;color:var(--orange);">(SOV not built yet)</span></div><div class="table-wrap"><table>';
     h+='<tr><th>#</th><th>Description</th><th>Discipline</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct Cost</th><th class="num">Contract</th><th class="num">Profit %</th></tr>';
     sorted.forEach(b=>{
       const bContract=b.takeoffTotal||0;
@@ -1439,7 +1449,7 @@ function renderGlobalView(){
   // ─── Product Roadmap ───
   h+='<div class="card"><div class="card-title">Product Roadmap</div>';
   const phases=[
-    {phase:'Phase 1A',status:'live',label:'LIVE',items:['HeavyBid import (Activities, Bid Items)','Smartsheet schedule import + mapping','SOV / Pay Items builder with OH+P','Job Dashboard with Overview, Pay Items, Schedule, JCS, Cash Flow sub-tabs','Per-job & company-wide cash flow projections','Period-based payment timing (weekly/monthly/after billing)','Edit log tracking','Global multi-job view with stacked cash flow']},
+    {phase:'Phase 1A',status:'live',label:'LIVE',items:['HeavyBid Activities import with phase codes — auto-builds pay items & SOV','Smartsheet schedule import + pay item mapping','SOV / Pay Items builder with OH+P and phase code tracking','Job Dashboard with Overview, Pay Items, Schedule, JCS, Cash Flow sub-tabs','Per-job & company-wide cash flow projections','Period-based payment timing (weekly/monthly/after billing)','Edit log tracking','Global multi-job view with stacked cash flow']},
     {phase:'Phase 1B',status:'active',label:'IN PROGRESS',items:['Inline schedule editing (edit dates, durations, status directly)','Schedule changes cascade to JCS + Cash Flow automatically','Set baseline schedule for variance tracking']},
     {phase:'Phase 2',status:'planned',label:'PLANNED',items:['Built-in schedule builder (create tasks, durations, crews — no Smartsheet needed)','Task predecessor logic with auto-cascade','Pay application generator (% complete → billing → retainage)','Change order tracking and contract value adjustments','Actual cost entry and earned value analysis (EV, CPI, SPI)']},
     {phase:'Phase 3',status:'planned',label:'FUTURE',items:['Drag-to-resize Gantt bars for schedule editing','Resource loading and crew capacity planning','Subcontractor payment tracking (when owner pays flow)','Document management (submittals, RFIs, daily reports)','Multi-user real-time collaboration','Mobile field reporting']}
@@ -2938,7 +2948,7 @@ function renderCashFlowProjection(){
   // Determine project date range (monthly buckets)
   const allStarts=acts.filter(a=>a._cfStart).map(a=>a._cfStart);
   const allEnds=acts.filter(a=>a._cfEnd).map(a=>a._cfEnd);
-  if(!allStarts.length){el.innerHTML='<div class="empty-state"><h2>No Schedule Mapping</h2><p>Map schedule tasks to bid items first so activities have dates.</p></div>';return}
+  if(!allStarts.length){el.innerHTML='<div class="empty-state"><h2>No Schedule Mapping</h2><p>Map schedule tasks to pay items first so phase codes and activities have dates.</p></div>';return}
 
   let projStart=new Date(Math.min(...allStarts));
   let projEnd=new Date(Math.max(...allEnds));
