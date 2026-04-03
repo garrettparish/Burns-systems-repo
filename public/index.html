@@ -1030,9 +1030,59 @@ function renderJobCostSchedule(){
   if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2><p>Select a job above to view the cost schedule.</p></div>';return}
   const job=Store.jobs[Store.activeJob];
   const acts=job.activities||[];
+  const sched=job.schedule||[];
+  const tm=job.taskMap||{};
   if(!acts.length){el.innerHTML='<div class="empty-state"><h2>No Activities Imported</h2><p>Import HeavyBid Activities from the Import tab first.</p></div>';return}
 
-  // Group activities by discipline
+  // Build reverse map: bidItem → {earliest start, latest finish} from schedule via taskMap
+  const biDates={};
+  Object.entries(tm).forEach(([si,bi])=>{
+    const t=sched[parseInt(si)];
+    if(!t)return;
+    const s=toDate(t.start),f=toDate(t.finish);
+    if(!biDates[bi])biDates[bi]={start:null,finish:null};
+    if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+    if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+  });
+
+  // Determine project timeline from schedule dates
+  const allDates=Object.values(biDates).flatMap(d=>[d.start,d.finish]).filter(d=>d);
+  const m=job.meta;
+  let projStart=allDates.length?new Date(Math.min(...allDates)):(toDate(m.startDate)||new Date());
+  let projEnd=allDates.length?new Date(Math.max(...allDates)):(toDate(m.endDate)||new Date(projStart.getTime()+180*86400000));
+  // Add 1-week padding on each side
+  projStart=new Date(projStart.getTime()-7*86400000);
+  projEnd=new Date(projEnd.getTime()+7*86400000);
+  const totalMs=projEnd.getTime()-projStart.getTime();
+  const totalWeeks=Math.max(Math.round(totalMs/(7*86400000)),1);
+
+  // Assign each activity a start/finish based on its bid item's schedule dates
+  // Activities within the same bid item are spread sequentially across its date range
+  const biActGroups={};
+  acts.forEach(a=>{
+    const bi=String(a.biditem||'');
+    if(!biActGroups[bi])biActGroups[bi]=[];
+    biActGroups[bi].push(a);
+  });
+  acts.forEach(a=>{a._barStart=null;a._barEnd=null});
+  Object.entries(biActGroups).forEach(([bi,biActs])=>{
+    const dates=biDates[bi];
+    if(!dates||!dates.start||!dates.finish){return}// unmapped
+    const biStart=dates.start.getTime();
+    const biSpan=Math.max(dates.finish.getTime()-biStart,86400000);
+    const totalDaysInBi=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+    let daysCursor=0;
+    biActs.forEach(a=>{
+      const days=a.calculatedDays||1;
+      const startRatio=daysCursor/totalDaysInBi;
+      const endRatio=(daysCursor+days)/totalDaysInBi;
+      a._barStart=new Date(biStart+startRatio*biSpan);
+      a._barEnd=new Date(biStart+endRatio*biSpan);
+      daysCursor+=days;
+    });
+  });
+
+  // Group activities by discipline, sort by earliest bar start
   const discGroups={};
   acts.forEach(a=>{
     const d=a.discipline||getDiscipline(a.code);
@@ -1040,66 +1090,48 @@ function renderJobCostSchedule(){
     if(!discGroups[key])discGroups[key]={name:key,color:d.color,activities:[]};
     discGroups[key].activities.push(a);
   });
-  const groups=Object.values(discGroups).sort((a,b)=>b.activities.reduce((s,x)=>s+(x.directTotal||0),0)-a.activities.reduce((s,x)=>s+(x.directTotal||0),0));
-
-  // Compute project timeline from calculated days
-  // Build sequential timeline: each activity gets start/end based on cumulative days
-  let totalCalcDays=0;
-  const allActs=[];
-  groups.forEach(g=>{
-    g.activities.forEach(a=>{
-      const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
-      allActs.push({...a,_days:days,_discColor:g.color,_discName:g.name});
-      totalCalcDays+=days;
-    });
+  // Sort disciplines by earliest activity start date
+  const groups=Object.values(discGroups).sort((a,b)=>{
+    const aMin=Math.min(...a.activities.map(x=>x._barStart?x._barStart.getTime():Infinity));
+    const bMin=Math.min(...b.activities.map(x=>x._barStart?x._barStart.getTime():Infinity));
+    return aMin-bMin;
   });
+  // Within each group sort by start date
+  groups.forEach(g=>g.activities.sort((a,b)=>(a._barStart||Infinity)-(b._barStart||Infinity)));
 
-  // Determine project start date (from meta or default to today)
-  const m=job.meta;
-  let projStart=toDate(m.startDate)||new Date();
-  // Total duration in weeks
-  const totalWeeks=Math.max(Math.ceil(totalCalcDays/5),4);// working days to weeks
-  const projEnd=new Date(projStart.getTime()+totalWeeks*7*86400000);
-
-  // Build month headers from projStart to projEnd
+  // Build month headers
   const months=[];
   let cursor=new Date(projStart.getFullYear(),projStart.getMonth(),1);
   while(cursor<=projEnd){
     months.push({label:cursor.toLocaleString('default',{month:'short'}).toUpperCase(),year:cursor.getFullYear(),start:new Date(cursor)});
     cursor=new Date(cursor.getFullYear(),cursor.getMonth()+1,1);
   }
-  const totalMs=projEnd.getTime()-projStart.getTime();
 
   // Today marker
   const today=new Date();
   const todayPct=totalMs>0?Math.max(0,Math.min(100,(today-projStart)/totalMs*100)):-1;
 
-  // Accumulate day offsets per discipline for Gantt positioning
-  let dayOffset=0;
-  const discOffsets={};
-  groups.forEach(g=>{
-    const groupStart=dayOffset;
-    g.activities.forEach(a=>{
-      const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
-      a._ganttStart=dayOffset;
-      a._ganttEnd=dayOffset+days;
-      dayOffset+=days;
-    });
-    discOffsets[g.name]={start:groupStart,end:dayOffset};
-  });
-  const totalDays=Math.max(dayOffset,1);
-
   // Totals
   let grandHours=0,grandCost=0;
   acts.forEach(a=>{grandHours+=(a.manHours||0);grandCost+=(a.directTotal||0)});
+  const unmappedCount=acts.filter(a=>!a._barStart).length;
 
-  // Build table — use a single wide Gantt column with month grid lines
+  // Build table
   const ganttWidth=Math.max(500,months.length*80);
-  let h='<div class="jcs-table-wrap"><table class="jcs-table">';
-  // Header row
+  let h='';
+  if(unmappedCount>0&&!sched.length){
+    h+='<div style="background:#FFF3CD;border:1px solid var(--orange);border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:13px;color:var(--text);">'+
+      '<strong style="color:var(--orange);">&#9888;</strong> Import a Smartsheet Schedule and map it to bid items to see activities on the timeline. '+
+      '<a href="#" onclick="document.querySelector(\'[data-tab=import]\').click();return false" style="color:var(--blue);">Go to Import</a></div>';
+  }else if(unmappedCount>0){
+    h+='<div style="background:#FFF3CD;border:1px solid var(--orange);border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:13px;color:var(--text);">'+
+      '<strong style="color:var(--orange);">&#9888;</strong> '+unmappedCount+' activities have no schedule dates (their bid items are not mapped to schedule tasks). '+
+      '<a href="#" onclick="document.querySelector(\'[data-tab=import]\').click();setTimeout(showMapping,200);return false" style="color:var(--blue);">Fix Mapping</a></div>';
+  }
+
+  h+='<div class="jcs-table-wrap"><table class="jcs-table">';
   h+='<tr><th style="min-width:200px;">Task</th><th style="min-width:80px;">QTY</th><th style="min-width:60px;">Rate</th><th style="min-width:50px;">Days</th><th style="min-width:60px;">Hours</th>';
   h+=`<th colspan="${months.length||1}" style="min-width:${ganttWidth}px;padding:0;">`;
-  // Month labels as a sub-grid
   h+='<div style="display:flex;width:100%;">';
   months.forEach((mo,mi)=>{
     h+=`<div style="flex:1;text-align:center;padding:10px 4px;border-left:${mi?'1px solid var(--ash)':'none'};font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--green);">${mo.label}</div>`;
@@ -1108,7 +1140,6 @@ function renderJobCostSchedule(){
 
   // Rows grouped by discipline
   groups.forEach(g=>{
-    // Discipline header row
     h+=`<tr class="jcs-disc-row"><td colspan="${6}" style="background:${g.color};border-left:4px solid ${g.color};">${g.name.toUpperCase()}</td></tr>`;
 
     g.activities.forEach(a=>{
@@ -1127,9 +1158,6 @@ function renderJobCostSchedule(){
       h+=`<td>${days}</td>`;
       h+=`<td>${hrs}</td>`;
 
-      // Single Gantt cell spanning all month columns
-      const barLeftPct=(a._ganttStart/totalDays)*100;
-      const barWPct=Math.max(((a._ganttEnd-a._ganttStart)/totalDays)*100,0.5);
       h+=`<td colspan="${months.length||1}" class="jcs-gantt-cell" style="min-width:${ganttWidth}px;">`;
       // Month grid lines
       months.forEach((mo,mi)=>{
@@ -1139,15 +1167,19 @@ function renderJobCostSchedule(){
       if(todayPct>=0&&todayPct<=100){
         h+=`<div class="jcs-today-line" style="left:${todayPct}%;"></div>`;
       }
-      // Bar
-      h+=`<div class="jcs-gantt-bar" style="left:${barLeftPct}%;width:${barWPct}%;background:${g.color};">${barLabel}</div>`;
+      // Bar — positioned by schedule dates
+      if(a._barStart&&a._barEnd&&totalMs>0){
+        const barLeftPct=Math.max(0,(a._barStart.getTime()-projStart.getTime())/totalMs*100);
+        const barRightPct=Math.min(100,(a._barEnd.getTime()-projStart.getTime())/totalMs*100);
+        const barWPct=Math.max(barRightPct-barLeftPct,0.4);
+        h+=`<div class="jcs-gantt-bar" style="left:${barLeftPct}%;width:${barWPct}%;background:${g.color};">${barLabel}</div>`;
+      }
       h+='</td>';
       h+='</tr>';
     });
   });
 
   h+='</table>';
-  // Footer
   h+=`<div class="jcs-footer">`;
   h+=`<div><strong>Total Hours:</strong> ${fmt(grandHours)}</div>`;
   h+=`<div><strong>Total Cost:</strong> ${fmtD(grandCost)}</div>`;
