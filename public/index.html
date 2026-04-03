@@ -34,6 +34,7 @@ body{font-family:'Source Serif 4',Georgia,serif;background:var(--bg);color:var(-
 .import-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
 .import-zone{background:var(--card);border:2px dashed var(--sand);border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:all .2s}
 .import-zone:hover{border-color:var(--orange);background:#FFF8F4}
+.import-zone.drag-over{border-color:var(--orange);background:#FFF8F4;box-shadow:0 0 12px rgba(242,103,34,.2)}
 .import-zone.loaded{border-color:var(--green);border-style:solid;background:#F4F7F4}
 .import-zone h3{font-family:Oswald,sans-serif;font-size:16px;color:var(--midnight);margin-bottom:4px}
 .import-zone p{font-size:13px;color:var(--text-light);margin-bottom:12px}
@@ -235,18 +236,6 @@ tr:hover{background:#FAF8F5}
 
   <!-- Sub-panel: JCS -->
   <div id="sub-jcs" class="sub-panel">
-    <div class="jcs-header">
-      <div class="jcs-title-bar">
-        <div class="jcs-title">JOB COST SCHEDULE (GANTT + COST)</div>
-        <div class="jcs-phase-badge">PHASE 1A</div>
-      </div>
-      <div class="jcs-subtitle">Precon builds, PM owns. Shows tasks on a Gantt timeline with costs/hours spread across weeks.</div>
-      <div class="jcs-actions">
-        <button class="jcs-btn" onclick="document.getElementById('file-activities').click()">Import HeavyBid</button>
-        <button class="jcs-btn" onclick="alert('Set Baseline coming in Phase 1B')">Set Baseline</button>
-        <button class="jcs-btn jcs-btn-push" onclick="alert('Push to Planner coming in Phase 1B')">Push to Planner</button>
-      </div>
-    </div>
     <div id="jcsContent"></div>
   </div>
 
@@ -259,19 +248,13 @@ tr:hover{background:#FAF8F5}
   <div id="sub-setup" class="sub-panel">
     <div style="background:#FFF3CD;border:1px solid #F26722;border-radius:8px;padding:10px 16px;margin-bottom:12px;font-size:13px;color:#363636;font-family:'Source Serif 4',serif;"><strong style="color:#F26722;">&#9888; Important:</strong> Make sure to convert HeavyBid exports from .xls to .xlsx before importing!</div>
     <div class="import-grid">
-      <div class="import-zone" id="zone-activities" onclick="document.getElementById('file-activities').click()">
+      <div class="import-zone" id="zone-activities" onclick="document.getElementById('file-activities').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'activities')">
         <h3>HeavyBid Activities</h3>
-        <p>Cost detail that rolls up into bid items</p>
+        <p>Activities with phase codes — auto-builds pay items &amp; SOV</p>
         <div class="status pending" id="status-activities">Drop .xlsx or click</div>
         <input type="file" id="file-activities" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'activities')">
       </div>
-      <div class="import-zone" id="zone-biditems" onclick="document.getElementById('file-biditems').click()">
-        <h3>HeavyBid Bid Items</h3>
-        <p>Pay items, unit prices, cost layers</p>
-        <div class="status pending" id="status-biditems">Drop .xlsx or click</div>
-        <input type="file" id="file-biditems" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'biditems')">
-      </div>
-      <div class="import-zone" id="zone-schedule" onclick="document.getElementById('file-schedule').click()">
+      <div class="import-zone" id="zone-schedule" onclick="document.getElementById('file-schedule').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'schedule')">
         <h3>Smartsheet Schedule</h3>
         <p>Tasks, dates, durations, crews</p>
         <div class="status pending" id="status-schedule">Drop .xlsx or click</div>
@@ -607,11 +590,11 @@ function switchJob(){
 }
 function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
 function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog()}
-function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(data&&data.length){zone.classList.add('loaded');st.className='status loaded';st.textContent=data.length+' records loaded'}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
+function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','schedule'].forEach(type=>{const data=job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';st.className='status loaded';st.textContent=data.length+' records loaded'+extra}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
-  if(mapBtn){if(job.bidItems.length&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Bid Items'}else{mapBtn.style.display='none'}}
+  if(mapBtn){if((job.bidItems.length||job.sovItems?.length)&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Pay Items'}else{mapBtn.style.display='none'}}
   const sovBtn=document.getElementById('sovBtn');
-  if(sovBtn){if(job.bidItems.length&&job.activities.length){sovBtn.style.display='inline-block';const sovCount=job.sovItems?job.sovItems.length:0;sovBtn.textContent=sovCount?`SOV / Pay Items (${sovCount})`:'Build SOV / Pay Items'}else{sovBtn.style.display='none'}}
+  if(sovBtn){if(job.activities.length){sovBtn.style.display='inline-block';const sovCount=job.sovItems?job.sovItems.length:0;sovBtn.textContent=sovCount?`SOV / Pay Items (${sovCount})`:'Build SOV / Pay Items'}else{sovBtn.style.display='none'}}
   // Cash flow config — show when activities + schedule exist
   const cfArea=document.getElementById('cashflowConfigArea');
   if(cfArea){if(job.activities.length&&job.schedule.length){cfArea.style.display='block';renderCashFlowConfig()}else{cfArea.style.display='none'}}
@@ -622,8 +605,25 @@ function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<
 // ═══════════════════════════════════════════
 // IMPORT → STAGING
 // ═══════════════════════════════════════════
+// Drag & drop support for import zones
+function handleDragOver(e){e.preventDefault();e.currentTarget.style.borderColor='var(--orange)';e.currentTarget.style.background='#FFF8F4'}
+function handleDragLeave(e){e.preventDefault();const z=e.currentTarget;z.style.borderColor=z.classList.contains('loaded')?'var(--green)':'var(--sand)';z.style.background=z.classList.contains('loaded')?'#F4F7F4':'var(--card)'}
+function handleDrop(e,type){
+  e.preventDefault();
+  const z=e.currentTarget;
+  z.style.borderColor=z.classList.contains('loaded')?'var(--green)':'var(--sand)';
+  z.style.background=z.classList.contains('loaded')?'#F4F7F4':'var(--card)';
+  const file=e.dataTransfer.files[0];
+  if(!file||!Store.activeJob)return;
+  handleImportFile(file,type);
+}
+
 function handleImport(event,type){
   const file=event.target.files[0];if(!file||!Store.activeJob)return;
+  handleImportFile(file,type);
+}
+
+function handleImportFile(file,type){
   const reader=new FileReader();
   reader.onload=function(e){
     try{
@@ -633,7 +633,7 @@ function handleImport(event,type){
       log(`Parsing ${file.name}: ${rows.length} rows, ${Object.keys(rows[0]||{}).length} columns`);
       let parsed;
       if(type==='activities') parsed=parseActivitiesRaw(rows);
-      else if(type==='biditems') parsed=parseBidItemsRaw(rows);
+      else if(type==='biditems') parsed=parseBidItemsRaw(rows); // legacy — kept for backward compat
       else parsed=parseScheduleRaw(rows);
       parsed.forEach(r=>r._selected=true);
       Store.staging={type,data:parsed};
@@ -664,6 +664,11 @@ function parseActivitiesRaw(rows){
     const totalMat=permMat+constMat;
     const totalEqp=eqpOper+compEqp+outsideEqp;
     const directTotal=col(r,['Direct Total','Direct Cost','Total Direct']);
+    // Phase code columns from HeavyBid Activities export
+    const phaseCode=colStr(r,['Job Cost Actv#','Job Cost Actv','JC Actv#','HJ Code','Alternate Cost Code','Alt Cost Code','Phase Code']);
+    const phaseDesc=colStr(r,['HJ Description','Job Cost Description','JC Description','Phase Description']);
+    const parentPhase=colStr(r,['Job Cost Bid#','JC Bid#','Job Cost Code 2','Parent Phase']);
+    const biditemDesc=colStr(r,['Biditem Description','Bid Item Description','BidItem Description','Biditem Desc']);
     return{
       biditem:String(r['Biditem']||r['Bid Item']||r['BidItem']||''),
       code:code,description:r['Description']||'',
@@ -678,6 +683,7 @@ function parseActivitiesRaw(rows){
       directTotal,
       otherDirect:Math.max(0,directTotal-labor-burden-totalMat-totalEqp-subs-trucking-coOH),
       discipline:getDiscipline(code),
+      phaseCode,phaseDesc,parentPhase,biditemDesc,
     };
   });
 }
@@ -742,8 +748,8 @@ function renderStaging(){
   let h='<div class="staging-banner"><div><h3>Review '+type.replace('biditems','Bid Items')+' — '+data.length+' records</h3><p>Uncheck, edit, or delete rows before confirming.</p></div><div class="staging-actions"><button class="btn-secondary" onclick="cancelStaging()">Cancel</button><button class="btn-green" onclick="confirmStaging()">Confirm Import</button></div></div>';
   h+='<div class="card"><div class="table-wrap"><table>';
   if(type==='activities'){
-    h+='<tr><th></th><th>Code</th><th>Bid Item</th><th>Description</th><th>Crew</th><th class="num">Qty</th><th>Units</th><th class="num">Man Hrs</th><th class="num">Direct Total</th><th></th></tr>';
-    data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.biditem}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.directTotal)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+    h+='<tr><th></th><th>Code</th><th>Phase Code</th><th>Bid Item</th><th>Description</th><th>Crew</th><th class="num">Qty</th><th>Units</th><th class="num">Man Hrs</th><th class="num">Direct Total</th><th></th></tr>';
+    data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.phaseCode||'—'}</td><td>${a.biditem}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.directTotal)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
   }else if(type==='biditems'){
     h+='<tr><th></th><th>#</th><th>Description</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th></th></tr>';
     data.forEach((b,i)=>{if(!b._selected)return;const oh=(b.indirects||0)+(b.addonBond||0);h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${b.biditem}</td><td>${b.description}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(b.takeoffTotal)}</strong></td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
@@ -760,8 +766,61 @@ function delStagingRow(i){Store.staging.data.splice(i,1);renderStaging()}
 function addStagingRow(){const{type,data}=Store.staging;if(type==='activities')data.push({biditem:'',code:'NEW',description:'',quantity:0,units:'',crew:'',crewHours:0,productivityRate:0,manHours:0,calculatedDays:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,totalMaterial:0,totalEquipment:0,directTotal:0,discipline:getDiscipline(''),_selected:true});else if(type==='biditems')data.push({biditem:'NEW',description:'',type:'',clientBidNum:'',units:'',bidQuantity:0,takeoffQuantity:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,directTotal:0,indirects:0,addonBond:0,total:0,balancedTotal:0,unitPrice:0,manHours:0,markup:0,takeoffTotal:0,bidTotal:0,_selected:true});else data.push({id:data.length+1,name:'',start:null,finish:null,durationDays:0,durationStr:'',predecessors:'',status:'',atRisk:'',crew:'',variance:null,_selected:true});editStagingRow(data.length-1)}
 function editStagingRow(i){const t=Store.staging.type;editRow(t==='biditems'?'biditem':t==='activities'?'activity':'schedule',i,true)}
 function cancelStaging(){Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none'}
-function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}})}else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);addEditLog('Imported '+sel.length+' '+type+' records');Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
-  if((type==='schedule'||type==='biditems'||type==='activities')&&job.schedule.length&&job.bidItems.length){showMapping()}
+function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}});
+    // Auto-build bid items + SOV from activities using phase codes
+    const hasPhase=sel.some(a=>a.phaseCode);
+    if(hasPhase){
+      job.bidItems=buildBidItemsFromActivities(sel);
+      job.sovItems=buildSOVFromActivities(sel,job.bidItems);
+      log('Phase codes detected — auto-built '+job.bidItems.length+' pay items and SOV from activities.');
+      addEditLog('Auto-built '+job.bidItems.length+' pay items from phase codes');
+    }
+  }else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);addEditLog('Imported '+sel.length+' '+type+' records');Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
+  if((type==='schedule'||type==='activities')&&job.schedule.length&&(job.bidItems.length||(job.sovItems||[]).length)){showMapping()}
+}
+
+// Build bid items (pay items) from activities by grouping on biditem column
+function buildBidItemsFromActivities(activities){
+  const biMap={};
+  activities.forEach(a=>{
+    const bi=String(a.biditem);
+    if(!bi)return;
+    if(!biMap[bi]){
+      biMap[bi]={biditem:bi,description:a.biditemDesc||a.description||'',units:'LS',bidQuantity:1,takeoffQuantity:1,
+        labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,trucking:0,coOH:0,directTotal:0,
+        indirects:0,addonBond:0,markup:0,takeoffTotal:0,balancedTotal:0,unitPrice:0,manHours:0,bidTotal:0,_selected:true};
+    }
+    const b=biMap[bi];
+    b.labor+=a.labor||0;b.burden+=a.burden||0;b.permMat+=a.permMat||0;b.constMat+=a.constMat||0;
+    b.subs+=a.subs||0;b.eqpOper+=a.eqpOper||0;b.compEqp+=a.compEqp||0;b.outsideEqp+=a.outsideEqp||0;
+    b.trucking+=a.trucking||0;b.coOH+=a.coOH||0;b.directTotal+=a.directTotal||0;b.manHours+=a.manHours||0;
+  });
+  // Set unit price = direct total (markup/OH can be set in SOV builder)
+  Object.values(biMap).forEach(b=>{b.unitPrice=b.directTotal;b.takeoffTotal=b.directTotal;b.bidTotal=b.directTotal});
+  return Object.values(biMap).sort((a,b)=>parseInt(a.biditem)-parseInt(b.biditem));
+}
+
+// Build SOV items from activities, grouping by bid item with phase code tracking
+function buildSOVFromActivities(activities,bidItems){
+  const biMap={};
+  bidItems.forEach(bi=>{
+    biMap[bi.biditem]={
+      id:bi.biditem,clientItemNo:'',description:bi.description,contractQty:bi.bidQuantity||1,
+      unit:bi.units||'LS',unitPrice:bi.unitPrice||0,retainagePct:5,pctCompleteMethod:'cost',
+      activityIds:[],phaseCodes:[],ohPct:0,profitPct:0,_original:true,_autoPrice:true
+    };
+  });
+  // Assign activities and collect phase codes per pay item
+  activities.forEach(a=>{
+    const bi=String(a.biditem);
+    if(biMap[bi]){
+      biMap[bi].activityIds.push(a.code);
+      if(a.phaseCode&&!biMap[bi].phaseCodes.some(p=>p.code===a.phaseCode)){
+        biMap[bi].phaseCodes.push({code:a.phaseCode,description:a.phaseDesc||a.description,parentPhase:a.parentPhase||a.phaseCode});
+      }
+    }
+  });
+  return Object.values(biMap).sort((a,b)=>parseInt(a.id)-parseInt(b.id));
 }
 
 // ═══════════════════════════════════════════
@@ -817,7 +876,7 @@ function updateTaskMapping(taskIdx, bidItemId){
 
 function showMapping(){
   const job=Store.jobs[Store.activeJob];
-  if(!job||!job.schedule.length||!job.bidItems.length)return;
+  if(!job||!job.schedule.length||(!job.bidItems.length&&!(job.sovItems||[]).length))return;
   if(!job.taskMap)job.taskMap={};
   document.getElementById('mappingArea').style.display='block';
   renderMapping();
@@ -1202,7 +1261,7 @@ function renderDashboard(){
   const alerts=[];
   if(!sched.length) alerts.push({icon:'&#128197;',msg:'No schedule imported yet',action:'setup',label:'Import'});
   else if(!Object.keys(job.taskMap||{}).length) alerts.push({icon:'&#128279;',msg:'Schedule not mapped to bid items',action:'setup',label:'Map Now'});
-  if(!job.sovItems||!job.sovItems.length) alerts.push({icon:'&#128203;',msg:'SOV / Pay Items not built yet',action:'setup',label:'Build SOV'});
+  if(!job.sovItems||!job.sovItems.length) alerts.push({icon:'&#128203;',msg:'SOV / Pay Items not built yet — import activities with phase codes',action:'setup',label:'Build SOV'});
   else{
     // Check for unbilled activities
     const sovActIds=new Set((job.sovItems||[]).flatMap(si=>si.activityIds||[]));
@@ -1697,8 +1756,9 @@ function renderBidItems(){
 
   // If no SOV items built yet, prompt user
   if(!sovItems.length){
-    if(!job.bidItems.length){el.innerHTML='<div class="empty-state"><h2>No Pay Items</h2><p>Import bid items and build your SOV from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>.</p></div>';fEl.innerHTML='';return}
-    el.innerHTML='<div class="empty-state"><h2>SOV Not Built Yet</h2><p>Your bid items are imported but you need to build the Schedule of Values first.</p><button class="btn-primary" style="margin-top:12px;" onclick="switchSubTab(\'setup\');setTimeout(()=>{const b=document.getElementById(\'sovBtn\');if(b)b.click()},200);">Build SOV / Pay Items</button></div>';
+    if(!job.activities.length){el.innerHTML='<div class="empty-state"><h2>No Pay Items</h2><p>Import HeavyBid Activities from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>. Pay items will be auto-built from phase codes.</p></div>';fEl.innerHTML='';return}
+    if(!job.bidItems.length){el.innerHTML='<div class="empty-state"><h2>No Pay Items</h2><p>Activities imported but no phase codes found. Build your SOV from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>.</p></div>';fEl.innerHTML='';return}
+    el.innerHTML='<div class="empty-state"><h2>SOV Not Built Yet</h2><p>Your activities are imported — open the SOV builder to set up pay items.</p><button class="btn-primary" style="margin-top:12px;" onclick="switchSubTab(\'setup\');setTimeout(()=>{const b=document.getElementById(\'sovBtn\');if(b)b.click()},200);">Build SOV / Pay Items</button></div>';
     fEl.innerHTML='';return;
   }
 
@@ -1732,7 +1792,7 @@ function renderBidItems(){
 
   // ── Pay Items Table ──
   h+='<div class="card"><div class="table-wrap"><table>';
-  h+='<tr><th>#</th><th>Item No.</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th><th class="num">Ret. %</th><th class="num">Activities</th><th></th></tr>';
+  h+='<tr><th>#</th><th>Item No.</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th><th class="num">Ret. %</th><th class="num">Phases</th><th class="num">Activities</th><th></th></tr>';
 
   filtered.forEach(it=>{
     const c=it.c;
@@ -1740,6 +1800,7 @@ function renderBidItems(){
     const marginCls=margin<5?'negative':margin<10?'':'positive';
     const isOpen=_drillBidItem===it.id;
     const flag=c.sv<c.total-1?'&#9888; ':'';
+    const phaseCount=(it.phaseCodes||[]).length;
 
     h+=`<tr style="${isOpen?'background:#EBF5FB;':''}">`;
     h+=`<td>${it.idx+1}</td>`;
@@ -1753,34 +1814,70 @@ function renderBidItems(){
     h+=`<td class="num">${fmtD(c.oh+c.profit)}</td>`;
     h+=`<td class="num ${marginCls}">${fmtPct(margin)}</td>`;
     h+=`<td class="num">${((it.retainagePct||5)).toFixed(0)}%</td>`;
+    h+=`<td class="num">${phaseCount||'—'}</td>`;
     h+=`<td class="num">${c.acts.length}</td>`;
     h+=`<td><button class="drill-btn" onclick="toggleDrill('${escJS(it.id)}')">${isOpen?'Close':'Drill'}</button></td>`;
     h+=`</tr>`;
 
-    // Drill-down: activities in this pay item
+    // Drill-down: phase codes → activities in this pay item
     if(isOpen){
       if(c.acts.length){
-        h+=`<tr><td colspan="13" style="padding:0 12px 12px 12px;background:#F0F7FD;"><div class="drill-panel">`;
-        h+=`<div class="card-title" style="color:var(--blue);border-bottom-color:#D0E3F5;">Activities in Pay Item ${esc(it.clientItemNo||it.id)} <span style="font-weight:300;font-size:12px;">(${c.acts.length} activities, ${fmtD(c.dc)} direct cost)</span></div>`;
-        h+=`<table><tr><th style="background:var(--blue);">Code</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th></tr>`;
+        h+=`<tr><td colspan="14" style="padding:0 12px 12px 12px;background:#F0F7FD;"><div class="drill-panel">`;
+        // Group activities by phase code
+        const phaseGroups={};
         c.acts.forEach(a=>{
-          h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
+          const pc=a.phaseCode||'_none';
+          if(!phaseGroups[pc])phaseGroups[pc]={code:pc,desc:a.phaseDesc||'',acts:[]};
+          phaseGroups[pc].acts.push(a);
         });
-        h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">SUBTOTAL</td><td class="num">${fmtD(c.labor)}</td><td class="num">${fmtD(c.mat)}</td><td class="num">${fmtD(c.eqp)}</td><td class="num">${fmtD(c.subs)}</td><td class="num">${fmtD(c.dc)}</td></tr>`;
-        // Show OH + Profit breakdown
+        const hasPhases=Object.keys(phaseGroups).length>1||!phaseGroups['_none'];
+
+        if(hasPhases){
+          h+=`<div class="card-title" style="color:var(--blue);border-bottom-color:#D0E3F5;">Pay Item ${esc(it.clientItemNo||it.id)} — ${Object.keys(phaseGroups).length} Phase Codes, ${c.acts.length} Activities <span style="font-weight:300;font-size:12px;">(${fmtD(c.dc)} direct cost)</span></div>`;
+          Object.values(phaseGroups).forEach(pg=>{
+            const pgCost=pg.acts.reduce((s,a)=>s+(a.directTotal||0),0);
+            const pgLabor=pg.acts.reduce((s,a)=>s+(a.labor||0),0);
+            const pgMat=pg.acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
+            const pgEqp=pg.acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
+            const pgSubs=pg.acts.reduce((s,a)=>s+(a.subs||0),0);
+            h+=`<div style="margin-bottom:10px;">`;
+            h+=`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#E3EFF9;border-radius:4px;font-family:Oswald;font-size:12px;letter-spacing:.5px;">`;
+            h+=`<span style="color:var(--green);font-weight:700;">${pg.code}</span>`;
+            h+=`<span>${pg.desc}</span>`;
+            h+=`<span style="margin-left:auto;color:var(--text-light);">${pg.acts.length} activit${pg.acts.length===1?'y':'ies'} — ${fmtD(pgCost)}</span>`;
+            h+=`</div>`;
+            h+=`<table style="margin-top:2px;"><tr><th style="background:var(--blue);">Activity</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th></tr>`;
+            pg.acts.forEach(a=>{
+              h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
+            });
+            h+=`<tr style="background:#EDF4FB;font-weight:600;font-size:12px;"><td colspan="6">Phase ${pg.code} Subtotal</td><td class="num">${fmtD(pgLabor)}</td><td class="num">${fmtD(pgMat)}</td><td class="num">${fmtD(pgEqp)}</td><td class="num">${fmtD(pgSubs)}</td><td class="num">${fmtD(pgCost)}</td></tr>`;
+            h+=`</table></div>`;
+          });
+        } else {
+          h+=`<div class="card-title" style="color:var(--blue);border-bottom-color:#D0E3F5;">Activities in Pay Item ${esc(it.clientItemNo||it.id)} <span style="font-weight:300;font-size:12px;">(${c.acts.length} activities, ${fmtD(c.dc)} direct cost)</span></div>`;
+          h+=`<table><tr><th style="background:var(--blue);">Code</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th></tr>`;
+          c.acts.forEach(a=>{
+            h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
+          });
+          h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">SUBTOTAL</td><td class="num">${fmtD(c.labor)}</td><td class="num">${fmtD(c.mat)}</td><td class="num">${fmtD(c.eqp)}</td><td class="num">${fmtD(c.subs)}</td><td class="num">${fmtD(c.dc)}</td></tr>`;
+          h+='</table>';
+        }
+        // OH + Profit breakdown (shown for both paths)
+        h+=`<table style="margin-top:6px;">`;
         h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Overhead (${((it.ohPct||0)*100).toFixed(1)}%)</td><td colspan="4"></td><td class="num">${fmtD(c.oh)}</td></tr>`;
         h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Profit (${((it.profitPct||0)*100).toFixed(1)}%)</td><td colspan="4"></td><td class="num">${fmtD(c.profit)}</td></tr>`;
         h+=`<tr style="background:#E8F5E9;font-weight:600;"><td colspan="6" style="text-align:right;">Scheduled Value</td><td colspan="4"></td><td class="num">${fmtD(c.sv)}</td></tr>`;
         h+='</table></div></td></tr>';
       }else{
-        h+=`<tr><td colspan="13" style="padding:12px;background:#F0F7FD;color:var(--text-light);font-style:italic;">No activities assigned to this pay item. <a href="#" onclick="switchSubTab('setup');return false;" style="color:var(--orange);">Edit in SOV Builder</a></td></tr>`;
+        h+=`<tr><td colspan="14" style="padding:12px;background:#F0F7FD;color:var(--text-light);font-style:italic;">No activities assigned to this pay item. <a href="#" onclick="switchSubTab('setup');return false;" style="color:var(--orange);">Edit in SOV Builder</a></td></tr>`;
       }
     }
   });
 
   // Totals row
   const fMargin=totalSV>0?((totalSV-totalDC)/totalSV*100):0;
-  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalSV)}</td><td class="num">${fmtD(totalDC)}</td><td class="num">${fmtD(totalOH+totalProfit)}</td><td class="num">${fmtPct(fMargin)}</td><td></td><td class="num">${filtered.reduce((s,it)=>s+it.c.acts.length,0)}</td><td></td></tr>`;
+  const totalPhases=filtered.reduce((s,it)=>s+(it.phaseCodes||[]).length,0);
+  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalSV)}</td><td class="num">${fmtD(totalDC)}</td><td class="num">${fmtD(totalOH+totalProfit)}</td><td class="num">${fmtPct(fMargin)}</td><td></td><td class="num">${totalPhases}</td><td class="num">${filtered.reduce((s,it)=>s+it.c.acts.length,0)}</td><td></td></tr>`;
   h+='</table></div></div>';
 
   // ── Unbilled Activities Warning ──
@@ -1835,9 +1932,11 @@ function renderSchedule(){
   if(m.startDate&&m.endDate){h+='<div class="card"><div class="card-title">Gantt Chart</div>'+renderGantt(job.schedule,m)+'</div>'}
 
   // Editable task table
-  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Master Schedule<span style="font-size:11px;font-weight:300;color:var(--text-light);">Edit dates and status directly — changes update JCS &amp; Cash Flow</span></div>';
+  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Master Schedule<button class="btn-green btn-sm" onclick="addScheduleTask()">+ Add Task</button></div>';
+  h+='<div style="font-size:11px;color:var(--text-light);margin-bottom:8px;">Edit dates, status, and names directly — changes update JCS &amp; Cash Flow automatically.</div>';
   h+='<div class="table-wrap" style="max-height:600px;"><table>';
-  h+='<tr><th>#</th><th style="min-width:200px;">Task</th><th style="min-width:130px;">Start</th><th style="min-width:130px;">Finish</th><th class="num">Days</th><th>Status</th><th>Crew</th><th>Predecessors</th></tr>';
+  h+='<tr><th>#</th><th style="min-width:200px;">Task</th><th style="min-width:130px;">Start</th><th style="min-width:130px;">Finish</th><th class="num">Days</th><th>Status</th><th>Crew</th><th>Pred.</th><th></th></tr>';
+  const inputSt='font-family:inherit;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;';
 
   tasks.forEach((t,i)=>{
     const sd=toDate(t.start);
@@ -1849,17 +1948,18 @@ function renderSchedule(){
 
     h+=`<tr>`;
     h+=`<td style="color:var(--text-light);font-size:11px;">${t.id}</td>`;
-    h+=`<td><strong>${esc(t.name)}</strong></td>`;
-    h+=`<td><input type="date" value="${startVal}" onchange="updateScheduleTask(${i},'start',this.value)" style="font-family:inherit;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;width:120px;"></td>`;
-    h+=`<td><input type="date" value="${finishVal}" onchange="updateScheduleTask(${i},'finish',this.value)" style="font-family:inherit;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;width:120px;"></td>`;
+    h+=`<td><input type="text" value="${esc(t.name)}" onchange="updateScheduleTask(${i},'name',this.value)" style="${inputSt}width:100%;min-width:160px;font-weight:600;"></td>`;
+    h+=`<td><input type="date" value="${startVal}" onchange="updateScheduleTask(${i},'start',this.value)" style="${inputSt}width:120px;"></td>`;
+    h+=`<td><input type="date" value="${finishVal}" onchange="updateScheduleTask(${i},'finish',this.value)" style="${inputSt}width:120px;"></td>`;
     h+=`<td class="num">${days}</td>`;
-    h+=`<td><select onchange="updateScheduleTask(${i},'status',this.value)" style="font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;color:${sc};">`;
+    h+=`<td><select onchange="updateScheduleTask(${i},'status',this.value)" style="${inputSt}color:${sc};">`;
     ['Not Started','In Progress','Complete','On Hold'].forEach(s=>{
       h+=`<option value="${s}" ${(t.status||'Not Started')===s?'selected':''}>${s}</option>`;
     });
     h+=`</select></td>`;
-    h+=`<td style="font-size:12px;">${esc(t.crew||'')}</td>`;
-    h+=`<td style="font-size:12px;color:var(--text-light);">${esc(t.predecessors||'')}</td>`;
+    h+=`<td><input type="text" value="${esc(t.crew||'')}" onchange="updateScheduleTask(${i},'crew',this.value)" style="${inputSt}width:80px;" placeholder="Crew"></td>`;
+    h+=`<td><input type="text" value="${esc(t.predecessors||'')}" onchange="updateScheduleTask(${i},'predecessors',this.value)" style="${inputSt}width:70px;color:var(--text-light);" placeholder="e.g. 3,5"></td>`;
+    h+=`<td><button class="del-btn" onclick="removeScheduleTask(${i})" title="Delete task" style="font-size:10px;padding:2px 6px;">&#10005;</button></td>`;
     h+=`</tr>`;
   });
   h+='</table></div></div>';
@@ -1873,19 +1973,18 @@ function updateScheduleTask(idx,field,value){
   const t=job.schedule[idx];
   if(!t)return;
 
-  const oldVal=field==='status'?(t.status||'Not Started'):fmtDate(t[field]);
+  const oldVal=field==='start'||field==='finish'?fmtDate(t[field]):(t[field]||'');
 
   if(field==='start'||field==='finish'){
     t[field]=value?new Date(value+'T00:00:00'):null;
-    // Recalculate duration string
     const s=toDate(t.start),f=toDate(t.finish);
     if(s&&f){
       const d=Math.max(Math.ceil((f-s)/86400000),0);
       t.durationDays=d;
       t.durationStr=d+'d';
     }
-  }else if(field==='status'){
-    t.status=value;
+  }else{
+    t[field]=value;
   }
 
   // Recalc project meta dates from all schedule tasks
@@ -1896,12 +1995,76 @@ function updateScheduleTask(idx,field,value){
   }
 
   // Log the change
-  const newVal=field==='status'?value:fmtDate(t[field]);
-  addEditLog(`Schedule: ${t.name} — ${field} changed from ${oldVal} to ${newVal}`);
+  const newVal=field==='start'||field==='finish'?fmtDate(t[field]):value;
+  addEditLog(`Schedule: ${t.name} — ${field} changed from "${oldVal}" to "${newVal}"`);
 
-  // Save and re-render
   saveJob(Store.activeJob);
   renderSchedule();
+}
+
+// Add a new blank task to the schedule
+function addScheduleTask(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  const nextId=job.schedule.length?Math.max(...job.schedule.map(t=>parseInt(t.id)||0))+1:1;
+  // Default dates: if schedule has tasks, default to the last task's finish date
+  const lastTask=job.schedule.length?job.schedule[job.schedule.length-1]:null;
+  const defStart=lastTask&&toDate(lastTask.finish)?toDate(lastTask.finish):new Date();
+  const defFinish=new Date(defStart.getTime()+7*86400000); // 1 week default
+
+  job.schedule.push({
+    id:String(nextId),
+    name:'New Task',
+    start:defStart,
+    finish:defFinish,
+    durationDays:7,
+    durationStr:'7d',
+    predecessors:'',
+    status:'Not Started',
+    atRisk:'No',
+    crew:'',
+    variance:null
+  });
+
+  // Update meta dates
+  const allDates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
+  if(allDates.length){job.meta.startDate=new Date(Math.min(...allDates));job.meta.endDate=new Date(Math.max(...allDates))}
+
+  addEditLog('Schedule: Added new task #'+nextId);
+  saveJob(Store.activeJob);
+  renderSchedule();
+  updateNavBadges();
+}
+
+// Remove a task from the schedule
+function removeScheduleTask(idx){
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  const t=job.schedule[idx];
+  if(!t)return;
+  if(!confirm(`Delete task "${t.name}"? This cannot be undone.`))return;
+
+  const name=t.name;
+  job.schedule.splice(idx,1);
+
+  // Clean up taskMap entries that referenced this index
+  const newMap={};
+  Object.entries(job.taskMap||{}).forEach(([si,bi])=>{
+    const oldIdx=parseInt(si);
+    if(oldIdx===idx)return; // remove mapping for deleted task
+    const newIdx=oldIdx>idx?oldIdx-1:oldIdx; // shift down indices after deleted
+    newMap[String(newIdx)]=bi;
+  });
+  job.taskMap=newMap;
+
+  // Update meta dates
+  const allDates=job.schedule.map(tk=>toDate(tk.start)).concat(job.schedule.map(tk=>toDate(tk.finish))).filter(d=>d);
+  if(allDates.length){job.meta.startDate=new Date(Math.min(...allDates));job.meta.endDate=new Date(Math.max(...allDates))}
+
+  addEditLog('Schedule: Deleted task "'+name+'"');
+  saveJob(Store.activeJob);
+  renderSchedule();
+  updateNavBadges();
 }
 
 // ═══════════════════════════════════════════
@@ -2026,8 +2189,9 @@ function renderJobCostSchedule(){
     const hrs=a.manHours?fmt(a.manHours):'—';
     const shortName=a.description||(a.code||'Activity');
     const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
+    const pcBadge=a.phaseCode?`<span style="font-size:9px;color:var(--green);font-weight:700;margin-right:3px;">${a.phaseCode}</span>`:'';
     let r='<tr>';
-    r+=`<td class="jcs-task-name" title="${shortName}">${shortName}</td>`;
+    r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${pcBadge}${shortName}</td>`;
     r+=`<td>${qty}${units?' '+units:''}</td>`;
     r+=`<td>${rate}</td>`;
     r+=`<td>${days}</td>`;
@@ -2122,31 +2286,30 @@ function renderSOVBuilder(){
   const job=Store.jobs[Store.activeJob];
   if(!job){area.innerHTML='';return}
   if(!job.sovItems){
-    // Initialize SOV items from current bid items, preserving OH & profit ratios
-    job.sovItems=job.bidItems.map(bi=>{
-      const dc=bi.directTotal||0;
-      const oh=(bi.indirects||0)+(bi.addonBond||0);
-      const profit=bi.markup||0;
-      const ohPct=dc>0?oh/dc:0;
-      const profitPct=dc>0?profit/dc:0;
-      return {
-        id:bi.biditem,
-        clientItemNo:bi.clientBidNum||'',
-        description:bi.description||'',
-        contractQty:bi.bidQuantity||0,
-        unit:bi.units||'LS',
-        unitPrice:bi.unitPrice||0,
-        retainagePct:5,
-        pctCompleteMethod:'cost',
-        activityIds:job.activities.filter(a=>String(a.biditem)===String(bi.biditem)).map(a=>a.code),
-        ohPct:ohPct,
-        profitPct:profitPct,
-        _original:true,
-        _autoPrice:true
-      };
-    });
+    // Check if activities have phase codes — if so, auto-build
+    const hasPhase=job.activities.some(a=>a.phaseCode);
+    if(hasPhase&&job.activities.length){
+      job.bidItems=buildBidItemsFromActivities(job.activities);
+      job.sovItems=buildSOVFromActivities(job.activities,job.bidItems);
+    } else {
+      // Legacy: Initialize SOV items from current bid items, preserving OH & profit ratios
+      job.sovItems=job.bidItems.map(bi=>{
+        const dc=bi.directTotal||0;
+        const oh=(bi.indirects||0)+(bi.addonBond||0);
+        const profit=bi.markup||0;
+        const ohPct=dc>0?oh/dc:0;
+        const profitPct=dc>0?profit/dc:0;
+        return {
+          id:bi.biditem,clientItemNo:bi.clientBidNum||'',description:bi.description||'',
+          contractQty:bi.bidQuantity||0,unit:bi.units||'LS',unitPrice:bi.unitPrice||0,
+          retainagePct:5,pctCompleteMethod:'cost',
+          activityIds:job.activities.filter(a=>String(a.biditem)===String(bi.biditem)).map(a=>a.code),
+          phaseCodes:[],ohPct:ohPct,profitPct:profitPct,_original:true,_autoPrice:true
+        };
+      });
+    }
   } else {
-    // Migration: backfill ohPct/profitPct on existing sovItems that don't have them
+    // Migration: backfill ohPct/profitPct and phaseCodes on existing sovItems
     job.sovItems.forEach(si=>{
       if(si.ohPct===undefined||si.ohPct===null){
         const bi=job.bidItems.find(b=>String(b.biditem)===String(si.id));
@@ -2154,11 +2317,19 @@ function renderSOVBuilder(){
           const dc=bi.directTotal||0;
           si.ohPct=dc>0?((bi.indirects||0)+(bi.addonBond||0))/dc:0;
           si.profitPct=dc>0?(bi.markup||0)/dc:0;
-        }else{
-          si.ohPct=0;si.profitPct=0;
-        }
+        }else{si.ohPct=0;si.profitPct=0;}
       }
       if(si._autoPrice===undefined)si._autoPrice=true;
+      if(!si.phaseCodes){
+        // Backfill phase codes from activities
+        si.phaseCodes=[];
+        (si.activityIds||[]).forEach(actId=>{
+          const a=job.activities.find(act=>act.code===actId);
+          if(a&&a.phaseCode&&!si.phaseCodes.some(p=>p.code===a.phaseCode)){
+            si.phaseCodes.push({code:a.phaseCode,description:a.phaseDesc||a.description,parentPhase:a.parentPhase||a.phaseCode});
+          }
+        });
+      }
     });
   }
 
@@ -2313,14 +2484,28 @@ function renderSOVBuilder(){
       h+=`</div>`;
 
       // Activities list
-      h+=`<div style="margin-top:10px;font-family:Oswald;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Assigned Activities</div>`;
+      // Phase codes summary
+      if(si.phaseCodes&&si.phaseCodes.length){
+        h+=`<div style="margin-top:10px;font-family:Oswald;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Phase Codes (${si.phaseCodes.length})</div>`;
+        h+=`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">`;
+        si.phaseCodes.forEach(pc=>{
+          const pcActs=c.acts.filter(a=>a.phaseCode===pc.code);
+          const pcCost=pcActs.reduce((s,a)=>s+(a.directTotal||0),0);
+          h+=`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:11px;">`;
+          h+=`<strong style="color:var(--green);">${pc.code}</strong> ${pc.description||''} <span style="color:var(--text-light);">${fmtD(pcCost)}</span>`;
+          h+=`</span>`;
+        });
+        h+=`</div>`;
+      }
+
+      h+=`<div style="font-family:Oswald;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Assigned Activities</div>`;
       if(c.acts.length===0){
         h+=`<div style="padding:12px;text-align:center;color:var(--text-light);font-style:italic;font-size:12px;">No activities assigned — move activities here from another pay item</div>`;
       }else{
         c.acts.forEach(a=>{
           const actIdx=job.activities.indexOf(a);
           h+=`<div class="sov-act-row">`;
-          h+=`<span class="act-desc">${a.code} — ${a.description||'(no desc)'}</span>`;
+          h+=`<span class="act-desc">${a.phaseCode?'<span style="color:var(--green);font-weight:600;font-size:10px;">'+a.phaseCode+'</span> ':''}${a.code} — ${a.description||'(no desc)'}</span>`;
           h+=`<span class="act-cost">${fmtD(a.directTotal)}</span>`;
           h+=`<button class="sov-move-btn" onclick="showMoveActivity('${escJS(a.code)}',${idx})">Move</button>`;
           h+=`<button class="sov-split-btn" onclick="showSplitActivity('${escJS(a.code)}',${idx})">Split</button>`;
@@ -2398,6 +2583,7 @@ function addNewSOVItem(){
     retainagePct:5,
     pctCompleteMethod:'cost',
     activityIds:[],
+    phaseCodes:[],
     ohPct:avgOH,
     profitPct:avgPr,
     _original:false,
@@ -2576,11 +2762,17 @@ async function saveSOVItems(){
     };
   });
 
-  // Update activity biditem references
+  // Update activity biditem references and rebuild phase codes per SOV item
   job.sovItems.forEach(si=>{
+    si.phaseCodes=[];
     si.activityIds.forEach(actId=>{
       const a=actMap[actId];
-      if(a)a.biditem=si.id;
+      if(a){
+        a.biditem=si.id;
+        if(a.phaseCode&&!si.phaseCodes.some(p=>p.code===a.phaseCode)){
+          si.phaseCodes.push({code:a.phaseCode,description:a.phaseDesc||a.description,parentPhase:a.parentPhase||a.phaseCode});
+        }
+      }
     });
   });
 
