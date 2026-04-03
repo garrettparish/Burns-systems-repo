@@ -33,8 +33,11 @@
 ### Project 1: Burns Systems
 - **Repo:** https://github.com/garrettparish/Burns-systems-repo
 - **Netlify site:** https://bdcprojectcontrols.netlify.app
-- **Supabase project:** [TBD]
-- **Stack:** Vanilla HTML/CSS/JS + SheetJS (xlsx.js) · Supabase planned for Phase 2
+- **Supabase project:** burns-project-controls (org: nic@burnsdirt.com)
+- **Supabase URL:** https://sxzvlazmkxnbsoayhuln.supabase.co
+- **Supabase ref:** sxzvlazmkxnbsoayhuln
+- **DB table:** `jobs` (id TEXT PK, data JSONB, created_at, updated_at)
+- **Stack:** Vanilla HTML/CSS/JS + SheetJS (xlsx.js) + Supabase (persistence)
 - **Status:** Phase 1A complete — Import, Dashboard, Bid Items, Schedule, Global View, Mapping
 - **Key files:** public/index.html (main app), netlify.toml, deploy.command, .github/workflows/deploy.yml
 
@@ -137,8 +140,8 @@
 - [x] First project kickoff — Phase 1A app built
 - [ ] Push Phase 1A to main → deploy to bdcprojectcontrols.netlify.app
 - [ ] Test all 3 jobs: SteelDriver 775, SteelPro 772, Stone Blvd 765
-- [ ] Link Supabase project for data persistence
-- [ ] Set environment variables (Supabase URL, anon key, service role key)
+- [x] Link Supabase project for data persistence
+- [x] Supabase client wired into app (auto-save on import/edit, auto-load on startup)
 - [ ] Phase 2: Supabase integration (save/load jobs, auth)
 - [ ] Phase 2: Refine schedule→bid item mapping with saved state
 - [ ] Future: Phase Codes, Pay Items, billing module, WIP reporting

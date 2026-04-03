@@ -6,6 +6,7 @@
 <title>Burns Dirt — Project Controls</title>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600;700&family=Source+Serif+4:wght@300;400;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 :root{--green:#3E4D3E;--midnight:#363636;--sand:#B9AB99;--ash:#D6D6D6;--orange:#F26722;--white:#FFF;--bg:#F5F3F0;--card:#FFF;--border:#E0DCD6;--text:#363636;--text-light:#6B6B6B;--red:#C0392B;--yellow:#F39C12;--blue:#2980B9;--teal:#1ABC9C}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -236,6 +237,60 @@ tr:hover{background:#FAF8F5}
 const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]} };
 
 // ═══════════════════════════════════════════
+// SUPABASE
+// ═══════════════════════════════════════════
+const SUPABASE_URL = 'https://sxzvlazmkxnbsoayhuln.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4enZsYXpta3huYnNvYXlodWxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMjIxNjIsImV4cCI6MjA5MDc5ODE2Mn0.0RhuM1CkdqZi56zWDANcdM6Zfe2Hge_1yXUyvS-9yhg';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// Save a single job to Supabase
+async function saveJob(jobId){
+  const job = Store.jobs[jobId];
+  if(!job) return;
+  // Serialize dates to ISO strings for JSON storage
+  const serialized = JSON.parse(JSON.stringify(job, (key, val) => {
+    if(val instanceof Date) return { __date: val.toISOString() };
+    return val;
+  }));
+  const { error } = await supabase.from('jobs').upsert({ id: jobId, data: serialized });
+  if(error){ console.error('Save error:', error); log('⚠ Save failed: ' + error.message); }
+  else { console.log('Saved job', jobId); }
+}
+
+// Load all jobs from Supabase on startup
+async function loadJobs(){
+  const { data, error } = await supabase.from('jobs').select('*');
+  if(error){ console.error('Load error:', error); return; }
+  if(!data || !data.length){ console.log('No saved jobs found'); return; }
+  // Deserialize dates
+  function reviveDates(obj){
+    if(!obj || typeof obj !== 'object') return obj;
+    if(obj.__date) return new Date(obj.__date);
+    if(Array.isArray(obj)) return obj.map(reviveDates);
+    const out = {};
+    for(const k in obj) out[k] = reviveDates(obj[k]);
+    return out;
+  }
+  data.forEach(row => {
+    const job = reviveDates(row.data);
+    Store.jobs[row.id] = job;
+  });
+  const ids = Object.keys(Store.jobs);
+  if(ids.length){
+    Store.activeJob = ids[0];
+    refreshJobSelectors();
+    updateImportPanel();
+    log(`Loaded ${ids.length} job(s) from database.`);
+  }
+}
+
+// Delete a job from Supabase
+async function deleteJob(jobId){
+  const { error } = await supabase.from('jobs').delete().eq('id', jobId);
+  if(error) console.error('Delete error:', error);
+}
+
+// ═══════════════════════════════════════════
 // DISCIPLINES
 // ═══════════════════════════════════════════
 const DISCIPLINES = {
@@ -306,15 +361,18 @@ document.querySelectorAll('.nav-tab').forEach(tab=>{
   });
 });
 
+// Load saved jobs on startup
+loadJobs();
+
 // ═══════════════════════════════════════════
 // JOB MANAGEMENT
 // ═══════════════════════════════════════════
 let _editingJobId=null;
 function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('newJobModal').classList.add('show')}
 function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobModal').classList.add('show')}
-function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderDashboard();log(`Job updated: #${m.number} ${m.name}`)}
+function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderDashboard();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
-function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();updateImportPanel();log(`Job created: #${num} ${name}`)}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();updateImportPanel();log(`Job created: #${num} ${name}`);saveJob(num)}
 
 function switchJob(){Store.activeJob=document.getElementById('jobSelect').value||null;syncSel('jobSelect');updateImportPanel()}
 function switchJobFromDash(){Store.activeJob=document.getElementById('dashJobSelect').value||null;syncSel('dashJobSelect');renderDashboard()}
@@ -450,7 +508,7 @@ function delStagingRow(i){Store.staging.data.splice(i,1);renderStaging()}
 function addStagingRow(){const{type,data}=Store.staging;if(type==='activities')data.push({biditem:'',code:'NEW',description:'',quantity:0,units:'',crew:'',crewHours:0,productivityRate:0,manHours:0,calculatedDays:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,totalMaterial:0,totalEquipment:0,directTotal:0,discipline:getDiscipline(''),_selected:true});else if(type==='biditems')data.push({biditem:'NEW',description:'',type:'',clientBidNum:'',units:'',bidQuantity:0,takeoffQuantity:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,directTotal:0,indirects:0,addonBond:0,total:0,balancedTotal:0,unitPrice:0,manHours:0,markup:0,takeoffTotal:0,bidTotal:0,_selected:true});else data.push({id:data.length+1,name:'',start:null,finish:null,durationDays:0,durationStr:'',predecessors:'',status:'',atRisk:'',crew:'',variance:null,_selected:true});editStagingRow(data.length-1)}
 function editStagingRow(i){const t=Store.staging.type;editRow(t==='biditems'?'biditem':t==='activities'?'activity':'schedule',i,true)}
 function cancelStaging(){Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none'}
-function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}})}else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();
+function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}})}else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
   if((type==='schedule'||type==='biditems')&&job.schedule.length&&job.bidItems.length){showMapping()}
 }
 
@@ -520,6 +578,7 @@ function confirmMapping(){
   const mapped=Object.keys(job.taskMap||{}).length;
   log(`Mapping confirmed: ${mapped} of ${job.schedule.length} tasks linked to bid items.`);
   hideMapping();
+  saveJob(Store.activeJob);
 }
 
 function renderMapping(){
@@ -590,7 +649,7 @@ function editRow(type,index,isStaging){
   document.getElementById('editRowFields').innerHTML=h;document.getElementById('editRowModal').classList.add('show');
 }
 function closeEditRow(){document.getElementById('editRowModal').classList.remove('show')}
-function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);const r=src[index];if(!r)return;document.querySelectorAll('#editRowFields input').forEach(inp=>{r[inp.dataset.key]=inp.type==='number'?(parseFloat(inp.value)||0):inp.value});if(type==='activity'){r.totalMaterial=(r.permMat||0)+(r.constMat||0);r.totalEquipment=(r.eqpOper||0)+(r.compEqp||0)+(r.outsideEqp||0);r.discipline=getDiscipline(r.code)}closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule()}}
+function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);const r=src[index];if(!r)return;document.querySelectorAll('#editRowFields input').forEach(inp=>{r[inp.dataset.key]=inp.type==='number'?(parseFloat(inp.value)||0):inp.value});if(type==='activity'){r.totalMaterial=(r.permMat||0)+(r.constMat||0);r.totalEquipment=(r.eqpOper||0)+(r.compEqp||0)+(r.outsideEqp||0);r.discipline=getDiscipline(r.code)}closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule();saveJob(Store.activeJob)}}
 
 // ═══════════════════════════════════════════
 // DASHBOARD
