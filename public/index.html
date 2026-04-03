@@ -227,6 +227,13 @@ tr:hover{background:#FAF8F5}
     <div id="sovArea" style="display:none;"></div>
     <div id="cashflowConfigArea" style="display:none;"></div>
     <div class="card" style="margin-top:20px;">
+      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Edit Log</span>
+        <span style="font-weight:300;font-size:12px;cursor:pointer;color:var(--blue);" onclick="promptUserName()">Change User: <strong id="currentUserLabel">—</strong></span>
+      </div>
+      <div id="editLogArea" style="font-size:13px;color:var(--text-light);max-height:240px;overflow-y:auto;"><em>No edits recorded yet.</em></div>
+    </div>
+    <div class="card" style="margin-top:12px;">
       <div class="card-title">Import Log</div>
       <div id="importLog" style="font-size:13px;color:var(--text-light);max-height:200px;overflow-y:auto;"><em>Waiting for file uploads...</em></div>
     </div>
@@ -324,6 +331,54 @@ tr:hover{background:#FAF8F5}
 // DATA STORE
 // ═══════════════════════════════════════════
 const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]} };
+
+// ═══════════════════════════════════════════
+// EDIT LOG / USER TRACKING
+// ═══════════════════════════════════════════
+function getCurrentUser(){
+  let name=localStorage.getItem('bdc_user_name');
+  if(!name){name=promptUserName()}
+  updateUserLabel(name);
+  return name||'Unknown';
+}
+function promptUserName(){
+  const current=localStorage.getItem('bdc_user_name')||'';
+  const name=prompt('Enter your name for the edit log:',current);
+  if(name&&name.trim()){localStorage.setItem('bdc_user_name',name.trim());updateUserLabel(name.trim());return name.trim()}
+  return current||'Unknown';
+}
+function updateUserLabel(name){
+  const el=document.getElementById('currentUserLabel');
+  if(el)el.textContent=name||'—';
+}
+function addEditLog(action){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.editLog)job.editLog=[];
+  const entry={
+    user:getCurrentUser(),
+    action:action,
+    timestamp:new Date().toISOString()
+  };
+  job.editLog.push(entry);
+  renderEditLog();
+}
+function renderEditLog(){
+  const el=document.getElementById('editLogArea');if(!el)return;
+  const job=Store.activeJob?Store.jobs[Store.activeJob]:null;
+  if(!job||!job.editLog||!job.editLog.length){el.innerHTML='<em>No edits recorded yet.</em>';return}
+  const entries=job.editLog.slice().reverse();
+  let h='';
+  entries.forEach(e=>{
+    const d=new Date(e.timestamp);
+    const ts=d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:12px;">`;
+    h+=`<span style="min-width:120px;font-weight:500;">${e.user}</span>`;
+    h+=`<span style="flex:1;">${e.action}</span>`;
+    h+=`<span style="min-width:100px;text-align:right;color:var(--text-light);font-size:12px;">${ts}</span>`;
+    h+=`</div>`;
+  });
+  el.innerHTML=h;
+}
 
 // ═══════════════════════════════════════════
 // SUPABASE
@@ -485,6 +540,8 @@ document.querySelectorAll('.nav-tab').forEach(tab=>{
 
 // Load saved jobs on startup
 loadJobs();
+// Init user label
+updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 
 // ═══════════════════════════════════════════
 // JOB MANAGEMENT
@@ -495,7 +552,7 @@ function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.
 function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderDashboard();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
 function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();updateImportPanel();renderDashboard();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
-function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();updateImportPanel();log(`Job created: #${num} ${name}`);saveJob(num)}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();updateImportPanel();log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
 
 function switchJob(){Store.activeJob=document.getElementById('jobSelect').value||null;syncSel('jobSelect');updateImportPanel()}
 function switchJobFromDash(){Store.activeJob=document.getElementById('dashJobSelect').value||null;syncSel('dashJobSelect');renderDashboard()}
@@ -504,7 +561,7 @@ function switchJobFromSch(){Store.activeJob=document.getElementById('schJobSelec
 function switchJobFromJCS(){Store.activeJob=document.getElementById('jcsJobSelect').value||null;syncSel('jcsJobSelect');renderJobCostSchedule()}
 function syncSel(src){const v=Store.activeJob||'';['jobSelect','dashJobSelect','bidJobSelect','schJobSelect','jcsJobSelect'].forEach(id=>{if(id!==src)document.getElementById(id).value=v})}
 function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;['jobSelect','dashJobSelect','bidJobSelect','schJobSelect','jcsJobSelect'].forEach(id=>{document.getElementById(id).innerHTML=base;document.getElementById(id).value=Store.activeJob||''})}
-function updateImportPanel(){const has=!!Store.activeJob;document.getElementById('importArea').style.display=has?'block':'none';document.getElementById('noJobMsg').style.display=has?'none':'block';document.getElementById('editJobBtn').style.display=has?'inline-block':'none';if(has)updateImportZones()}
+function updateImportPanel(){const has=!!Store.activeJob;document.getElementById('importArea').style.display=has?'block':'none';document.getElementById('noJobMsg').style.display=has?'none':'block';document.getElementById('editJobBtn').style.display=has?'inline-block':'none';if(has){updateImportZones();renderEditLog()}}
 function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(data&&data.length){zone.classList.add('loaded');st.className='status loaded';st.textContent=data.length+' records loaded'}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if(job.bidItems.length&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Bid Items'}else{mapBtn.style.display='none'}}
@@ -658,7 +715,7 @@ function delStagingRow(i){Store.staging.data.splice(i,1);renderStaging()}
 function addStagingRow(){const{type,data}=Store.staging;if(type==='activities')data.push({biditem:'',code:'NEW',description:'',quantity:0,units:'',crew:'',crewHours:0,productivityRate:0,manHours:0,calculatedDays:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,totalMaterial:0,totalEquipment:0,directTotal:0,discipline:getDiscipline(''),_selected:true});else if(type==='biditems')data.push({biditem:'NEW',description:'',type:'',clientBidNum:'',units:'',bidQuantity:0,takeoffQuantity:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,directTotal:0,indirects:0,addonBond:0,total:0,balancedTotal:0,unitPrice:0,manHours:0,markup:0,takeoffTotal:0,bidTotal:0,_selected:true});else data.push({id:data.length+1,name:'',start:null,finish:null,durationDays:0,durationStr:'',predecessors:'',status:'',atRisk:'',crew:'',variance:null,_selected:true});editStagingRow(data.length-1)}
 function editStagingRow(i){const t=Store.staging.type;editRow(t==='biditems'?'biditem':t==='activities'?'activity':'schedule',i,true)}
 function cancelStaging(){Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none'}
-function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}})}else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
+function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}})}else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);addEditLog('Imported '+sel.length+' '+type+' records');Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
   if((type==='schedule'||type==='biditems'||type==='activities')&&job.schedule.length&&job.bidItems.length){showMapping()}
 }
 
@@ -839,6 +896,7 @@ function confirmMapping(){
       return;
     }
   }
+  addEditLog('Confirmed schedule mapping ('+mapped+'/'+job.schedule.length+' tasks)');
   log(`Mapping confirmed: ${mapped} of ${job.schedule.length} tasks linked to bid items.`);
   hideMapping();
   saveJob(Store.activeJob);
@@ -1038,7 +1096,7 @@ function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?
     // Update job meta dates
     if(!isStaging){const job=Store.jobs[Store.activeJob];if(job){const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}}
   }
-  closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule();renderDashboard();renderJobCostSchedule();saveJob(Store.activeJob)}}
+  closeEditRow();if(isStaging)renderStaging();else{const desc=type==='activity'?(r.code+' '+r.description):type==='biditem'?(r.biditem+' '+r.description):(r.name||'task');addEditLog('Edited '+type+': '+desc.substring(0,40));renderBidItems();renderSchedule();renderDashboard();renderJobCostSchedule();saveJob(Store.activeJob)}}
 
 // ═══════════════════════════════════════════
 // DASHBOARD
@@ -1203,12 +1261,190 @@ function renderGlobalView(){
   });
   h+='</div></div></div>';
 
+  // ─── Company-Wide Cash Flow ───
+  h+=renderGlobalCashFlow(ids);
+
   h+='<div class="card"><div class="card-title">Job Summary</div><div class="table-wrap"><table>';
   h+='<tr><th>Job</th><th>Client</th><th>Type</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th><th class="num">Items</th><th>Schedule</th></tr>';
   ids.forEach(id=>{const j=Store.jobs[id],m=j.meta;const dc=j.bidItems.reduce((s,b)=>s+b.directTotal,0);const oh=j.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=j.bidItems.reduce((s,b)=>s+(b.markup||0),0);const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const ppC=pp<5?'negative':pp<10?'':'positive';const dt=m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—';
     h+=`<tr><td><strong>${m.name} #${m.number}</strong></td><td>${m.client||'—'}</td><td>${m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(dc)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(pr)}</td><td class="num"><strong>${fmtD(ct)}</strong></td><td class="num ${ppC}">${fmtPct(pp)}</td><td class="num">${j.bidItems.length}</td><td>${dt}</td></tr>`});
   h+='</table></div></div>';
   el.innerHTML=h;
+}
+
+function renderGlobalCashFlow(jobIds){
+  // Compute monthly cash flow for each job, then aggregate
+  const jobFlows=[];
+  let globalStart=null,globalEnd=null;
+
+  jobIds.forEach(id=>{
+    const job=Store.jobs[id];
+    if(!job.activities.length||!job.schedule.length)return;
+    const cf=getCFConfig(job);
+    const tm=job.taskMap||{};
+    const acts=job.activities;
+
+    // Activity date assignment (same logic as per-job)
+    const biDates={};
+    Object.entries(tm).forEach(([si,bi])=>{
+      const t=job.schedule[parseInt(si)];if(!t)return;
+      const s=toDate(t.start),f=toDate(t.finish);
+      if(!biDates[bi])biDates[bi]={start:null,finish:null};
+      if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+      if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+    });
+    const biActGroups={};
+    acts.forEach(a=>{const bi=String(a.biditem);if(!biActGroups[bi])biActGroups[bi]=[];biActGroups[bi].push(a)});
+    Object.entries(biActGroups).forEach(([bi,biActs])=>{
+      const dates=biDates[bi];
+      if(!dates||!dates.start||!dates.finish){biActs.forEach(a=>{a._gcfStart=null;a._gcfEnd=null});return}
+      const biStart=dates.start.getTime(),biSpan=Math.max(dates.finish.getTime()-biStart,86400000);
+      const totalDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+      let cursor=0;
+      biActs.forEach(a=>{
+        const days=a.calculatedDays||1;
+        a._gcfStart=new Date(biStart+(cursor/totalDays)*biSpan);
+        a._gcfEnd=new Date(biStart+((cursor+days)/totalDays)*biSpan);
+        cursor+=days;
+      });
+    });
+
+    const datedActs=acts.filter(a=>a._gcfStart&&a._gcfEnd);
+    if(!datedActs.length)return;
+
+    const jStart=new Date(Math.min(...datedActs.map(a=>a._gcfStart)));
+    const jEnd=new Date(Math.max(...datedActs.map(a=>a._gcfEnd)));
+    const maxLag=Math.max(cf.laborLagPeriods||1,cf.matLagPeriods||1,cf.subsLagPeriods||2,cf.ownerPayTerms||1);
+    const jEndExt=new Date(jEnd.getTime()+(maxLag+2)*30*86400000);
+
+    if(!globalStart||jStart<globalStart)globalStart=jStart;
+    if(!globalEnd||jEndExt>globalEnd)globalEnd=jEndExt;
+
+    const totalContract=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+    const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
+    const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
+
+    jobFlows.push({id,name:job.meta.name,number:job.meta.number,cf,acts:datedActs,totalContract,totalDirect,costToRevRatio,color:getBidItemDiscipline(job.bidItems[0]?.biditem||'',acts,job).color||'var(--green)'});
+  });
+
+  if(!jobFlows.length)return'';
+
+  // Build global monthly buckets
+  const months=[];
+  const ms=new Date(globalStart.getFullYear(),globalStart.getMonth(),1);
+  const me=new Date(globalEnd.getFullYear(),globalEnd.getMonth()+1,1);
+  let cur=new Date(ms);
+  while(cur<me){
+    months.push({start:new Date(cur),label:cur.toLocaleDateString('en-US',{month:'short',year:'2-digit'})});
+    cur.setMonth(cur.getMonth()+1);
+  }
+  function mIdx(d){if(!d)return -1;for(let i=months.length-1;i>=0;i--){if(d>=months[i].start)return i}return 0}
+
+  // Aggregate per-job into global buckets
+  const globalCost=months.map(()=>0);
+  const globalRev=months.map(()=>0);
+  const jobCostByMonth={}; // jobId → array of monthly costs
+
+  jobFlows.forEach(jf=>{
+    const {cf,acts,costToRevRatio}=jf;
+    const jCost=months.map(()=>0);
+    const jRev=months.map(()=>0);
+
+    function pmIdx(s,e,timing,lag){
+      const mid=new Date((s.getTime()+e.getTime())/2);
+      const mi=mIdx(mid);if(mi<0)return -1;
+      if(timing==='weekly'){const day=mid.getDay();const ws=new Date(mid);ws.setDate(ws.getDate()-(day===0?6:day-1));const pd=new Date(ws);pd.setDate(pd.getDate()+(lag||1)*7);return Math.min(mIdx(pd),months.length-1)}
+      if(timing==='biweekly'){const day=mid.getDay();const ws=new Date(mid);ws.setDate(ws.getDate()-(day===0?6:day-1));const pd=new Date(ws);pd.setDate(pd.getDate()+(lag||1)*14);return Math.min(mIdx(pd),months.length-1)}
+      if(timing==='after_billing')return Math.min(mi+1+(cf.ownerPayTerms||1)+(lag||0),months.length-1);
+      return Math.min(mi+(lag||1),months.length-1);
+    }
+
+    acts.forEach(a=>{
+      const addC=(tKey,lKey,amt)=>{if(!amt)return;const mi=pmIdx(a._gcfStart,a._gcfEnd,cf[tKey]||'monthly',cf[lKey]||1);if(mi>=0){jCost[mi]+=amt;globalCost[mi]+=amt}};
+      addC('laborTiming','laborLagPeriods',(a.labor||0)+(a.burden||0));
+      addC('eqpTiming','eqpLagPeriods',(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0));
+      addC('matTiming','matLagPeriods',(a.permMat||0)+(a.constMat||0));
+      addC('subsTiming','subsLagPeriods',a.subs||0);
+      addC('truckingTiming','truckingLagPeriods',a.trucking||0);
+    });
+
+    const retPct=(cf.retainagePct||5)/100;
+    const ownerLag=cf.ownerPayTerms||1;
+    if(cf.mobPct>0){const mobAmt=jf.totalContract*(cf.mobPct/100)*(1-retPct);const mi=Math.min(ownerLag,months.length-1);jRev[mi]+=mobAmt;globalRev[mi]+=mobAmt}
+    jCost.forEach((c,i)=>{if(c<=0)return;const rev=c*costToRevRatio*(1-retPct);const pi=Math.min(i+ownerLag,months.length-1);jRev[pi]+=rev;globalRev[pi]+=rev});
+    const totalRet=jf.totalContract*retPct;if(months.length>1){jRev[months.length-1]+=totalRet;globalRev[months.length-1]+=totalRet}
+
+    jobCostByMonth[jf.id]=jCost;
+  });
+
+  // Cumulative
+  const cumCost=[],cumRev=[],netCash=[];
+  let rC=0,rR=0;
+  months.forEach((_,i)=>{rC+=globalCost[i];rR+=globalRev[i];cumCost.push(rC);cumRev.push(rR);netCash.push(rR-rC)});
+  const maxVal=Math.max(...cumCost,...cumRev,1);
+  const totalCostOut=rC,totalRevIn=rR;
+
+  // ─── RENDER ───
+  let h='<div class="card"><div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">';
+  h+='<span>Company Cash Flow — All Jobs Combined</span>';
+  h+=`<span style="font-size:12px;font-weight:300;">Total Cost Out: ${fmtD(totalCostOut)} | Total Revenue In: ${fmtD(totalRevIn)} | Net: ${fmtD(totalRevIn-totalCostOut)}</span>`;
+  h+='</div>';
+
+  // S-Curve
+  const svgW=Math.max(months.length*50,600),svgH=220,padL=65,padR=20,padT=20,padB=30;
+  const plotW=svgW-padL-padR,plotH=svgH-padT-padB;
+  const xStep=months.length>1?plotW/(months.length-1):plotW;
+  h+=`<div style="overflow-x:auto;margin-bottom:12px;"><svg width="${svgW}" height="${svgH}" style="display:block;">`;
+  for(let g=0;g<=4;g++){const y=padT+plotH*(1-g/4);h+=`<line x1="${padL}" y1="${y}" x2="${svgW-padR}" y2="${y}" stroke="var(--border)" stroke-dasharray="3,3"/><text x="${padL-6}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="Oswald">${fmtD(maxVal*g/4)}</text>`}
+  months.forEach((m,i)=>{if(i%Math.ceil(months.length/14)===0||months.length<=14){const x=padL+i*xStep;h+=`<text x="${x}" y="${svgH-5}" text-anchor="middle" font-size="10" fill="var(--text-light)" font-family="Oswald">${m.label}</text>`}});
+  let cp='M';cumCost.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);cp+=(i?'L':'')+x+','+y});
+  h+=`<path d="${cp}" class="cf-s-curve" stroke="var(--red)"/>`;
+  let rp='M';cumRev.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);rp+=(i?'L':'')+x+','+y});
+  h+=`<path d="${rp}" class="cf-s-curve" stroke="var(--green)"/>`;
+  // Per-job cost curves (lighter, thinner)
+  const jobColors=['#E67E22','#3498DB','#9B59B6','#1ABC9C','#E74C3C','#2ECC71','#F39C12','#34495E'];
+  jobFlows.forEach((jf,ji)=>{
+    const jc=jobCostByMonth[jf.id];let cumJ=0;let jp='M';
+    jc.forEach((v,i)=>{cumJ+=v;const x=padL+i*xStep;const y=padT+plotH*(1-cumJ/maxVal);jp+=(i?'L':'')+x+','+y});
+    h+=`<path d="${jp}" fill="none" stroke="${jobColors[ji%jobColors.length]}" stroke-width="1.2" stroke-dasharray="4,3" opacity=".6"/>`;
+  });
+  h+=`<circle cx="${padL+10}" cy="${padT+8}" r="4" fill="var(--red)"/><text x="${padL+18}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Cost Out</text>`;
+  h+=`<circle cx="${padL+130}" cy="${padT+8}" r="4" fill="var(--green)"/><text x="${padL+138}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Revenue In</text>`;
+  jobFlows.forEach((jf,ji)=>{const lx=padL+260+ji*100;if(lx<svgW-60)h+=`<line x1="${lx}" y1="${padT+6}" x2="${lx+15}" y2="${padT+6}" stroke="${jobColors[ji%jobColors.length]}" stroke-width="1.2" stroke-dasharray="4,3"/><text x="${lx+19}" y="${padT+10}" font-size="9" fill="var(--text-light)" font-family="Oswald">#${jf.number}</text>`});
+  h+=`</svg></div>`;
+
+  // Stacked bar chart — monthly cost out by job
+  const maxMoCost=Math.max(...globalCost,1);
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;">Monthly Cost Out by Job</div>';
+  h+='<div style="overflow-x:auto;"><div style="display:flex;gap:2px;align-items:flex-end;height:100px;min-width:'+Math.max(months.length*30,300)+'px;">';
+  months.forEach((_,i)=>{
+    if(globalCost[i]===0)return;
+    const barH=Math.max(globalCost[i]/maxMoCost*90,2);
+    h+=`<div style="flex:1;min-width:20px;display:flex;flex-direction:column;justify-content:flex-end;height:100px;" title="${months[i].label}: ${fmtD(globalCost[i])}">`;
+    // Stacked segments per job
+    jobFlows.forEach((jf,ji)=>{
+      const jc=jobCostByMonth[jf.id][i]||0;
+      if(jc<=0)return;
+      const segH=Math.max(jc/maxMoCost*90,1);
+      h+=`<div style="height:${segH}px;background:${jobColors[ji%jobColors.length]};opacity:.85;" title="${jf.name} #${jf.number}: ${fmtD(jc)}"></div>`;
+    });
+    h+=`<div style="font-size:8px;text-align:center;color:var(--text-light);font-family:Oswald;margin-top:2px;">${months[i].label}</div>`;
+    h+='</div>';
+  });
+  h+='</div></div>';
+
+  // Net cash position
+  const peakNeg=Math.min(...netCash);
+  const peakNegMo=netCash.indexOf(peakNeg);
+  if(peakNeg<0){
+    h+=`<div style="margin-top:12px;padding:12px 16px;background:#FFF0F0;border:1px solid var(--red);border-radius:6px;font-size:13px;">`;
+    h+=`<strong style="color:var(--red);">Peak Company Cash Exposure:</strong> ${fmtD(peakNeg)} in ${months[peakNegMo]?.label||'—'}. `;
+    h+=`Total working capital needed across all jobs before owner payments catch up.`;
+    h+=`</div>`;
+  }
+
+  h+='</div>';
+  return h;
 }
 
 // ═══════════════════════════════════════════
@@ -1536,7 +1772,7 @@ function renderSOVBuilder(){
         contractQty:bi.bidQuantity||0,
         unit:bi.units||'LS',
         unitPrice:bi.unitPrice||0,
-        retainagePct:10,
+        retainagePct:5,
         pctCompleteMethod:'cost',
         activityIds:job.activities.filter(a=>String(a.biditem)===String(bi.biditem)).map(a=>a.code),
         ohPct:ohPct,
@@ -1631,8 +1867,9 @@ function renderSOVBuilder(){
   const totalCostPlusUnassigned=totalFullCost+unassignedCost;
   const coveragePct=totalCostPlusUnassigned>0?Math.round(totalScheduledValue/totalCostPlusUnassigned*100):0;
   const coverageGap=totalScheduledValue-totalCostPlusUnassigned;
-  const coverageColor=coverageGap<0?'var(--red)':coverageGap===0?'var(--green)':'var(--green)';
-  h+=`<div style="background:var(--card);border:1px solid ${coverageGap<0?'var(--red)':'var(--border)'};border-radius:8px;padding:12px 16px;margin-bottom:12px;">`;
+  const gapNeg=coverageGap<-1;
+  const coverageColor=gapNeg?'var(--red)':'var(--green)';
+  h+=`<div style="background:var(--card);border:1px solid ${gapNeg?'var(--red)':'var(--border)'};border-radius:8px;padding:12px 16px;margin-bottom:12px;">`;
   h+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">`;
   h+=`<div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;">`;
   h+=`<span>${sovItems.length} Pay Items</span>`;
@@ -1643,12 +1880,12 @@ function renderSOVBuilder(){
   h+=`</div>`;
   h+=`<div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;">`;
   h+=`<span style="color:${coverageColor};font-weight:600;">Scheduled Value: ${fmtD(totalScheduledValue)}</span>`;
-  h+=` <span style="color:${coverageGap<0?'var(--red)':'var(--green)'};font-size:12px;">(${coverageGap>=0?'+':''}${fmtD(coverageGap)} ${coveragePct}% coverage)</span>`;
+  h+=` <span style="color:${gapNeg?'var(--red)':'var(--green)'};font-size:12px;">(${coverageGap>=0?'+':''}${fmtD(coverageGap)} ${coveragePct}% coverage)</span>`;
   h+=`</div></div>`;
   // Progress bar
   const barPct=Math.min(coveragePct,120);
   h+=`<div style="margin-top:8px;height:8px;background:var(--ash);border-radius:4px;overflow:hidden;position:relative;">`;
-  h+=`<div style="height:100%;width:${Math.min(barPct,100)}%;background:${coverageGap<0?'var(--red)':'var(--green)'};border-radius:4px;transition:width .3s;"></div>`;
+  h+=`<div style="height:100%;width:${Math.min(barPct,100)}%;background:${gapNeg?'var(--red)':'var(--green)'};border-radius:4px;transition:width .3s;"></div>`;
   h+=`<div style="position:absolute;left:${Math.min(100*(totalCostPlusUnassigned>0?totalFullCost/totalCostPlusUnassigned*100:100)/barPct*100/100,100)}%;top:0;bottom:0;width:2px;background:var(--midnight);opacity:.5;" title="Assigned cost line"></div>`;
   h+=`</div>`;
   h+=`</div>`;
@@ -1659,7 +1896,7 @@ function renderSOVBuilder(){
     const isOpen=_sovExpandedBIs[idx];
     // Flag: scheduled value vs full cost mismatch
     const itemGap=c.sv-c.total;
-    const itemFlag=c.dc>0&&c.sv<c.total;
+    const itemFlag=c.dc>0&&c.sv<c.total-1;
     const noActsFlag=c.acts.length===0;
 
     h+=`<div class="sov-bi-card" ${itemFlag?'style="border-color:var(--red);"':''}>`;
@@ -1794,7 +2031,7 @@ function addNewSOVItem(){
     contractQty:1,
     unit:'LS',
     unitPrice:0,
-    retainagePct:10,
+    retainagePct:5,
     pctCompleteMethod:'cost',
     activityIds:[],
     ohPct:avgOH,
@@ -1984,6 +2221,7 @@ async function saveSOVItems(){
   });
 
   await saveJob(Store.activeJob);
+  addEditLog('Saved SOV / Pay Items ('+job.sovItems.length+' items)');
   log('SOV / Pay Items saved — '+job.sovItems.length+' items, bid items updated.');
   updateImportZones();
   renderSOVBuilder();
@@ -2002,7 +2240,7 @@ const CF_DEFAULTS={
   billingFreq:'monthly',
   mobPct:0,
   ownerPayTerms:1,  // 1 month after billing
-  retainagePct:10
+  retainagePct:5
 };
 
 function getCFConfig(job){
@@ -2090,6 +2328,7 @@ function updateCFConfig(key,val){
 async function saveCFConfig(){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   await saveJob(Store.activeJob);
+  addEditLog('Updated cash flow configuration');
   log('Cash flow configuration saved.');
 }
 
