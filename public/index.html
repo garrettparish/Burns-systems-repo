@@ -386,7 +386,19 @@ function getTaskDiscipline(taskName){
 }
 
 // Derive discipline for a bid item from its child activities
-function getBidItemDiscipline(bidItemId, activities){
+function getBidItemDiscipline(bidItemId, activities, job){
+  // Check for manual override on the bid item
+  if(job){
+    const bi=job.bidItems.find(b=>String(b.biditem)===String(bidItemId));
+    if(bi&&bi._disciplineOverride){
+      // Check custom disciplines first, then built-in
+      const custom=(job.customDisciplines||[]).find(d=>d.name===bi._disciplineOverride);
+      if(custom)return custom;
+      const builtin=Object.values(DISCIPLINES).find(d=>d.name===bi._disciplineOverride);
+      if(builtin)return builtin;
+      return {name:bi._disciplineOverride,color:'#95A5A6'};
+    }
+  }
   const children = activities.filter(a=>String(a.biditem)===String(bidItemId));
   if(!children.length) return {name:'Other',color:'#95A5A6'};
   const map={};
@@ -395,6 +407,16 @@ function getBidItemDiscipline(bidItemId, activities){
   Object.entries(map).forEach(([k,v])=>{if(v>bestV){bestV=v;best=k}});
   const disc=Object.values(DISCIPLINES).find(d=>d.name===best);
   return disc||{name:best||'Other',color:'#95A5A6'};
+}
+
+// Get all available discipline names (built-in + custom)
+function getAllDisciplines(job){
+  const builtIn=Object.values(DISCIPLINES).map(d=>d.name);
+  const unique=[...new Set(builtIn)];
+  if(job&&job.customDisciplines){
+    job.customDisciplines.forEach(d=>{if(!unique.includes(d.name))unique.push(d.name)});
+  }
+  return unique.sort();
 }
 
 // ═══════════════════════════════════════════
@@ -785,7 +807,7 @@ function renderMapping(){
   const total=job.schedule.length;
   const pct=total>0?Math.round(mapped/total*100):0;
 
-  const biWithDisc=job.bidItems.map(b=>({...b,disc:getBidItemDiscipline(b.biditem,job.activities)}));
+  const biWithDisc=job.bidItems.map(b=>({...b,disc:getBidItemDiscipline(b.biditem,job.activities,job)}));
   const discGroups={};
   biWithDisc.forEach(b=>{const k=b.disc.name;if(!discGroups[k])discGroups[k]=[];discGroups[k].push(b)});
   const discOrder=['General','Erosion','Demo','Earthwork','Storm','Sanitary','Water','Paving','Concrete','Other'];
@@ -878,17 +900,76 @@ function editRow(type,index,isStaging){
   const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);
   const r=src[index];if(!r)return;let fields;
   if(type==='activity'){fields=[{k:'code',l:'Activity Code',t:'text'},{k:'biditem',l:'Bid Item',t:'text'},{k:'description',l:'Description',t:'text',full:1},{k:'quantity',l:'Quantity',t:'number'},{k:'units',l:'Units',t:'text'},{k:'crew',l:'Crew',t:'text'},{k:'crewHours',l:'Crew Hrs',t:'number'},{k:'productivityRate',l:'Prod Rate',t:'number'},{k:'manHours',l:'Man Hours',t:'number'},{k:'calculatedDays',l:'Days',t:'number'},{k:'labor',l:'Labor ($)',t:'number'},{k:'burden',l:'Burden ($)',t:'number'},{k:'permMat',l:'Perm Mat ($)',t:'number'},{k:'constMat',l:'Const Mat ($)',t:'number'},{k:'subs',l:'Subs ($)',t:'number'},{k:'eqpOper',l:'Eqp Oper ($)',t:'number'},{k:'compEqp',l:'Co Eqp ($)',t:'number'},{k:'outsideEqp',l:'Outside Eqp ($)',t:'number'},{k:'directTotal',l:'Direct Total ($)',t:'number'}];document.getElementById('editRowTitle').textContent='Edit Activity: '+r.code}
-  else if(type==='biditem'){fields=[{k:'biditem',l:'Bid Item #',t:'text'},{k:'description',l:'Description',t:'text',full:1},{k:'units',l:'Units',t:'text'},{k:'bidQuantity',l:'Bid Qty',t:'number'},{k:'unitPrice',l:'Unit Price ($)',t:'number'},{k:'labor',l:'Labor ($)',t:'number'},{k:'permMat',l:'Perm Mat ($)',t:'number'},{k:'constMat',l:'Const Mat ($)',t:'number'},{k:'subs',l:'Subs ($)',t:'number'},{k:'directTotal',l:'Direct Total ($)',t:'number'},{k:'indirects',l:'Indirects ($)',t:'number'},{k:'addonBond',l:'Addon/Bond ($)',t:'number'},{k:'markup',l:'Profit / Markup ($)',t:'number'},{k:'takeoffTotal',l:'Contract / Takeoff Total ($)',t:'number'}];document.getElementById('editRowTitle').textContent='Edit Bid Item: '+r.biditem}
+  else if(type==='biditem'){
+    fields=[{k:'biditem',l:'Bid Item #',t:'text'},{k:'description',l:'Description',t:'text',full:1},{k:'units',l:'Units',t:'text'},{k:'bidQuantity',l:'Bid Qty',t:'number'},{k:'unitPrice',l:'Unit Price ($)',t:'number'},{k:'labor',l:'Labor ($)',t:'number'},{k:'permMat',l:'Perm Mat ($)',t:'number'},{k:'constMat',l:'Const Mat ($)',t:'number'},{k:'subs',l:'Subs ($)',t:'number'},{k:'directTotal',l:'Direct Total ($)',t:'number'},{k:'indirects',l:'Indirects ($)',t:'number'},{k:'addonBond',l:'Addon/Bond ($)',t:'number'},{k:'markup',l:'Profit / Markup ($)',t:'number'},{k:'takeoffTotal',l:'Contract / Takeoff Total ($)',t:'number'}];
+    // Add discipline selector after building fields HTML
+    const job=Store.jobs[Store.activeJob];
+    const allDiscs=getAllDisciplines(job);
+    const currentDisc=r._disciplineOverride||getBidItemDiscipline(r.biditem,job.activities,job).name;
+    r._editDisc=currentDisc;
+    document.getElementById('editRowTitle').textContent='Edit Bid Item: '+r.biditem;
+  }
   else{
     // Format dates for date input (YYYY-MM-DD)
     const fmtISO=d=>{const dt=toDate(d);if(!dt)return'';return dt.toISOString().split('T')[0]};
     r._startISO=fmtISO(r.start);r._finishISO=fmtISO(r.finish);
     fields=[{k:'name',l:'Task Name',t:'text',full:1},{k:'_startISO',l:'Start Date',t:'date'},{k:'_finishISO',l:'Finish Date',t:'date'},{k:'durationStr',l:'Duration',t:'text'},{k:'predecessors',l:'Predecessors',t:'text'},{k:'status',l:'Status',t:'text'},{k:'atRisk',l:'At Risk',t:'text'},{k:'crew',l:'Crew',t:'text'}];document.getElementById('editRowTitle').textContent='Edit Task: '+r.name}
-  let h='<div class="edit-grid">';fields.forEach(f=>{const v=r[f.k]!=null?r[f.k]:'';h+=`<div class="${f.full?'full':''}"><label>${f.l}</label><input type="${f.t}" data-key="${f.k}" value="${v}" ${f.t==='number'?'step="any"':''}></div>`});h+='</div>';
-  document.getElementById('editRowFields').innerHTML=h;document.getElementById('editRowModal').classList.add('show');
+  let h='<div class="edit-grid">';
+  // For bid items, add discipline selector at the top
+  if(type==='biditem'){
+    const job=Store.jobs[Store.activeJob];
+    const allDiscs=getAllDisciplines(job);
+    const currentDisc=r._editDisc||'';
+    h+='<div class="full"><label>Discipline</label><div style="display:flex;gap:8px;align-items:center;">';
+    h+=`<select id="editDiscSelect" data-key="_editDisc" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:14px;">`;
+    h+=`<option value="">— Auto (from activities) —</option>`;
+    allDiscs.forEach(d=>{h+=`<option value="${d}" ${currentDisc===d?'selected':''}>${d}</option>`});
+    h+=`<option value="__new__">+ New Discipline...</option>`;
+    h+='</select>';
+    h+='<div id="newDiscFields" style="display:none;flex:1;display:none;gap:6px;align-items:center;">';
+    h+='<input type="text" id="newDiscName" placeholder="Name" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;">';
+    h+='<input type="color" id="newDiscColor" value="#F26722" style="width:40px;height:36px;border:none;cursor:pointer;border-radius:4px;">';
+    h+='</div></div></div>';
+  }
+  fields.forEach(f=>{const v=r[f.k]!=null?r[f.k]:'';h+=`<div class="${f.full?'full':''}"><label>${f.l}</label><input type="${f.t}" data-key="${f.k}" value="${v}" ${f.t==='number'?'step="any"':''}></div>`});
+  h+='</div>';
+  document.getElementById('editRowFields').innerHTML=h;
+  // Wire up discipline select change handler
+  if(type==='biditem'){
+    const sel=document.getElementById('editDiscSelect');
+    const newFields=document.getElementById('newDiscFields');
+    if(sel)sel.onchange=()=>{
+      if(sel.value==='__new__'){newFields.style.display='flex'}
+      else{newFields.style.display='none'}
+    };
+  }
+  document.getElementById('editRowModal').classList.add('show');
 }
 function closeEditRow(){document.getElementById('editRowModal').classList.remove('show')}
-function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);const r=src[index];if(!r)return;document.querySelectorAll('#editRowFields input').forEach(inp=>{r[inp.dataset.key]=inp.type==='number'?(parseFloat(inp.value)||0):inp.value});
+function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);const r=src[index];if(!r)return;document.querySelectorAll('#editRowFields input').forEach(inp=>{if(inp.id==='newDiscName'||inp.id==='newDiscColor')return;r[inp.dataset.key]=inp.type==='number'?(parseFloat(inp.value)||0):inp.value});
+  // Handle discipline override for bid items
+  if(type==='biditem'){
+    const sel=document.getElementById('editDiscSelect');
+    const job=Store.jobs[Store.activeJob];
+    if(sel){
+      if(sel.value==='__new__'){
+        const newName=(document.getElementById('newDiscName').value||'').trim();
+        const newColor=document.getElementById('newDiscColor').value||'#95A5A6';
+        if(newName){
+          if(!job.customDisciplines)job.customDisciplines=[];
+          if(!job.customDisciplines.find(d=>d.name===newName)){
+            job.customDisciplines.push({name:newName,color:newColor});
+          }
+          r._disciplineOverride=newName;
+        }
+      }else if(sel.value===''){
+        delete r._disciplineOverride;// revert to auto
+      }else{
+        r._disciplineOverride=sel.value;
+      }
+    }
+    delete r._editDisc;
+  }
   if(type==='activity'){r.totalMaterial=(r.permMat||0)+(r.constMat||0);r.totalEquipment=(r.eqpOper||0)+(r.compEqp||0)+(r.outsideEqp||0);r.discipline=getDiscipline(r.code)}
   // Schedule: recalculate dates and duration from edited values
   if(type==='schedule'){
@@ -922,7 +1003,7 @@ function renderDashboard(){
   if(!bids.length){el.innerHTML='<div class="empty-state"><h2>No Data Yet</h2><p>Import bid items from the Import tab.</p></div>';return}
 
   const bidSummaries=bids.map(b=>{
-    const disc=getBidItemDiscipline(b.biditem,acts);
+    const disc=getBidItemDiscipline(b.biditem,acts,job);
     return{...b,discipline:disc};
   });
 
@@ -1053,7 +1134,7 @@ function renderGlobalView(){
       const origIdx=j.schedule.indexOf(t);
       let disc;
       if(hasMappings&&tm[origIdx]){
-        disc=getBidItemDiscipline(tm[origIdx],j.activities);
+        disc=getBidItemDiscipline(tm[origIdx],j.activities,j);
       }else{
         disc=getTaskDiscipline(t.name);
       }
@@ -1064,7 +1145,7 @@ function renderGlobalView(){
       dg[k].tasks.push(t);
     });
     j.bidItems.forEach(b=>{
-      const d=getBidItemDiscipline(b.biditem,j.activities);
+      const d=getBidItemDiscipline(b.biditem,j.activities,j);
       if(dg[d.name])dg[d.name].cost+=(b.takeoffTotal||0);
     });
     const bars=Object.values(dg).sort((a,b)=>a.start-b.start);
@@ -1095,7 +1176,7 @@ function renderBidItems(){
   if(!job.bidItems.length){el.innerHTML='<div class="empty-state"><h2>No Bid Items</h2><p>Import from the Import tab.</p></div>';fEl.innerHTML='';return}
 
   const items=job.bidItems.map((b,i)=>{
-    const disc=getBidItemDiscipline(b.biditem,job.activities);
+    const disc=getBidItemDiscipline(b.biditem,job.activities,job);
     const children=job.activities.filter(a=>String(a.biditem)===String(b.biditem));
     return{...b,discipline:disc,activityCount:children.length,actCost:children.reduce((s,a)=>s+a.directTotal,0),idx:i};
   });
