@@ -605,7 +605,7 @@ function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)retur
   const cfArea=document.getElementById('cashflowConfigArea');
   if(cfArea){if(job.activities.length&&job.schedule.length){cfArea.style.display='block';renderCashFlowConfig()}else{cfArea.style.display='none'}}
   updateNavBadges()}
-function updateNavBadges(){document.querySelectorAll('.sub-tab .badge').forEach(b=>b.remove());if(!Store.activeJob)return;const j=Store.jobs[Store.activeJob];const c={biditems:(j.sovItems||[]).length||j.bidItems.length,schedule:j.schedule.length,jcs:j.activities.length};document.querySelectorAll('.sub-tab').forEach(t=>{if(c[t.dataset.sub]){const b=document.createElement('span');b.className='badge';b.textContent=c[t.dataset.sub];t.appendChild(b)}})}
+function updateNavBadges(){/* badges removed from sub-tabs for cleaner look */}
 function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${msg}</div>`;el.scrollTop=el.scrollHeight}
 
 // ═══════════════════════════════════════════
