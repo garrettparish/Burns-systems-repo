@@ -241,7 +241,7 @@ const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]} }
 // ═══════════════════════════════════════════
 const SUPABASE_URL = 'https://sxzvlazmkxnbsoayhuln.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4enZsYXpta3huYnNvYXlodWxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMjIxNjIsImV4cCI6MjA5MDc5ODE2Mn0.0RhuM1CkdqZi56zWDANcdM6Zfe2Hge_1yXUyvS-9yhg';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // Save a single job to Supabase
 async function saveJob(jobId){
@@ -252,14 +252,14 @@ async function saveJob(jobId){
     if(val instanceof Date) return { __date: val.toISOString() };
     return val;
   }));
-  const { error } = await supabase.from('jobs').upsert({ id: jobId, data: serialized });
+  const { error } = await sb.from('jobs').upsert({ id: jobId, data: serialized });
   if(error){ console.error('Save error:', error); log('⚠ Save failed: ' + error.message); }
   else { console.log('Saved job', jobId); }
 }
 
 // Load all jobs from Supabase on startup
 async function loadJobs(){
-  const { data, error } = await supabase.from('jobs').select('*');
+  const { data, error } = await sb.from('jobs').select('*');
   if(error){ console.error('Load error:', error); return; }
   if(!data || !data.length){ console.log('No saved jobs found'); return; }
   // Deserialize dates
@@ -286,7 +286,7 @@ async function loadJobs(){
 
 // Delete a job from Supabase
 async function deleteJob(jobId){
-  const { error } = await supabase.from('jobs').delete().eq('id', jobId);
+  const { error } = await sb.from('jobs').delete().eq('id', jobId);
   if(error) console.error('Delete error:', error);
 }
 
