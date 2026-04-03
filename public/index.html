@@ -254,6 +254,12 @@ tr:hover{background:#FAF8F5}
         <div class="status pending" id="status-activities">Drop .xlsx or click</div>
         <input type="file" id="file-activities" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'activities')">
       </div>
+      <div class="import-zone" id="zone-biditems" onclick="document.getElementById('file-biditems').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'biditems')">
+        <h3>HeavyBid Bid Items</h3>
+        <p>Bid items with OH, profit &amp; contract totals</p>
+        <div class="status pending" id="status-biditems">Drop .xlsx or click</div>
+        <input type="file" id="file-biditems" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'biditems')">
+      </div>
       <div class="import-zone" id="zone-schedule" onclick="document.getElementById('file-schedule').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'schedule')">
         <h3>Smartsheet Schedule</h3>
         <p>Tasks, dates, durations, crews</p>
@@ -264,20 +270,6 @@ tr:hover{background:#FAF8F5}
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule &rarr; Pay Items</button>
       <button class="btn-primary" id="sovBtn" style="display:none;background:var(--orange);" onclick="toggleSOVBuilder()">Build SOV / Pay Items</button>
-    </div>
-    <div id="markupArea" style="display:none;">
-      <div class="card" style="margin-top:12px;">
-        <div class="card-title">Contract Markup</div>
-        <p style="font-size:12px;color:var(--text-light);margin-bottom:10px;">Applied to all pay items on top of direct cost. Adjust per-item in the SOV builder if needed.</p>
-        <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;">
-          <div><label style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-light);font-family:Oswald;">Overhead %</label><br>
-            <input type="number" id="jobOHPct" min="0" max="100" step="0.5" value="0" style="width:90px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:14px;font-family:Oswald;"></div>
-          <div><label style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-light);font-family:Oswald;">Profit %</label><br>
-            <input type="number" id="jobProfitPct" min="0" max="100" step="0.5" value="0" style="width:90px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:14px;font-family:Oswald;"></div>
-          <button class="btn-primary" style="background:var(--green);padding:6px 16px;" onclick="applyJobMarkup()">Apply to All Pay Items</button>
-          <span id="markupStatus" style="font-size:12px;color:var(--green);display:none;">Applied!</span>
-        </div>
-      </div>
     </div>
     <div id="stagingArea" style="display:none;"></div>
     <div id="mappingArea" style="display:none;"></div>
@@ -610,49 +602,16 @@ function switchJob(){
 }
 function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
 function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog()}
-function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','schedule'].forEach(type=>{const data=job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';st.className='status loaded';st.textContent=data.length+' records loaded'+extra}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
+function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';if(type==='biditems'){st.className='status loaded';st.textContent=data.length+' bid items loaded (OH+P included)'}else{st.className='status loaded';st.textContent=data.length+' records loaded'+extra}}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if((job.bidItems.length||job.sovItems?.length)&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Pay Items'}else{mapBtn.style.display='none'}}
   const sovBtn=document.getElementById('sovBtn');
   if(sovBtn){if(job.activities.length){sovBtn.style.display='inline-block';const sovCount=job.sovItems?job.sovItems.length:0;sovBtn.textContent=sovCount?`SOV / Pay Items (${sovCount})`:'Build SOV / Pay Items'}else{sovBtn.style.display='none'}}
-  // Markup area — show when pay items exist
-  const mkArea=document.getElementById('markupArea');
-  if(mkArea){if(job.bidItems.length||job.sovItems?.length){mkArea.style.display='block';
-    const ohEl=document.getElementById('jobOHPct'),prEl=document.getElementById('jobProfitPct');
-    if(ohEl&&job.meta.ohPct!==undefined)ohEl.value=(job.meta.ohPct*100).toFixed(1);
-    if(prEl&&job.meta.profitPct!==undefined)prEl.value=(job.meta.profitPct*100).toFixed(1);
-  }else{mkArea.style.display='none'}}
   // Cash flow config — show when activities + schedule exist
   const cfArea=document.getElementById('cashflowConfigArea');
   if(cfArea){if(job.activities.length&&job.schedule.length){cfArea.style.display='block';renderCashFlowConfig()}else{cfArea.style.display='none'}}
   updateNavBadges()}
 function updateNavBadges(){/* badges removed from sub-tabs for cleaner look */}
-function applyJobMarkup(){
-  const job=Store.jobs[Store.activeJob];if(!job)return;
-  const ohPct=parseFloat(document.getElementById('jobOHPct').value)||0;
-  const profitPct=parseFloat(document.getElementById('jobProfitPct').value)||0;
-  const ohDec=ohPct/100, prDec=profitPct/100;
-  // Save to job meta
-  job.meta.ohPct=ohDec;job.meta.profitPct=prDec;
-  // Apply to all SOV items
-  if(job.sovItems){job.sovItems.forEach(si=>{si.ohPct=ohDec;si.profitPct=prDec})}
-  // Apply to bid items so overview picks it up
-  job.bidItems.forEach(bi=>{
-    bi.indirects=bi.directTotal*ohDec;
-    bi.markup=bi.directTotal*prDec;
-    bi.takeoffTotal=bi.directTotal+bi.indirects+bi.markup;
-    bi.bidTotal=bi.takeoffTotal;
-    bi.unitPrice=bi.bidQuantity?bi.takeoffTotal/bi.bidQuantity:bi.takeoffTotal;
-  });
-  // Flash confirmation
-  const st=document.getElementById('markupStatus');
-  st.style.display='inline';st.textContent=`Applied ${ohPct}% OH + ${profitPct}% Profit to ${job.bidItems.length} pay items`;
-  setTimeout(()=>{st.style.display='none'},3000);
-  log(`Markup applied: ${ohPct}% overhead + ${profitPct}% profit across ${job.bidItems.length} pay items`);
-  addEditLog(`Set markup: ${ohPct}% OH + ${profitPct}% profit`);
-  saveJob(Store.activeJob);
-  renderActiveSubTab();
-}
 function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${msg}</div>`;el.scrollTop=el.scrollHeight}
 
 // ═══════════════════════════════════════════
@@ -828,7 +787,35 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
       log('Phase codes detected — auto-built '+job.bidItems.length+' pay items and SOV from activities.');
       addEditLog('Auto-built '+job.bidItems.length+' pay items from phase codes');
     }
-  }else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);addEditLog('Imported '+sel.length+' '+type+' records');Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
+  }else if(type==='biditems'){
+    // If pay items were already auto-built from activities, merge OH/Profit from bid items
+    if(job.bidItems.length&&job.activities.length){
+      const biMap={};sel.forEach(bi=>{biMap[bi.biditem]=bi});
+      job.bidItems.forEach(existing=>{
+        const imported=biMap[existing.biditem];
+        if(imported){
+          existing.indirects=imported.indirects||0;
+          existing.addonBond=imported.addonBond||0;
+          existing.markup=imported.markup||0;
+          existing.takeoffTotal=existing.directTotal+(existing.indirects||0)+(existing.addonBond||0)+(existing.markup||0);
+          existing.bidTotal=imported.bidTotal||existing.takeoffTotal;
+          existing.unitPrice=existing.bidQuantity?existing.takeoffTotal/existing.bidQuantity:existing.takeoffTotal;
+        }
+      });
+      // Also update SOV items with ohPct/profitPct from bid item data
+      if(job.sovItems){job.sovItems.forEach(si=>{
+        const imported=biMap[si.id];
+        if(imported){
+          const dc=si.activityIds?job.activities.filter(a=>si.activityIds.includes(a.code)).reduce((s,a)=>s+(a.directTotal||0),0):0;
+          si.ohPct=dc>0?((imported.indirects||0)+(imported.addonBond||0))/dc:0;
+          si.profitPct=dc>0?(imported.markup||0)/dc:0;
+        }
+      })}
+      log('Merged OH & profit from '+sel.length+' bid items onto existing pay items.');
+    }else{
+      job.bidItems=sel;
+    }
+  }else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);addEditLog('Imported '+sel.length+' '+type+' records');Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
   if((type==='schedule'||type==='activities')&&job.schedule.length&&(job.bidItems.length||(job.sovItems||[]).length)){showMapping()}
 }
 
