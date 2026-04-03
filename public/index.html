@@ -673,12 +673,38 @@ function editRow(type,index,isStaging){
   const r=src[index];if(!r)return;let fields;
   if(type==='activity'){fields=[{k:'code',l:'Activity Code',t:'text'},{k:'biditem',l:'Bid Item',t:'text'},{k:'description',l:'Description',t:'text',full:1},{k:'quantity',l:'Quantity',t:'number'},{k:'units',l:'Units',t:'text'},{k:'crew',l:'Crew',t:'text'},{k:'crewHours',l:'Crew Hrs',t:'number'},{k:'productivityRate',l:'Prod Rate',t:'number'},{k:'manHours',l:'Man Hours',t:'number'},{k:'calculatedDays',l:'Days',t:'number'},{k:'labor',l:'Labor ($)',t:'number'},{k:'burden',l:'Burden ($)',t:'number'},{k:'permMat',l:'Perm Mat ($)',t:'number'},{k:'constMat',l:'Const Mat ($)',t:'number'},{k:'subs',l:'Subs ($)',t:'number'},{k:'eqpOper',l:'Eqp Oper ($)',t:'number'},{k:'compEqp',l:'Co Eqp ($)',t:'number'},{k:'outsideEqp',l:'Outside Eqp ($)',t:'number'},{k:'directTotal',l:'Direct Total ($)',t:'number'}];document.getElementById('editRowTitle').textContent='Edit Activity: '+r.code}
   else if(type==='biditem'){fields=[{k:'biditem',l:'Bid Item #',t:'text'},{k:'description',l:'Description',t:'text',full:1},{k:'units',l:'Units',t:'text'},{k:'bidQuantity',l:'Bid Qty',t:'number'},{k:'unitPrice',l:'Unit Price ($)',t:'number'},{k:'labor',l:'Labor ($)',t:'number'},{k:'permMat',l:'Perm Mat ($)',t:'number'},{k:'constMat',l:'Const Mat ($)',t:'number'},{k:'subs',l:'Subs ($)',t:'number'},{k:'directTotal',l:'Direct Total ($)',t:'number'},{k:'indirects',l:'Indirects ($)',t:'number'},{k:'addonBond',l:'Addon/Bond ($)',t:'number'},{k:'markup',l:'Profit / Markup ($)',t:'number'},{k:'takeoffTotal',l:'Contract / Takeoff Total ($)',t:'number'}];document.getElementById('editRowTitle').textContent='Edit Bid Item: '+r.biditem}
-  else{fields=[{k:'name',l:'Task Name',t:'text',full:1},{k:'durationStr',l:'Duration',t:'text'},{k:'predecessors',l:'Predecessors',t:'text'},{k:'status',l:'Status',t:'text'},{k:'atRisk',l:'At Risk',t:'text'},{k:'crew',l:'Crew',t:'text'}];document.getElementById('editRowTitle').textContent='Edit Task: '+r.name}
+  else{
+    // Format dates for date input (YYYY-MM-DD)
+    const fmtISO=d=>{const dt=toDate(d);if(!dt)return'';return dt.toISOString().split('T')[0]};
+    r._startISO=fmtISO(r.start);r._finishISO=fmtISO(r.finish);
+    fields=[{k:'name',l:'Task Name',t:'text',full:1},{k:'_startISO',l:'Start Date',t:'date'},{k:'_finishISO',l:'Finish Date',t:'date'},{k:'durationStr',l:'Duration',t:'text'},{k:'predecessors',l:'Predecessors',t:'text'},{k:'status',l:'Status',t:'text'},{k:'atRisk',l:'At Risk',t:'text'},{k:'crew',l:'Crew',t:'text'}];document.getElementById('editRowTitle').textContent='Edit Task: '+r.name}
   let h='<div class="edit-grid">';fields.forEach(f=>{const v=r[f.k]!=null?r[f.k]:'';h+=`<div class="${f.full?'full':''}"><label>${f.l}</label><input type="${f.t}" data-key="${f.k}" value="${v}" ${f.t==='number'?'step="any"':''}></div>`});h+='</div>';
   document.getElementById('editRowFields').innerHTML=h;document.getElementById('editRowModal').classList.add('show');
 }
 function closeEditRow(){document.getElementById('editRowModal').classList.remove('show')}
-function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);const r=src[index];if(!r)return;document.querySelectorAll('#editRowFields input').forEach(inp=>{r[inp.dataset.key]=inp.type==='number'?(parseFloat(inp.value)||0):inp.value});if(type==='activity'){r.totalMaterial=(r.permMat||0)+(r.constMat||0);r.totalEquipment=(r.eqpOper||0)+(r.compEqp||0)+(r.outsideEqp||0);r.discipline=getDiscipline(r.code)}closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule();saveJob(Store.activeJob)}}
+function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?Store.staging.data:(type==='activity'?Store.jobs[Store.activeJob].activities:type==='biditem'?Store.jobs[Store.activeJob].bidItems:Store.jobs[Store.activeJob].schedule);const r=src[index];if(!r)return;document.querySelectorAll('#editRowFields input').forEach(inp=>{r[inp.dataset.key]=inp.type==='number'?(parseFloat(inp.value)||0):inp.value});
+  if(type==='activity'){r.totalMaterial=(r.permMat||0)+(r.constMat||0);r.totalEquipment=(r.eqpOper||0)+(r.compEqp||0)+(r.outsideEqp||0);r.discipline=getDiscipline(r.code)}
+  // Schedule: recalculate dates and duration from edited values
+  if(type==='schedule'){
+    const newStart=r._startISO?new Date(r._startISO+'T00:00:00'):toDate(r.start);
+    const newFinish=r._finishISO?new Date(r._finishISO+'T00:00:00'):toDate(r.finish);
+    if(newStart&&!isNaN(newStart))r.start=newStart;
+    if(newFinish&&!isNaN(newFinish))r.finish=newFinish;
+    // Parse durationStr (e.g. "5d","10d") and recalculate finish if duration changed
+    const durMatch=(r.durationStr||'').match(/^(\d+)\s*d/i);
+    if(durMatch){
+      const days=parseInt(durMatch[1]);
+      r.durationDays=days;
+      // If start exists, recalculate finish from start + duration
+      if(r.start){const s=toDate(r.start);if(s){r.finish=new Date(s.getTime()+days*86400000)}}
+    }else if(r.start&&r.finish){
+      r.durationDays=Math.max(Math.ceil((toDate(r.finish)-toDate(r.start))/86400000),1);
+    }
+    delete r._startISO;delete r._finishISO;
+    // Update job meta dates
+    if(!isStaging){const job=Store.jobs[Store.activeJob];if(job){const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}}
+  }
+  closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule();renderDashboard();saveJob(Store.activeJob)}}
 
 // ═══════════════════════════════════════════
 // DASHBOARD
@@ -708,8 +734,9 @@ function renderDashboard(){
   const totalEqp=costSrc.reduce((s,b)=>s+(b.totalEquipment||(b.eqpOper||0)+(b.compEqp||0)+(b.outsideEqp||0)),0);
   const totalSubs=costSrc.reduce((s,b)=>s+(b.subs||0),0);
   // "Other Direct" captures costs under unrecognized column names (directTotal minus known categories)
+  const costSrcDirect=costSrc.reduce((s,b)=>s+(b.directTotal||0),0);
   const knownDirect=totalLabor+totalBurden+totalMat+totalEqp+totalSubs;
-  const totalOther=Math.max(0,totalDirect-knownDirect);
+  const totalOther=Math.max(0,costSrcDirect-knownDirect);
 
   const profitPct=contract>0?(totalProfit/contract*100):0;
   const overheadPct=contract>0?(totalOverhead/contract*100):0;
