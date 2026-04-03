@@ -590,7 +590,7 @@ function addStagingRow(){const{type,data}=Store.staging;if(type==='activities')d
 function editStagingRow(i){const t=Store.staging.type;editRow(t==='biditems'?'biditem':t==='activities'?'activity':'schedule',i,true)}
 function cancelStaging(){Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none'}
 function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}})}else if(type==='biditems'){job.bidItems=sel}else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
-  if((type==='schedule'||type==='biditems')&&job.schedule.length&&job.bidItems.length){showMapping()}
+  if((type==='schedule'||type==='biditems'||type==='activities')&&job.schedule.length&&job.bidItems.length){showMapping()}
 }
 
 // ═══════════════════════════════════════════
@@ -654,9 +654,96 @@ function showMapping(){
 
 function hideMapping(){document.getElementById('mappingArea').style.display='none'}
 
+function showAddTaskForBid(biditem, desc){
+  const form=document.getElementById('addTaskForm');
+  form.style.display='block';
+  document.getElementById('addTaskFormTitle').textContent='Add Schedule Task for Bid Item '+biditem+' — '+desc;
+  document.getElementById('addTaskName').value=desc||'';
+  document.getElementById('addTaskBidItem').value=biditem;
+  document.getElementById('addTaskStart').value='';
+  document.getElementById('addTaskFinish').value='';
+  document.getElementById('addTaskDuration').value='';
+  form.scrollIntoView({behavior:'smooth',block:'center'});
+  // Auto-calc finish from start+duration
+  const startEl=document.getElementById('addTaskStart');
+  const durEl=document.getElementById('addTaskDuration');
+  const finEl=document.getElementById('addTaskFinish');
+  const calcFinish=()=>{
+    if(startEl.value&&durEl.value){
+      const s=new Date(startEl.value+'T00:00:00');
+      const days=parseInt(durEl.value)||0;
+      if(!isNaN(s)&&days>0){const f=new Date(s.getTime()+days*86400000);finEl.value=f.toISOString().split('T')[0]}
+    }
+  };
+  startEl.onchange=calcFinish;durEl.onchange=calcFinish;
+}
+
+function saveNewTask(){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const name=document.getElementById('addTaskName').value.trim();
+  const startVal=document.getElementById('addTaskStart').value;
+  const finishVal=document.getElementById('addTaskFinish').value;
+  const durVal=document.getElementById('addTaskDuration').value;
+  const biditem=document.getElementById('addTaskBidItem').value;
+  if(!name){alert('Task name is required.');return}
+  if(!startVal){alert('Start date is required.');return}
+  if(!finishVal&&!durVal){alert('Enter a finish date or duration.');return}
+  const start=new Date(startVal+'T00:00:00');
+  let finish;let durationDays;
+  if(finishVal){
+    finish=new Date(finishVal+'T00:00:00');
+    durationDays=Math.max(Math.ceil((finish-start)/86400000),1);
+  }else{
+    durationDays=parseInt(durVal)||1;
+    finish=new Date(start.getTime()+durationDays*86400000);
+  }
+  // Create new schedule task
+  const newTask={
+    id:job.schedule.length+1,
+    name:name,
+    start:start,
+    finish:finish,
+    durationDays:durationDays,
+    durationStr:durationDays+'d',
+    predecessors:'',
+    status:'Not Started',
+    crew:'',
+    atRisk:'No',
+  };
+  job.schedule.push(newTask);
+  // Auto-map to the bid item
+  if(!job.taskMap)job.taskMap={};
+  const newIdx=job.schedule.length-1;
+  job.taskMap[newIdx]=biditem;
+  // Update meta dates
+  const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
+  if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}
+  document.getElementById('addTaskForm').style.display='none';
+  log('Added schedule task "'+name+'" and mapped to Bid Item '+biditem);
+  saveJob(Store.activeJob);
+  renderMapping();
+  updateNavBadges();
+}
+
 function confirmMapping(){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   const mapped=Object.keys(job.taskMap||{}).length;
+  // Check for bid items with activities but no schedule task mapped
+  const mappedBidItems=new Set(Object.values(job.taskMap||{}));
+  const orphanBids=job.bidItems.filter(b=>{
+    if(mappedBidItems.has(b.biditem))return false;
+    return job.activities.some(a=>String(a.biditem)===String(b.biditem));
+  });
+  if(orphanBids.length){
+    const names=orphanBids.map(b=>`  • BI ${b.biditem} — ${b.description}`).join('\n');
+    const proceed=confirm(`${orphanBids.length} bid item(s) with activities have no schedule task:\n\n${names}\n\nThese activities won't appear on the Job Cost Schedule timeline.\n\nScroll down to add schedule tasks for them, or click OK to confirm anyway.`);
+    if(!proceed){
+      // Scroll to orphan section
+      const orphanCard=document.querySelector('#mappingArea .card[style*="border-color"]');
+      if(orphanCard)orphanCard.scrollIntoView({behavior:'smooth',block:'center'});
+      return;
+    }
+  }
   log(`Mapping confirmed: ${mapped} of ${job.schedule.length} tasks linked to bid items.`);
   hideMapping();
   saveJob(Store.activeJob);
@@ -712,6 +799,44 @@ function renderMapping(){
   });
 
   h+='</table></div></div>';
+
+  // Find bid items with no schedule task mapped to them
+  const mappedBidItems=new Set(Object.values(job.taskMap));
+  const orphanBids=job.bidItems.filter(b=>!mappedBidItems.has(b.biditem));
+  if(orphanBids.length){
+    h+='<div class="card" style="margin-top:12px;border-color:var(--orange);">';
+    h+='<div class="card-title" style="color:var(--orange);border-bottom-color:var(--orange);">Bid Items Missing Schedule Tasks <span style="font-weight:300;font-size:12px;">('+orphanBids.length+' bid items have no schedule task — activities under these won\'t appear on the Job Cost Schedule timeline)</span></div>';
+    h+='<div class="table-wrap"><table class="map-table">';
+    h+='<tr><th>Bid Item</th><th>Description</th><th>Activities</th><th>Direct Cost</th><th></th></tr>';
+    orphanBids.forEach(b=>{
+      const actCount=job.activities.filter(a=>String(a.biditem)===String(b.biditem)).length;
+      const actCost=job.activities.filter(a=>String(a.biditem)===String(b.biditem)).reduce((s,a)=>s+(a.directTotal||0),0);
+      h+=`<tr style="background:#FFF8F0;">`;
+      h+=`<td><strong>${b.biditem}</strong></td>`;
+      h+=`<td>${b.description||'—'}</td>`;
+      h+=`<td>${actCount} activities</td>`;
+      h+=`<td>${fmtD(actCost)}</td>`;
+      h+=`<td><button class="btn-primary btn-sm" style="background:var(--orange);white-space:nowrap;" onclick="showAddTaskForBid('${b.biditem}','${(b.description||'').replace(/'/g,"\\'")}')">+ Add Task</button></td>`;
+      h+='</tr>';
+    });
+    h+='</table></div>';
+    h+='<div id="addTaskForm" style="display:none;margin-top:12px;padding:16px;background:#FFF8F0;border:1px solid var(--orange);border-radius:8px;">';
+    h+='<div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;color:var(--orange);margin-bottom:10px;" id="addTaskFormTitle">Add Schedule Task</div>';
+    h+='<div class="edit-grid">';
+    h+='<div><label>Task Name</label><input type="text" id="addTaskName"></div>';
+    h+='<div><label>Start Date</label><input type="date" id="addTaskStart"></div>';
+    h+='<div><label>Finish Date</label><input type="date" id="addTaskFinish"></div>';
+    h+='<div><label>Duration (days)</label><input type="number" id="addTaskDuration" min="1" step="1"></div>';
+    h+='</div>';
+    h+='<input type="hidden" id="addTaskBidItem">';
+    h+='<div style="margin-top:12px;display:flex;gap:8px;">';
+    h+='<button class="btn-green" onclick="saveNewTask()">Create & Map</button>';
+    h+='<button class="btn-secondary btn-sm" onclick="document.getElementById(\'addTaskForm\').style.display=\'none\'">Cancel</button>';
+    h+='</div>';
+    h+='</div>';
+    h+='</div>';
+  }
+
   el.innerHTML=h;
 }
 
