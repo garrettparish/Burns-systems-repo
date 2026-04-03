@@ -1728,7 +1728,7 @@ function renderSOVBuilder(){
       }
 
       // Delete button for non-original items (or items with no activities)
-      if(!si._original||acts.length===0){
+      if(!si._original||c.acts.length===0){
         h+=`<div style="margin-top:10px;text-align:right;"><button class="btn-secondary btn-sm" style="color:var(--red);border-color:var(--red);" onclick="removeSOVItem(${idx})">Delete Pay Item</button></div>`;
       }
 
