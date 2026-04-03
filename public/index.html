@@ -138,6 +138,7 @@ tr:hover{background:#FAF8F5}
     <button class="edit-btn" id="editJobBtn" onclick="showEditJobModal()" style="display:none;">Edit Job</button>
   </div>
   <div id="importArea" style="display:none;">
+    <div style="background:#FFF3CD;border:1px solid #F26722;border-radius:8px;padding:10px 16px;margin-bottom:12px;font-size:13px;color:#363636;font-family:'Source Serif 4',serif;"><strong style="color:#F26722;">&#9888; Important:</strong> Make sure to convert HeavyBid exports from .xls to .xlsx before importing!</div>
     <div class="import-grid">
       <div class="import-zone" id="zone-activities" onclick="document.getElementById('file-activities').click()">
         <h3>HeavyBid Activities</h3>
@@ -213,6 +214,7 @@ tr:hover{background:#FAF8F5}
     <select id="newJobBilling"><option value="unit-price">Unit Price (DOT / Public)</option><option value="progress">Progress / % Complete (Private)</option></select>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeNewJobModal()">Cancel</button>
+      <button id="jobDeleteBtn" style="display:none;background:#C0392B;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:600;" onclick="confirmDeleteJob()">Delete Job</button>
       <button class="btn-primary" id="jobModalSaveBtn" onclick="createJob()">Create Job</button>
     </div>
   </div>
@@ -379,9 +381,10 @@ loadJobs();
 // JOB MANAGEMENT
 // ═══════════════════════════════════════════
 let _editingJobId=null;
-function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('newJobModal').classList.add('show')}
-function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobModal').classList.add('show')}
+function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('jobDeleteBtn').style.display='none';document.getElementById('newJobModal').classList.add('show')}
+function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('jobDeleteBtn').style.display='inline-block';document.getElementById('newJobModal').classList.add('show')}
 function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderDashboard();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
+function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();updateImportPanel();renderDashboard();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
 function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();updateImportPanel();log(`Job created: #${num} ${name}`);saveJob(num)}
 
@@ -436,9 +439,11 @@ function parseActivitiesRaw(rows){
     const permMat=col(r,['Perm Mat','Permanent Material','Perm Material','Perm Matl','PM']);
     const constMat=col(r,['Const Mat','Construction Material','Const Material','Const Matl','CM']);
     const subs=col(r,['Subs','Subcontract','Subcontracts','Sub','Subcontractors','SC']);
-    const eqpOper=col(r,['Eqp Oper','Eqp Operating','Equipment Oper','Equipment Operating','EO']);
-    const compEqp=col(r,['Comp Eqp','Co Eqp','Company Eqp','Company Equipment','Comp Equipment','CE']);
-    const outsideEqp=col(r,['Outside Eqp','Outside Equipment','Outs Eqp','OE','Rented Eqp','Rental Eqp']);
+    const eqpOper=col(r,['Eqp Oper Expenses','Eqp Oper','Eqp Operating','Equipment Oper','Equipment Operating','EO']);
+    const compEqp=col(r,['Company Equipment','Comp Eqp','Co Eqp','Company Eqp','Comp Equipment','CE']);
+    const outsideEqp=col(r,['Outside Equipment','Outside Eqp','Outs Eqp','OE','Rented Eqp','Rental Eqp']);
+    const trucking=col(r,['Trucking','Truck','Trucks']);
+    const coOH=col(r,['CO OH(7)','CO OH','COOH']);
     const totalMat=permMat+constMat;
     const totalEqp=eqpOper+compEqp+outsideEqp;
     const directTotal=col(r,['Direct Total','Direct Cost','Total Direct']);
@@ -451,11 +456,10 @@ function parseActivitiesRaw(rows){
       productivityRate:col(r,['Productivity Rate','Prod Rate']),
       manHours:col(r,['Man Hours','Man Hrs','MH']),
       calculatedDays:col(r,['Calculated Days','Calc Days','Days']),
-      labor,burden,permMat,constMat,subs,eqpOper,compEqp,outsideEqp,
+      labor,burden,permMat,constMat,subs,eqpOper,compEqp,outsideEqp,trucking,coOH,
       totalMaterial:totalMat,totalEquipment:totalEqp,
       directTotal,
-      // Capture any unaccounted direct cost (material/equip/subs under unknown columns)
-      otherDirect:Math.max(0,directTotal-labor-burden-totalMat-totalEqp-subs),
+      otherDirect:Math.max(0,directTotal-labor-burden-totalMat-totalEqp-subs-trucking-coOH),
       discipline:getDiscipline(code),
     };
   });
@@ -468,9 +472,11 @@ function parseBidItemsRaw(rows){
     const permMat=col(r,['Perm Mat','Permanent Material','Perm Material','Perm Matl','PM']);
     const constMat=col(r,['Const Mat','Construction Material','Const Material','Const Matl','CM']);
     const subs=col(r,['Subs','Subcontract','Subcontracts','Sub','Subcontractors','SC']);
-    const eqpOper=col(r,['Eqp Oper','Eqp Operating','Equipment Oper','Equipment Operating','EO']);
-    const compEqp=col(r,['Comp Eqp','Co Eqp','Company Eqp','Company Equipment','Comp Equipment','CE']);
-    const outsideEqp=col(r,['Outside Eqp','Outside Equipment','Outs Eqp','OE','Rented Eqp','Rental Eqp']);
+    const eqpOper=col(r,['Eqp Oper Expenses','Eqp Oper','Eqp Operating','Equipment Oper','Equipment Operating','EO']);
+    const compEqp=col(r,['Company Equipment','Comp Eqp','Co Eqp','Company Eqp','Comp Equipment','CE']);
+    const outsideEqp=col(r,['Outside Equipment','Outside Eqp','Outs Eqp','OE','Rented Eqp','Rental Eqp']);
+    const trucking=col(r,['Trucking','Truck','Trucks']);
+    const coOH=col(r,['CO OH(7)','CO OH','COOH']);
     const directTotal=col(r,['Direct Total','Direct Cost','Total Direct']);
     return{
       biditem:String(r['Biditem']||r['Bid Item']||r['BidItem']),
@@ -478,7 +484,7 @@ function parseBidItemsRaw(rows){
       clientBidNum:r['Client Bid Num']||'',units:r['Units']||'',
       bidQuantity:col(r,['Bid Quantity','Bid Qty']),
       takeoffQuantity:col(r,['Takeoff Quantity','Takeoff Qty']),
-      labor,burden,permMat,constMat,subs,eqpOper,compEqp,outsideEqp,directTotal,
+      labor,burden,permMat,constMat,subs,eqpOper,compEqp,outsideEqp,trucking,coOH,directTotal,
       indirects:col(r,['Indirects','Indirect','Indirect Cost']),
       addonBond:col(r,['Addon/Bond','Addon','Bond','Add-on/Bond']),
       markup:col(r,['Markup','Mark-up','Profit']),
@@ -733,9 +739,11 @@ function renderDashboard(){
   const totalMat=costSrc.reduce((s,b)=>s+(b.totalMaterial||(b.permMat||0)+(b.constMat||0)),0);
   const totalEqp=costSrc.reduce((s,b)=>s+(b.totalEquipment||(b.eqpOper||0)+(b.compEqp||0)+(b.outsideEqp||0)),0);
   const totalSubs=costSrc.reduce((s,b)=>s+(b.subs||0),0);
+  const totalTrucking=costSrc.reduce((s,b)=>s+(b.trucking||0),0);
+  const totalCOOH=costSrc.reduce((s,b)=>s+(b.coOH||0),0);
   // "Other Direct" captures costs under unrecognized column names (directTotal minus known categories)
   const costSrcDirect=costSrc.reduce((s,b)=>s+(b.directTotal||0),0);
-  const knownDirect=totalLabor+totalBurden+totalMat+totalEqp+totalSubs;
+  const knownDirect=totalLabor+totalBurden+totalMat+totalEqp+totalSubs+totalTrucking+totalCOOH;
   const totalOther=Math.max(0,costSrcDirect-knownDirect);
 
   const profitPct=contract>0?(totalProfit/contract*100):0;
@@ -753,6 +761,8 @@ function renderDashboard(){
     {l:'Material',v:totalMat,c:'#27AE60'},{l:'Equipment',v:totalEqp,c:'#D4A017'},
     {l:'Subs',v:totalSubs,c:'#8E44AD'},
   ];
+  if(totalTrucking>0) costCats.push({l:'Trucking',v:totalTrucking,c:'#D35400'});
+  if(totalCOOH>0) costCats.push({l:'CO Overhead',v:totalCOOH,c:'#7F8C8D'});
   if(totalOther>0) costCats.push({l:'Other Direct',v:totalOther,c:'#95A5A6'});
   costCats.push({l:'Overhead',v:totalOverhead,c:'#E67E22'},{l:'Profit',v:totalProfit,c:'var(--teal)'});
   const maxC=Math.max(...costCats.map(c=>c.v),1);
