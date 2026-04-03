@@ -50,9 +50,9 @@
 - **Active project:** Burns Systems — Project Controls App
 - **Repo:** https://github.com/garrettparish/Burns-systems-repo
 - **Branch:** main
-- **Working on:** Phase 1A — Import & Dashboard (complete, ready to deploy)
-- **Blocked on:** Nothing — app is in public/index.html, push to deploy
-- **Priority:** Test all 3 jobs through import flow, then start Phase 2 (Supabase persistence, schedule→bid item mapping refinement)
+- **Working on:** Phase 1A bug fixes — date handling, cost breakdown, parser improvements
+- **Blocked on:** User needs to push latest index.html via deploy.command, then re-import data
+- **Priority:** Push fixes, re-import Steel Driver 775 (all 3 files), verify dashboard/gantt/global view
 
 ---
 
@@ -128,6 +128,35 @@
   - Test all 3 jobs end-to-end in deployed version
   - Connect Supabase for persistence (save/load jobs across sessions)
   - Phase 2 features: production tracking, percent complete, WIP reporting
+
+### 2026-04-03 — Session 3 (Cowork — continued from Session 2)
+- **What we did:**
+  - **Created Supabase `jobs` table** — table was never actually created (SQL got mangled in editor). Fixed via Chrome MCP → Supabase SQL editor.
+    - `CREATE TABLE jobs (id TEXT PRIMARY KEY, data JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`
+    - `ALTER TABLE jobs ENABLE ROW LEVEL SECURITY`
+    - `CREATE POLICY "Allow all access" ON jobs FOR ALL USING (true) WITH CHECK (true)`
+  - **Fixed date serialization bug** — `JSON.stringify` calls `.toJSON()` before the replacer, so Date→`{__date:...}` wrapping never happened. All dates stored as bare ISO strings. Created `serializeForStorage()` that manually walks the object tree.
+  - **Fixed date deserialization** — `reviveDates()` now catches both `{__date:...}` wrappers AND bare ISO strings (using `DATE_KEYS` set for known date fields: start, finish, startDate, endDate).
+  - **Added `toDate()` helper** — defensive Date conversion used in renderGantt, renderSchedule, renderDashboard, renderGlobalView. Handles Date objects, ISO strings, and null.
+  - **Fixed Gantt chart** — was empty because date strings caused `Math.min()` → NaN → all bars filtered out. Now converts dates before math.
+  - **Fixed schedule overview on dashboard** — same date issue. Also added fallback: if meta.startDate/endDate missing, computes from schedule tasks.
+  - **Fixed Global View** — same date→string issue in timeline bar positioning.
+  - **Fixed activity parser** — added `col()` helper with 6+ name variants per cost column (Perm Mat, Permanent Material, Perm Material, etc.). Handles HeavyBid column name differences across versions.
+  - **Added "Other Direct" cost category** — when known cost columns (labor+burden+material+equip+subs) don't sum to directTotal, the gap shows as "Other Direct" in the cost breakdown.
+  - **Fixed bid items parser** — same `col()` treatment for flexible column matching.
+- **Root causes found:**
+  - Supabase `jobs` table never existed (SQL was mangled in web editor)
+  - `JSON.stringify` replacer receives `.toJSON()` output (strings), not raw Date objects
+  - HeavyBid column headers vary by version — parser was too strict
+- **Files changed:**
+  - `public/index.html` — all fixes above (~930 lines now)
+  - `CLAUDE_LOG.md` — updated with session context
+- **Known issue:** User needs to **re-import Steel Driver 775 data** after deploy, since the old data in Supabase has 0s for material/equipment/subs (parsed before the column name fix). Delete the existing job, create new, re-import all 3 files.
+- **Next steps:**
+  - Push to main via deploy.command
+  - Delete existing Steel Driver job in app, re-import with fixed parser
+  - Verify: Gantt, cost breakdown, schedule overview, global view all working
+  - Test with all 3 jobs
 
 ---
 

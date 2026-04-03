@@ -244,14 +244,18 @@ const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // Save a single job to Supabase
+function serializeForStorage(obj){
+  if(obj instanceof Date) return { __date: obj.toISOString() };
+  if(Array.isArray(obj)) return obj.map(serializeForStorage);
+  if(obj && typeof obj === 'object'){
+    const out={};for(const k in obj) out[k]=serializeForStorage(obj[k]);return out;
+  }
+  return obj;
+}
 async function saveJob(jobId){
   const job = Store.jobs[jobId];
   if(!job) return;
-  // Serialize dates to ISO strings for JSON storage
-  const serialized = JSON.parse(JSON.stringify(job, (key, val) => {
-    if(val instanceof Date) return { __date: val.toISOString() };
-    return val;
-  }));
+  const serialized = serializeForStorage(job);
   const { error } = await sb.from('jobs').upsert({ id: jobId, data: serialized });
   if(error){ console.error('Save error:', error); log('⚠ Save failed: ' + error.message); }
   else { console.log('Saved job', jobId); }
@@ -262,13 +266,20 @@ async function loadJobs(){
   const { data, error } = await sb.from('jobs').select('*');
   if(error){ console.error('Load error:', error); return; }
   if(!data || !data.length){ console.log('No saved jobs found'); return; }
-  // Deserialize dates
-  function reviveDates(obj){
-    if(!obj || typeof obj !== 'object') return obj;
+  // Deserialize dates (handles both {__date:...} wrappers and bare ISO strings from old data)
+  const DATE_KEYS = new Set(['start','finish','startDate','endDate','created_at','updated_at']);
+  function reviveDates(obj, parentKey){
+    if(!obj || typeof obj !== 'object'){
+      // Convert ISO date strings back to Date objects (only for known date keys)
+      if(typeof obj === 'string' && DATE_KEYS.has(parentKey) && /^\d{4}-\d{2}-\d{2}T/.test(obj)){
+        const d=new Date(obj); if(!isNaN(d)) return d;
+      }
+      return obj;
+    }
     if(obj.__date) return new Date(obj.__date);
-    if(Array.isArray(obj)) return obj.map(reviveDates);
+    if(Array.isArray(obj)) return obj.map((v,i)=>reviveDates(v));
     const out = {};
-    for(const k in obj) out[k] = reviveDates(obj[k]);
+    for(const k in obj) out[k] = reviveDates(obj[k], k);
     return out;
   }
   data.forEach(row => {
@@ -413,54 +424,72 @@ function handleImport(event,type){
   reader.readAsArrayBuffer(file);event.target.value='';
 }
 
+// Flexible column reader: tries multiple possible header names
+function col(r,names){for(const n of names){if(r[n]!=null&&r[n]!=='')return parseFloat(r[n])||0}return 0}
+function colStr(r,names){for(const n of names){if(r[n]!=null&&r[n]!=='')return String(r[n])}return ''}
+
 function parseActivitiesRaw(rows){
   return rows.filter(r=>r['Activity Code']||r['Activity']).map(r=>{
     const code=String(r['Activity Code']||r['Activity']||'');
+    const labor=col(r,['Labor','labor']);
+    const burden=col(r,['Burden','burden','Labor Burden']);
+    const permMat=col(r,['Perm Mat','Permanent Material','Perm Material','Perm Matl','PM']);
+    const constMat=col(r,['Const Mat','Construction Material','Const Material','Const Matl','CM']);
+    const subs=col(r,['Subs','Subcontract','Subcontracts','Sub','Subcontractors','SC']);
+    const eqpOper=col(r,['Eqp Oper','Eqp Operating','Equipment Oper','Equipment Operating','EO']);
+    const compEqp=col(r,['Comp Eqp','Co Eqp','Company Eqp','Company Equipment','Comp Equipment','CE']);
+    const outsideEqp=col(r,['Outside Eqp','Outside Equipment','Outs Eqp','OE','Rented Eqp','Rental Eqp']);
+    const totalMat=permMat+constMat;
+    const totalEqp=eqpOper+compEqp+outsideEqp;
+    const directTotal=col(r,['Direct Total','Direct Cost','Total Direct']);
     return{
       biditem:String(r['Biditem']||r['Bid Item']||r['BidItem']||''),
       code:code,description:r['Description']||'',
-      quantity:parseFloat(r['Quantity'])||0,units:r['Units']||'',
+      quantity:col(r,['Quantity','Qty']),units:r['Units']||'',
       crew:r['Crew']||r['crew']||'',
-      crewHours:parseFloat(r['Crew Hours'])||0,
-      productivityRate:parseFloat(r['Productivity Rate'])||0,
-      manHours:parseFloat(r['Man Hours'])||0,
-      calculatedDays:parseFloat(r['Calculated Days'])||0,
-      labor:parseFloat(r['Labor'])||0,burden:parseFloat(r['Burden'])||0,
-      permMat:parseFloat(r['Perm Mat'])||0,constMat:parseFloat(r['Const Mat'])||0,
-      subs:parseFloat(r['Subs'])||0,
-      eqpOper:parseFloat(r['Eqp Oper'])||0,compEqp:parseFloat(r['Comp Eqp']||r['Co Eqp'])||0,
-      outsideEqp:parseFloat(r['Outside Eqp'])||0,
-      totalMaterial:(parseFloat(r['Perm Mat'])||0)+(parseFloat(r['Const Mat'])||0),
-      totalEquipment:(parseFloat(r['Eqp Oper'])||0)+(parseFloat(r['Comp Eqp']||r['Co Eqp'])||0)+(parseFloat(r['Outside Eqp'])||0),
-      directTotal:parseFloat(r['Direct Total'])||0,
+      crewHours:col(r,['Crew Hours','Crew Hrs']),
+      productivityRate:col(r,['Productivity Rate','Prod Rate']),
+      manHours:col(r,['Man Hours','Man Hrs','MH']),
+      calculatedDays:col(r,['Calculated Days','Calc Days','Days']),
+      labor,burden,permMat,constMat,subs,eqpOper,compEqp,outsideEqp,
+      totalMaterial:totalMat,totalEquipment:totalEqp,
+      directTotal,
+      // Capture any unaccounted direct cost (material/equip/subs under unknown columns)
+      otherDirect:Math.max(0,directTotal-labor-burden-totalMat-totalEqp-subs),
       discipline:getDiscipline(code),
     };
   });
 }
 
 function parseBidItemsRaw(rows){
-  return rows.filter(r=>r['Biditem']||r['Bid Item']||r['BidItem']).map(r=>({
-    biditem:String(r['Biditem']||r['Bid Item']||r['BidItem']),
-    description:r['Description']||'',type:r['Type']||'',
-    clientBidNum:r['Client Bid Num']||'',units:r['Units']||'',
-    bidQuantity:parseFloat(r['Bid Quantity']||r['Bid Qty'])||0,
-    takeoffQuantity:parseFloat(r['Takeoff Quantity']||r['Takeoff Qty'])||0,
-    labor:parseFloat(r['Labor'])||0,burden:parseFloat(r['Burden'])||0,
-    permMat:parseFloat(r['Perm Mat'])||0,constMat:parseFloat(r['Const Mat'])||0,
-    subs:parseFloat(r['Subs'])||0,
-    eqpOper:parseFloat(r['Eqp Oper'])||0,compEqp:parseFloat(r['Comp Eqp']||r['Co Eqp'])||0,
-    outsideEqp:parseFloat(r['Outside Eqp'])||0,
-    directTotal:parseFloat(r['Direct Total'])||0,
-    indirects:parseFloat(r['Indirects'])||0,
-    addonBond:parseFloat(r['Addon/Bond']||r['Addon']||r['Bond'])||0,
-    markup:parseFloat(r['Markup'])||0,
-    takeoffTotal:parseFloat(r['Takeoff Total'])||0,
-    balancedTotal:parseFloat(r['Balanced Total'])||0,
-    unitPrice:parseFloat(r['Unit Price'])||0,
-    manHours:parseFloat(r['Man Hours'])||0,
-    bidTotal:parseFloat(r['Bid Total'])||0,
-    _selected:true,
-  }));
+  return rows.filter(r=>r['Biditem']||r['Bid Item']||r['BidItem']).map(r=>{
+    const labor=col(r,['Labor','labor']);
+    const burden=col(r,['Burden','burden','Labor Burden']);
+    const permMat=col(r,['Perm Mat','Permanent Material','Perm Material','Perm Matl','PM']);
+    const constMat=col(r,['Const Mat','Construction Material','Const Material','Const Matl','CM']);
+    const subs=col(r,['Subs','Subcontract','Subcontracts','Sub','Subcontractors','SC']);
+    const eqpOper=col(r,['Eqp Oper','Eqp Operating','Equipment Oper','Equipment Operating','EO']);
+    const compEqp=col(r,['Comp Eqp','Co Eqp','Company Eqp','Company Equipment','Comp Equipment','CE']);
+    const outsideEqp=col(r,['Outside Eqp','Outside Equipment','Outs Eqp','OE','Rented Eqp','Rental Eqp']);
+    const directTotal=col(r,['Direct Total','Direct Cost','Total Direct']);
+    return{
+      biditem:String(r['Biditem']||r['Bid Item']||r['BidItem']),
+      description:r['Description']||'',type:r['Type']||'',
+      clientBidNum:r['Client Bid Num']||'',units:r['Units']||'',
+      bidQuantity:col(r,['Bid Quantity','Bid Qty']),
+      takeoffQuantity:col(r,['Takeoff Quantity','Takeoff Qty']),
+      labor,burden,permMat,constMat,subs,eqpOper,compEqp,outsideEqp,directTotal,
+      indirects:col(r,['Indirects','Indirect','Indirect Cost']),
+      addonBond:col(r,['Addon/Bond','Addon','Bond','Add-on/Bond']),
+      markup:col(r,['Markup','Mark-up','Profit']),
+      takeoffTotal:col(r,['Takeoff Total','Contract Total','Total']),
+      balancedTotal:col(r,['Balanced Total','Bal Total']),
+      unitPrice:col(r,['Unit Price','UP']),
+      manHours:col(r,['Man Hours','Man Hrs','MH']),
+      bidTotal:col(r,['Bid Total']),
+      _selected:true,
+    };
+  });
 }
 
 function parseScheduleRaw(rows){
@@ -678,9 +707,15 @@ function renderDashboard(){
   const totalMat=costSrc.reduce((s,b)=>s+(b.totalMaterial||(b.permMat||0)+(b.constMat||0)),0);
   const totalEqp=costSrc.reduce((s,b)=>s+(b.totalEquipment||(b.eqpOper||0)+(b.compEqp||0)+(b.outsideEqp||0)),0);
   const totalSubs=costSrc.reduce((s,b)=>s+(b.subs||0),0);
+  // "Other Direct" captures costs under unrecognized column names (directTotal minus known categories)
+  const knownDirect=totalLabor+totalBurden+totalMat+totalEqp+totalSubs;
+  const totalOther=Math.max(0,totalDirect-knownDirect);
 
   const profitPct=contract>0?(totalProfit/contract*100):0;
   const overheadPct=contract>0?(totalOverhead/contract*100):0;
+  // Ensure meta dates are Date objects (may be strings after loading from Supabase)
+  if(m.startDate) m.startDate=toDate(m.startDate);
+  if(m.endDate) m.endDate=toDate(m.endDate);
   const schedDur=sched.length&&m.startDate&&m.endDate?Math.ceil((m.endDate-m.startDate)/86400000):0;
 
   const discMap={};bidSummaries.forEach(b=>{const k=b.discipline.name;if(!discMap[k])discMap[k]={name:k,color:b.discipline.color,direct:0,overhead:0,profit:0,hours:0,count:0,contract:0};discMap[k].direct+=b.directTotal;discMap[k].overhead+=(b.indirects||0)+(b.addonBond||0);discMap[k].profit+=(b.markup||0);discMap[k].hours+=b.manHours;discMap[k].count++;discMap[k].contract+=(b.takeoffTotal||0)});
@@ -690,8 +725,9 @@ function renderDashboard(){
     {l:'Labor',v:totalLabor,c:'#2980B9'},{l:'Burden',v:totalBurden,c:'#3498DB'},
     {l:'Material',v:totalMat,c:'#27AE60'},{l:'Equipment',v:totalEqp,c:'#D4A017'},
     {l:'Subs',v:totalSubs,c:'#8E44AD'},
-    {l:'Overhead',v:totalOverhead,c:'#E67E22'},{l:'Profit',v:totalProfit,c:'var(--teal)'},
   ];
+  if(totalOther>0) costCats.push({l:'Other Direct',v:totalOther,c:'#95A5A6'});
+  costCats.push({l:'Overhead',v:totalOverhead,c:'#E67E22'},{l:'Profit',v:totalProfit,c:'var(--teal)'});
   const maxC=Math.max(...costCats.map(c=>c.v),1);
 
   let h='<div class="kpi-row">';
@@ -732,14 +768,20 @@ function renderDashboard(){
 // ═══════════════════════════════════════════
 // GANTT
 // ═══════════════════════════════════════════
+// Ensure value is a Date object (handles strings from Supabase)
+function toDate(v){if(v instanceof Date)return v;if(typeof v==='string'){const d=new Date(v);if(!isNaN(d))return d}return null}
+
 function renderGantt(tasks,meta){
-  const vt=tasks.filter(t=>t.start&&t.finish);if(!vt.length)return'<p style="color:var(--text-light)">No dates.</p>';
+  const vt=tasks.map(t=>({...t,start:toDate(t.start),finish:toDate(t.finish)})).filter(t=>t.start&&t.finish);
+  if(!vt.length)return'<p style="color:var(--text-light)">No schedule dates available.</p>';
   const mn=new Date(Math.min(...vt.map(t=>t.start))),mx=new Date(Math.max(...vt.map(t=>t.finish)));
   const td=Math.max((mx-mn)/86400000,1);
   let months='';const c=new Date(mn);c.setDate(1);
   while(c<=mx){const ms=Math.max(0,(c-mn)/86400000);const nm=new Date(c);nm.setMonth(nm.getMonth()+1);const me=Math.min(td,(nm-mn)/86400000);months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;c.setMonth(c.getMonth()+1)}
   let h=`<div style="overflow-x:auto;"><div style="min-width:800px;"><div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;">${months}</div>`;
-  vt.filter(t=>t.durationDays<td*.95).forEach(t=>{
+  vt.forEach(t=>{
+    const durDays=Math.max((t.finish-t.start)/86400000,0);
+    if(durDays>=td*.95)return; // skip tasks spanning entire duration
     const l=((t.start-mn)/86400000)/td*100,w=Math.max(((t.finish-t.start)/86400000)/td*100,.5);
     const sc=t.status==='Complete'?'var(--teal)':t.status==='In Progress'?'var(--blue)':t.atRisk==='Yes'?'var(--red)':(t.variance!=null&&t.variance<-5)?'var(--yellow)':'var(--green)';
     h+=`<div style="display:flex;align-items:center;margin-bottom:2px;"><div style="width:220px;min-width:220px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${t.name}">${t.name}</div><div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${sc};border-radius:2px;opacity:.8;" title="${t.name}: ${fmtDate(t.start)} — ${fmtDate(t.finish)}"></div></div><div style="width:50px;min-width:50px;text-align:right;font-size:11px;color:var(--text-light);padding-left:6px;">${t.durationStr}</div></div>`;
@@ -753,7 +795,7 @@ function renderGantt(tasks,meta){
 function renderGlobalView(){
   const el=document.getElementById('globalContent');const ids=Object.keys(Store.jobs);
   if(!ids.length){el.innerHTML='<div class="empty-state"><h2>No Jobs</h2></div>';return}
-  let allMin=null,allMax=null;ids.forEach(id=>{const j=Store.jobs[id];if(j.meta.startDate&&(!allMin||j.meta.startDate<allMin))allMin=j.meta.startDate;if(j.meta.endDate&&(!allMax||j.meta.endDate>allMax))allMax=j.meta.endDate});
+  let allMin=null,allMax=null;ids.forEach(id=>{const j=Store.jobs[id];const sd=toDate(j.meta.startDate),ed=toDate(j.meta.endDate);if(sd)j.meta.startDate=sd;if(ed)j.meta.endDate=ed;if(sd&&(!allMin||sd<allMin))allMin=sd;if(ed&&(!allMax||ed>allMax))allMax=ed});
   if(!allMin||!allMax){el.innerHTML='<div class="empty-state"><h2>No Schedule Data</h2></div>';return}
   const td=Math.max((allMax-allMin)/86400000,1);
 
@@ -769,7 +811,7 @@ function renderGlobalView(){
     const dg={};
     const tm=j.taskMap||{};
     const hasMappings=Object.keys(tm).length>0;
-    const validTasks=j.schedule.filter(t=>t.start&&t.finish);
+    const validTasks=j.schedule.map(t=>({...t,start:toDate(t.start),finish:toDate(t.finish)})).filter(t=>t.start&&t.finish);
     validTasks.forEach((t)=>{
       const origIdx=j.schedule.indexOf(t);
       let disc;
@@ -880,6 +922,10 @@ function renderSchedule(){
   if(!job.schedule.length){el.innerHTML='<div class="empty-state"><h2>No Schedule</h2><p>Import from the Import tab.</p></div>';return}
 
   const m=job.meta;
+  if(m.startDate) m.startDate=toDate(m.startDate);
+  if(m.endDate) m.endDate=toDate(m.endDate);
+  // If meta dates missing, compute from schedule tasks
+  if(!m.startDate||!m.endDate){const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);if(dates.length){m.startDate=new Date(Math.min(...dates));m.endDate=new Date(Math.max(...dates))}}
   let h='';
   if(m.startDate&&m.endDate){h+='<div class="card"><div class="card-title">Gantt Chart</div>'+renderGantt(job.schedule,m)+'</div>'}
 
