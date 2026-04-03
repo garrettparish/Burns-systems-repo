@@ -1539,11 +1539,26 @@ function renderSOVBuilder(){
         retainagePct:10,
         pctCompleteMethod:'cost',
         activityIds:job.activities.filter(a=>String(a.biditem)===String(bi.biditem)).map(a=>a.code),
-        ohPct:ohPct,       // overhead as % of direct cost
-        profitPct:profitPct, // profit as % of direct cost
+        ohPct:ohPct,
+        profitPct:profitPct,
         _original:true,
-        _autoPrice:true     // auto-calculate unit price from costs
+        _autoPrice:true
       };
+    });
+  } else {
+    // Migration: backfill ohPct/profitPct on existing sovItems that don't have them
+    job.sovItems.forEach(si=>{
+      if(si.ohPct===undefined||si.ohPct===null){
+        const bi=job.bidItems.find(b=>String(b.biditem)===String(si.id));
+        if(bi){
+          const dc=bi.directTotal||0;
+          si.ohPct=dc>0?((bi.indirects||0)+(bi.addonBond||0))/dc:0;
+          si.profitPct=dc>0?(bi.markup||0)/dc:0;
+        }else{
+          si.ohPct=0;si.profitPct=0;
+        }
+      }
+      if(si._autoPrice===undefined)si._autoPrice=true;
     });
   }
 
@@ -1579,35 +1594,86 @@ function renderSOVBuilder(){
     return {acts,dc,labor,mat,subs,eqp,oh,profit,total,unitPrice,sv};
   }
 
-  let totalScheduledValue=0, totalDirectCost=0, totalOH=0, totalProfit=0;
+  let totalScheduledValue=0, totalDirectCost=0, totalOH=0, totalProfit=0, totalFullCost=0;
   sovItems.forEach(si=>{
     const c=sovCalc(si);
     totalDirectCost+=c.dc;
     totalOH+=c.oh;
     totalProfit+=c.profit;
+    totalFullCost+=c.total;
     totalScheduledValue+=c.sv;
   });
-  h+=`<div style="display:flex;gap:16px;margin-bottom:12px;font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;flex-wrap:wrap;">`;
+
+  // Unassigned activities — show at top as warning
+  const allAssignedSet=new Set();
+  sovItems.forEach(si=>si.activityIds.forEach(id=>allAssignedSet.add(id)));
+  const unassignedActs=job.activities.filter(a=>!allAssignedSet.has(a.code));
+  const unassignedCost=unassignedActs.reduce((s,a)=>s+(a.directTotal||0),0);
+
+  if(unassignedActs.length){
+    h+=`<div style="background:#FFF0F0;border:2px solid var(--red);border-radius:8px;padding:14px 16px;margin-bottom:12px;">`;
+    h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">`;
+    h+=`<div style="font-family:Oswald;font-size:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--red);">⚠ ${unassignedActs.length} Activities Not In Any Pay Item — ${fmtD(unassignedCost)} Unbilled</div>`;
+    h+=`</div>`;
+    h+=`<div style="font-size:12px;color:var(--text-light);margin-bottom:8px;">These activities are not assigned to a pay item. Their costs won't be billed. Move them into a pay item or create a new one.</div>`;
+    h+=`<div style="max-height:160px;overflow-y:auto;">`;
+    unassignedActs.forEach(a=>{
+      h+=`<div class="sov-act-row" style="background:#FFF8F0;">`;
+      h+=`<span class="act-desc">${a.code} — ${a.description||'(no desc)'} <span style="color:var(--text-light);">[BI: ${a.biditem}]</span></span>`;
+      h+=`<span class="act-cost" style="color:var(--red);">${fmtD(a.directTotal)}</span>`;
+      h+=`<button class="sov-move-btn" onclick="showMoveActivity('${escJS(a.code)}',-1)">Assign</button>`;
+      h+=`</div>`;
+    });
+    h+=`</div></div>`;
+  }
+
+  // Coverage summary bar
+  const totalCostPlusUnassigned=totalFullCost+unassignedCost;
+  const coveragePct=totalCostPlusUnassigned>0?Math.round(totalScheduledValue/totalCostPlusUnassigned*100):0;
+  const coverageGap=totalScheduledValue-totalCostPlusUnassigned;
+  const coverageColor=coverageGap<0?'var(--red)':coverageGap===0?'var(--green)':'var(--green)';
+  h+=`<div style="background:var(--card);border:1px solid ${coverageGap<0?'var(--red)':'var(--border)'};border-radius:8px;padding:12px 16px;margin-bottom:12px;">`;
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">`;
+  h+=`<div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;">`;
   h+=`<span>${sovItems.length} Pay Items</span>`;
-  h+=`<span>Direct: ${fmtD(totalDirectCost)}</span>`;
-  h+=`<span>OH: ${fmtD(totalOH)}</span>`;
-  h+=`<span>Profit: ${fmtD(totalProfit)}</span>`;
-  h+=`<span style="color:var(--green);font-weight:600;">Scheduled Value: ${fmtD(totalScheduledValue)}</span>`;
+  h+=`<span style="margin-left:16px;">Direct: ${fmtD(totalDirectCost)}</span>`;
+  h+=`<span style="margin-left:16px;">OH: ${fmtD(totalOH)}</span>`;
+  h+=`<span style="margin-left:16px;">Profit: ${fmtD(totalProfit)}</span>`;
+  if(unassignedActs.length) h+=`<span style="margin-left:16px;color:var(--red);">Unbilled: ${fmtD(unassignedCost)}</span>`;
+  h+=`</div>`;
+  h+=`<div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;">`;
+  h+=`<span style="color:${coverageColor};font-weight:600;">Scheduled Value: ${fmtD(totalScheduledValue)}</span>`;
+  h+=` <span style="color:${coverageGap<0?'var(--red)':'var(--green)'};font-size:12px;">(${coverageGap>=0?'+':''}${fmtD(coverageGap)} ${coveragePct}% coverage)</span>`;
+  h+=`</div></div>`;
+  // Progress bar
+  const barPct=Math.min(coveragePct,120);
+  h+=`<div style="margin-top:8px;height:8px;background:var(--ash);border-radius:4px;overflow:hidden;position:relative;">`;
+  h+=`<div style="height:100%;width:${Math.min(barPct,100)}%;background:${coverageGap<0?'var(--red)':'var(--green)'};border-radius:4px;transition:width .3s;"></div>`;
+  h+=`<div style="position:absolute;left:${Math.min(100*(totalCostPlusUnassigned>0?totalFullCost/totalCostPlusUnassigned*100:100)/barPct*100/100,100)}%;top:0;bottom:0;width:2px;background:var(--midnight);opacity:.5;" title="Assigned cost line"></div>`;
+  h+=`</div>`;
   h+=`</div>`;
 
   // Render each SOV item as a card
   sovItems.forEach((si,idx)=>{
     const c=sovCalc(si);
     const isOpen=_sovExpandedBIs[idx];
+    // Flag: scheduled value vs full cost mismatch
+    const itemGap=c.sv-c.total;
+    const itemFlag=c.dc>0&&c.sv<c.total;
+    const noActsFlag=c.acts.length===0;
 
-    h+='<div class="sov-bi-card">';
+    h+=`<div class="sov-bi-card" ${itemFlag?'style="border-color:var(--red);"':''}>`;
     h+=`<div class="sov-bi-header ${isOpen?'open':''}" onclick="toggleSOVCard(${idx})">`;
-    h+=`<div class="sov-bi-title"><span style="color:var(--orange);">${si.clientItemNo||si.id}</span> — ${si.description||'(untitled)'}</div>`;
+    h+=`<div class="sov-bi-title">`;
+    if(itemFlag) h+=`<span style="color:var(--red);font-size:16px;line-height:1;" title="Value doesn't cover costs">⚠</span> `;
+    if(noActsFlag) h+=`<span style="color:var(--orange);font-size:14px;line-height:1;" title="No activities assigned">○</span> `;
+    h+=`<span style="color:var(--orange);">${si.clientItemNo||si.id}</span> — ${si.description||'(untitled)'}</div>`;
     h+=`<div class="sov-bi-meta">`;
     h+=`<span>${c.acts.length} activities</span>`;
     h+=`<span>Direct: ${fmtD(c.dc)}</span>`;
     h+=`<span>OH+P: ${fmtD(c.oh+c.profit)}</span>`;
-    h+=`<span style="font-weight:600;">Value: ${fmtD(c.sv)}</span>`;
+    h+=`<span style="font-weight:600;${itemFlag?'color:var(--red);':''}">Value: ${fmtD(c.sv)}</span>`;
+    if(itemFlag) h+=`<span style="color:var(--red);font-size:11px;">(${fmtD(itemGap)})</span>`;
     h+=`<span>${si.contractQty} ${si.unit}</span>`;
     h+=`</div></div>`;
 
@@ -1647,10 +1713,10 @@ function renderSOVBuilder(){
 
       // Activities list
       h+=`<div style="margin-top:10px;font-family:Oswald;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Assigned Activities</div>`;
-      if(acts.length===0){
+      if(c.acts.length===0){
         h+=`<div style="padding:12px;text-align:center;color:var(--text-light);font-style:italic;font-size:12px;">No activities assigned — move activities here from another pay item</div>`;
       }else{
-        acts.forEach(a=>{
+        c.acts.forEach(a=>{
           const actIdx=job.activities.indexOf(a);
           h+=`<div class="sov-act-row">`;
           h+=`<span class="act-desc">${a.code} — ${a.description||'(no desc)'}</span>`;
@@ -1670,25 +1736,6 @@ function renderSOVBuilder(){
     }
     h+='</div>'; // sov-bi-card
   });
-
-  // Unassigned activities (not in any SOV item)
-  const allAssigned=new Set();
-  sovItems.forEach(si=>si.activityIds.forEach(id=>allAssigned.add(id)));
-  const unassigned=job.activities.filter(a=>!allAssigned.has(a.code));
-  if(unassigned.length){
-    h+='<div class="sov-bi-card" style="border-color:var(--orange);">';
-    h+='<div class="sov-bi-header" style="background:#FFF8F0;">';
-    h+=`<div class="sov-bi-title" style="color:var(--orange);">⚠ Unassigned Activities (${unassigned.length})</div>`;
-    h+='</div><div class="sov-bi-body">';
-    unassigned.forEach(a=>{
-      h+=`<div class="sov-act-row" style="background:#FFF8F0;">`;
-      h+=`<span class="act-desc">${a.code} — ${a.description||'(no desc)'} <span style="color:var(--text-light);">[BI: ${a.biditem}]</span></span>`;
-      h+=`<span class="act-cost">${fmtD(a.directTotal)}</span>`;
-      h+=`<button class="sov-move-btn" onclick="showMoveActivity('${escJS(a.code)}',-1)">Assign</button>`;
-      h+=`</div>`;
-    });
-    h+='</div></div>';
-  }
 
   h+='</div>';
 
@@ -1950,7 +1997,7 @@ const CF_DEFAULTS={
   burdenTiming:'weekly',burdenLagPeriods:1,
   eqpTiming:'weekly',eqpLagPeriods:1,
   matTiming:'monthly',matLagPeriods:1,      // 1 = next month
-  subsTiming:'monthly',subsLagPeriods:2,    // 2 = two months after
+  subsTiming:'after_billing',subsLagPeriods:0, // paid when owner pays (billing + owner terms)
   truckingTiming:'weekly',truckingLagPeriods:1,
   billingFreq:'monthly',
   mobPct:0,
@@ -1982,19 +2029,29 @@ function renderCashFlowConfig(){
   if(!job){area.innerHTML='';return}
   const cf=getCFConfig(job);
 
-  const timingOpts=(val)=>`<option value="weekly" ${val==='weekly'?'selected':''}>Weekly</option><option value="biweekly" ${val==='biweekly'?'selected':''}>Bi-Weekly</option><option value="monthly" ${val==='monthly'?'selected':''}>Monthly</option>`;
+  const timingOpts=(val,showAfterBilling)=>{
+    let o=`<option value="weekly" ${val==='weekly'?'selected':''}>Weekly</option><option value="biweekly" ${val==='biweekly'?'selected':''}>Bi-Weekly</option><option value="monthly" ${val==='monthly'?'selected':''}>Monthly</option>`;
+    if(showAfterBilling)o+=`<option value="after_billing" ${val==='after_billing'?'selected':''}>When Owner Pays</option>`;
+    return o;
+  };
 
-  const periodLabel=(timing)=>timing==='weekly'?'weeks after':(timing==='biweekly'?'pay periods after':'months after');
+  const periodLabel=(timing)=>timing==='weekly'?'weeks after':(timing==='biweekly'?'pay periods after':(timing==='after_billing'?'+ extra months after owner pays':'months after'));
 
-  const costRow=(label,timingKey,lagKey)=>{
+  const costRow=(label,timingKey,lagKey,allowAfterBilling)=>{
     const timing=cf[timingKey]||'monthly';
+    const isAfterBilling=timing==='after_billing';
     return `<div class="cf-config-row">
       <div class="cf-cost-type">${label}</div>
       <div style="flex:1;display:flex;gap:8px;align-items:center;">
         <span style="font-size:12px;color:var(--text-light);min-width:60px;">Paid</span>
-        <select style="max-width:140px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;" onchange="updateCFConfig('${timingKey}',this.value);renderCashFlowConfig()">${timingOpts(timing)}</select>
-        <input type="number" min="0" max="12" value="${cf[lagKey]}" style="width:50px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:center;" onchange="updateCFConfig('${lagKey}',parseInt(this.value)||0)">
-        <span style="font-size:11px;color:var(--text-light);">${periodLabel(timing)} work performed</span>
+        <select style="max-width:160px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;" onchange="updateCFConfig('${timingKey}',this.value);renderCashFlowConfig()">${timingOpts(timing,allowAfterBilling)}</select>
+        ${isAfterBilling?
+          `<input type="number" min="0" max="6" value="${cf[lagKey]}" style="width:50px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:center;" onchange="updateCFConfig('${lagKey}',parseInt(this.value)||0)">
+          <span style="font-size:11px;color:var(--text-light);">${periodLabel(timing)}</span>`
+          :
+          `<input type="number" min="0" max="12" value="${cf[lagKey]}" style="width:50px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:center;" onchange="updateCFConfig('${lagKey}',parseInt(this.value)||0)">
+          <span style="font-size:11px;color:var(--text-light);">${periodLabel(timing)} work performed</span>`
+        }
       </div>
     </div>`;
   };
@@ -2004,12 +2061,12 @@ function renderCashFlowConfig(){
   h+='<p style="font-size:12px;color:var(--text-light);margin:0 0 12px;">Configure how each cost type gets paid out and when you receive payment from the owner. This drives the cash flow projection on the Job Cost Schedule tab.</p>';
 
   h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;margin-top:8px;">Cost Payout Timing</div>';
-  h+=costRow('Labor','laborTiming','laborLagDays');
-  h+=costRow('Burden','burdenTiming','burdenLagDays');
-  h+=costRow('Equipment','eqpTiming','eqpLagDays');
-  h+=costRow('Materials','matTiming','matLagDays');
-  h+=costRow('Subcontractors','subsTiming','subsLagDays');
-  h+=costRow('Trucking','truckingTiming','truckingLagDays');
+  h+=costRow('Labor','laborTiming','laborLagPeriods',false);
+  h+=costRow('Burden','burdenTiming','burdenLagPeriods',false);
+  h+=costRow('Equipment','eqpTiming','eqpLagPeriods',false);
+  h+=costRow('Materials','matTiming','matLagPeriods',false);
+  h+=costRow('Subcontractors','subsTiming','subsLagPeriods',true);
+  h+=costRow('Trucking','truckingTiming','truckingLagPeriods',false);
 
   h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin:16px 0 8px;">Revenue & Billing</div>';
   h+='<div class="cf-config-grid">';
@@ -2159,6 +2216,10 @@ function renderCashFlowProjection(){
       const weekStart=new Date(mid);weekStart.setDate(weekStart.getDate()-(day===0?6:day-1));
       const payDate=new Date(weekStart);payDate.setDate(payDate.getDate()+lag*14);
       return Math.min(monthIdx(payDate),months.length-1);
+    }else if(timing==='after_billing'){
+      // Paid when owner pays: incurred month + 1 (billing) + ownerPayTerms + extra lag
+      const ownerLag=cf.ownerPayTerms||1;
+      return Math.min(incurredMi+1+ownerLag+lag,months.length-1);
     }else{
       // Monthly: incurred in month X, paid out N months later
       return Math.min(incurredMi+lag,months.length-1);
