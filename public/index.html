@@ -756,7 +756,7 @@ function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?
     // Update job meta dates
     if(!isStaging){const job=Store.jobs[Store.activeJob];if(job){const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}}
   }
-  closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule();renderDashboard();saveJob(Store.activeJob)}}
+  closeEditRow();if(isStaging)renderStaging();else{renderBidItems();renderSchedule();renderDashboard();renderJobCostSchedule();saveJob(Store.activeJob)}}
 
 // ═══════════════════════════════════════════
 // DASHBOARD
@@ -1116,68 +1116,98 @@ function renderJobCostSchedule(){
   acts.forEach(a=>{grandHours+=(a.manHours||0);grandCost+=(a.directTotal||0)});
   const unmappedCount=acts.filter(a=>!a._barStart).length;
 
-  // Build table
-  const ganttWidth=Math.max(500,months.length*80);
-  let h='';
-  if(unmappedCount>0&&!sched.length){
-    h+='<div style="background:#FFF3CD;border:1px solid var(--orange);border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:13px;color:var(--text);">'+
-      '<strong style="color:var(--orange);">&#9888;</strong> Import a Smartsheet Schedule and map it to bid items to see activities on the timeline. '+
-      '<a href="#" onclick="document.querySelector(\'[data-tab=import]\').click();return false" style="color:var(--blue);">Go to Import</a></div>';
-  }else if(unmappedCount>0){
-    h+='<div style="background:#FFF3CD;border:1px solid var(--orange);border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:13px;color:var(--text);">'+
-      '<strong style="color:var(--orange);">&#9888;</strong> '+unmappedCount+' activities have no schedule dates (their bid items are not mapped to schedule tasks). '+
-      '<a href="#" onclick="document.querySelector(\'[data-tab=import]\').click();setTimeout(showMapping,200);return false" style="color:var(--blue);">Fix Mapping</a></div>';
+  // Split mapped vs unmapped activities
+  const mappedActs=acts.filter(a=>a._barStart);
+  const unmappedActs=acts.filter(a=>!a._barStart);
+
+  // Re-group only mapped activities by discipline for the main Gantt
+  const mappedGroups={};
+  mappedActs.forEach(a=>{
+    const d=a.discipline||getDiscipline(a.code);
+    const key=d.name;
+    if(!mappedGroups[key])mappedGroups[key]={name:key,color:d.color,activities:[]};
+    mappedGroups[key].activities.push(a);
+  });
+  const sortedMapped=Object.values(mappedGroups).sort((a,b)=>{
+    const aMin=Math.min(...a.activities.map(x=>x._barStart?x._barStart.getTime():Infinity));
+    const bMin=Math.min(...b.activities.map(x=>x._barStart?x._barStart.getTime():Infinity));
+    return aMin-bMin;
+  });
+  sortedMapped.forEach(g=>g.activities.sort((a,b)=>(a._barStart||Infinity)-(b._barStart||Infinity)));
+
+  // Helper: render a JCS activity row
+  function jcsRow(a,gColor,ganttWidth,months,totalMs,projStart,todayPct,actIdx){
+    const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
+    const qty=a.quantity?fmt(a.quantity):'—';
+    const units=a.units||'';
+    const rate=a.productivityRate?fmt(a.productivityRate)+(a.units?'/d':''):'—';
+    const hrs=a.manHours?fmt(a.manHours):'—';
+    const shortName=a.description||(a.code||'Activity');
+    const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
+    let r='<tr>';
+    r+=`<td class="jcs-task-name" title="${shortName}">${shortName}</td>`;
+    r+=`<td>${qty}${units?' '+units:''}</td>`;
+    r+=`<td>${rate}</td>`;
+    r+=`<td>${days}</td>`;
+    r+=`<td>${hrs}</td>`;
+    r+=`<td colspan="${months.length||1}" class="jcs-gantt-cell" style="min-width:${ganttWidth}px;">`;
+    months.forEach((mo,mi)=>{if(mi>0)r+=`<div style="position:absolute;left:${(mi/months.length)*100}%;top:0;bottom:0;width:1px;background:var(--ash);"></div>`});
+    if(todayPct>=0&&todayPct<=100)r+=`<div class="jcs-today-line" style="left:${todayPct}%;"></div>`;
+    if(a._barStart&&a._barEnd&&totalMs>0){
+      const barLeftPct=Math.max(0,(a._barStart.getTime()-projStart.getTime())/totalMs*100);
+      const barRightPct=Math.min(100,(a._barEnd.getTime()-projStart.getTime())/totalMs*100);
+      const barWPct=Math.max(barRightPct-barLeftPct,0.4);
+      r+=`<div class="jcs-gantt-bar" style="left:${barLeftPct}%;width:${barWPct}%;background:${gColor};">${barLabel}</div>`;
+    }
+    r+='</td>';
+    r+=`<td style="width:40px;text-align:center;"><button class="edit-btn" onclick="editRow('activity',${actIdx},false)" title="Edit">✎</button></td>`;
+    r+='</tr>';
+    return r;
   }
 
-  h+='<div class="jcs-table-wrap"><table class="jcs-table">';
+  // Build table
+  const ganttWidth=Math.max(500,months.length*80);
+  let h='<div class="jcs-table-wrap"><table class="jcs-table">';
   h+='<tr><th style="min-width:200px;">Task</th><th style="min-width:80px;">QTY</th><th style="min-width:60px;">Rate</th><th style="min-width:50px;">Days</th><th style="min-width:60px;">Hours</th>';
   h+=`<th colspan="${months.length||1}" style="min-width:${ganttWidth}px;padding:0;">`;
   h+='<div style="display:flex;width:100%;">';
   months.forEach((mo,mi)=>{
     h+=`<div style="flex:1;text-align:center;padding:10px 4px;border-left:${mi?'1px solid var(--ash)':'none'};font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--green);">${mo.label}</div>`;
   });
-  h+='</div></th></tr>';
+  h+='</div></th><th style="width:40px;"></th></tr>';
 
-  // Rows grouped by discipline
-  groups.forEach(g=>{
-    h+=`<tr class="jcs-disc-row"><td colspan="${6}" style="background:${g.color};border-left:4px solid ${g.color};">${g.name.toUpperCase()}</td></tr>`;
-
+  // Mapped rows grouped by discipline
+  sortedMapped.forEach(g=>{
+    h+=`<tr class="jcs-disc-row"><td colspan="${7}" style="background:${g.color};border-left:4px solid ${g.color};">${g.name.toUpperCase()}</td></tr>`;
     g.activities.forEach(a=>{
+      const actIdx=acts.indexOf(a);
+      h+=jcsRow(a,g.color,ganttWidth,months,totalMs,projStart,todayPct,actIdx);
+    });
+  });
+
+  // Unmapped section at bottom
+  if(unmappedActs.length){
+    h+=`<tr class="jcs-disc-row"><td colspan="${7}" style="background:var(--orange);border-left:4px solid var(--orange);">NEEDS SCHEDULE DATES (${unmappedActs.length})</td></tr>`;
+    unmappedActs.forEach(a=>{
+      const actIdx=acts.indexOf(a);
       const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
       const qty=a.quantity?fmt(a.quantity):'—';
       const units=a.units||'';
       const rate=a.productivityRate?fmt(a.productivityRate)+(a.units?'/d':''):'—';
       const hrs=a.manHours?fmt(a.manHours):'—';
       const shortName=a.description||(a.code||'Activity');
-      const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
-
-      h+=`<tr>`;
-      h+=`<td class="jcs-task-name" title="${shortName}">${shortName}</td>`;
+      const bi=a.biditem||'—';
+      h+=`<tr style="background:#FFF8F0;">`;
+      h+=`<td class="jcs-task-name" title="${shortName}" style="color:var(--orange);">${shortName}</td>`;
       h+=`<td>${qty}${units?' '+units:''}</td>`;
       h+=`<td>${rate}</td>`;
       h+=`<td>${days}</td>`;
       h+=`<td>${hrs}</td>`;
-
-      h+=`<td colspan="${months.length||1}" class="jcs-gantt-cell" style="min-width:${ganttWidth}px;">`;
-      // Month grid lines
-      months.forEach((mo,mi)=>{
-        if(mi>0) h+=`<div style="position:absolute;left:${(mi/months.length)*100}%;top:0;bottom:0;width:1px;background:var(--ash);"></div>`;
-      });
-      // Today line
-      if(todayPct>=0&&todayPct<=100){
-        h+=`<div class="jcs-today-line" style="left:${todayPct}%;"></div>`;
-      }
-      // Bar — positioned by schedule dates
-      if(a._barStart&&a._barEnd&&totalMs>0){
-        const barLeftPct=Math.max(0,(a._barStart.getTime()-projStart.getTime())/totalMs*100);
-        const barRightPct=Math.min(100,(a._barEnd.getTime()-projStart.getTime())/totalMs*100);
-        const barWPct=Math.max(barRightPct-barLeftPct,0.4);
-        h+=`<div class="jcs-gantt-bar" style="left:${barLeftPct}%;width:${barWPct}%;background:${g.color};">${barLabel}</div>`;
-      }
-      h+='</td>';
+      h+=`<td colspan="${months.length||1}" style="padding:8px 12px;font-size:12px;color:var(--text-light);font-style:italic;">Bid Item ${bi} — not mapped to schedule</td>`;
+      h+=`<td style="width:40px;text-align:center;"><button class="edit-btn" onclick="editRow('activity',${actIdx},false)" title="Edit">✎</button></td>`;
       h+='</tr>';
     });
-  });
+  }
 
   h+='</table>';
   h+=`<div class="jcs-footer">`;
