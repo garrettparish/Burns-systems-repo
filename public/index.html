@@ -1522,19 +1522,29 @@ function renderSOVBuilder(){
   const job=Store.jobs[Store.activeJob];
   if(!job){area.innerHTML='';return}
   if(!job.sovItems){
-    // Initialize SOV items from current bid items
-    job.sovItems=job.bidItems.map(bi=>({
-      id:bi.biditem,
-      clientItemNo:'',
-      description:bi.description||'',
-      contractQty:bi.bidQuantity||0,
-      unit:bi.units||'LS',
-      unitPrice:bi.unitPrice||0,
-      retainagePct:10,
-      pctCompleteMethod:'cost', // 'cost' or 'qty'
-      activityIds:job.activities.filter(a=>String(a.biditem)===String(bi.biditem)).map(a=>a.code),
-      _original:true
-    }));
+    // Initialize SOV items from current bid items, preserving OH & profit ratios
+    job.sovItems=job.bidItems.map(bi=>{
+      const dc=bi.directTotal||0;
+      const oh=(bi.indirects||0)+(bi.addonBond||0);
+      const profit=bi.markup||0;
+      const ohPct=dc>0?oh/dc:0;
+      const profitPct=dc>0?profit/dc:0;
+      return {
+        id:bi.biditem,
+        clientItemNo:bi.clientBidNum||'',
+        description:bi.description||'',
+        contractQty:bi.bidQuantity||0,
+        unit:bi.units||'LS',
+        unitPrice:bi.unitPrice||0,
+        retainagePct:10,
+        pctCompleteMethod:'cost',
+        activityIds:job.activities.filter(a=>String(a.biditem)===String(bi.biditem)).map(a=>a.code),
+        ohPct:ohPct,       // overhead as % of direct cost
+        profitPct:profitPct, // profit as % of direct cost
+        _original:true,
+        _autoPrice:true     // auto-calculate unit price from costs
+      };
+    });
   }
 
   const sovItems=job.sovItems;
@@ -1552,38 +1562,52 @@ function renderSOVBuilder(){
   h+='</div></div>';
 
   // Summary row
-  let totalScheduledValue=0, totalDirectCost=0;
-  sovItems.forEach(si=>{
-    const acts=si.activityIds.map(id=>actMap[id]).filter(Boolean);
-    const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
-    const sv=si.contractQty*si.unitPrice;
-    totalDirectCost+=dc;
-    totalScheduledValue+=sv;
-  });
-  h+=`<div style="display:flex;gap:16px;margin-bottom:12px;font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;">`;
-  h+=`<span>${sovItems.length} Pay Items</span>`;
-  h+=`<span style="color:var(--green);">Direct Cost: ${fmtD(totalDirectCost)}</span>`;
-  h+=`<span style="color:var(--blue);">Scheduled Value: ${fmtD(totalScheduledValue)}</span>`;
-  h+=`</div>`;
-
-  // Render each SOV item as a card
-  sovItems.forEach((si,idx)=>{
+  // Helper: compute full cost breakdown for an SOV item
+  function sovCalc(si){
     const acts=si.activityIds.map(id=>actMap[id]).filter(Boolean);
     const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
     const labor=acts.reduce((s,a)=>s+(a.labor||0),0);
     const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
     const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
     const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
-    const sv=si.contractQty*si.unitPrice;
+    const oh=dc*(si.ohPct||0);
+    const profit=dc*(si.profitPct||0);
+    const total=dc+oh+profit;
+    const qty=si.contractQty||1;
+    const unitPrice=si._autoPrice?Math.round(total/qty*100)/100:si.unitPrice;
+    const sv=qty*unitPrice;
+    return {acts,dc,labor,mat,subs,eqp,oh,profit,total,unitPrice,sv};
+  }
+
+  let totalScheduledValue=0, totalDirectCost=0, totalOH=0, totalProfit=0;
+  sovItems.forEach(si=>{
+    const c=sovCalc(si);
+    totalDirectCost+=c.dc;
+    totalOH+=c.oh;
+    totalProfit+=c.profit;
+    totalScheduledValue+=c.sv;
+  });
+  h+=`<div style="display:flex;gap:16px;margin-bottom:12px;font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;flex-wrap:wrap;">`;
+  h+=`<span>${sovItems.length} Pay Items</span>`;
+  h+=`<span>Direct: ${fmtD(totalDirectCost)}</span>`;
+  h+=`<span>OH: ${fmtD(totalOH)}</span>`;
+  h+=`<span>Profit: ${fmtD(totalProfit)}</span>`;
+  h+=`<span style="color:var(--green);font-weight:600;">Scheduled Value: ${fmtD(totalScheduledValue)}</span>`;
+  h+=`</div>`;
+
+  // Render each SOV item as a card
+  sovItems.forEach((si,idx)=>{
+    const c=sovCalc(si);
     const isOpen=_sovExpandedBIs[idx];
 
     h+='<div class="sov-bi-card">';
     h+=`<div class="sov-bi-header ${isOpen?'open':''}" onclick="toggleSOVCard(${idx})">`;
     h+=`<div class="sov-bi-title"><span style="color:var(--orange);">${si.clientItemNo||si.id}</span> — ${si.description||'(untitled)'}</div>`;
     h+=`<div class="sov-bi-meta">`;
-    h+=`<span>${acts.length} activities</span>`;
-    h+=`<span>Cost: ${fmtD(dc)}</span>`;
-    h+=`<span>Value: ${fmtD(sv)}</span>`;
+    h+=`<span>${c.acts.length} activities</span>`;
+    h+=`<span>Direct: ${fmtD(c.dc)}</span>`;
+    h+=`<span>OH+P: ${fmtD(c.oh+c.profit)}</span>`;
+    h+=`<span style="font-weight:600;">Value: ${fmtD(c.sv)}</span>`;
     h+=`<span>${si.contractQty} ${si.unit}</span>`;
     h+=`</div></div>`;
 
@@ -1594,21 +1618,31 @@ function renderSOVBuilder(){
       h+='<div class="sov-billing-grid">';
       h+=`<div><label>Client Item #</label><input type="text" value="${esc(si.clientItemNo)}" onchange="updateSOVField(${idx},'clientItemNo',this.value)"></div>`;
       h+=`<div><label>Description</label><input type="text" value="${esc(si.description)}" onchange="updateSOVField(${idx},'description',this.value)"></div>`;
-      h+=`<div><label>Contract Qty</label><input type="number" value="${si.contractQty}" onchange="updateSOVField(${idx},'contractQty',parseFloat(this.value)||0)"></div>`;
+      h+=`<div><label>Contract Qty</label><input type="number" value="${si.contractQty}" onchange="updateSOVField(${idx},'contractQty',parseFloat(this.value)||0);renderSOVBuilder()"></div>`;
       h+=`<div><label>Unit</label><input type="text" value="${esc(si.unit)}" onchange="updateSOVField(${idx},'unit',this.value)"></div>`;
-      h+=`<div><label>Unit Price</label><input type="number" step="0.01" value="${si.unitPrice}" onchange="updateSOVField(${idx},'unitPrice',parseFloat(this.value)||0)"></div>`;
-      h+=`<div><label>Scheduled Value</label><input type="text" value="${fmtD(sv)}" disabled style="background:#f5f5f5;"></div>`;
+      h+=`<div><label>Unit Price (auto)</label><input type="number" step="0.01" value="${c.unitPrice}" ${si._autoPrice?'disabled style="background:#f0f7f0;font-weight:600;"':''} onchange="updateSOVField(${idx},'unitPrice',parseFloat(this.value)||0);updateSOVField(${idx},'_autoPrice',false)"></div>`;
+      h+=`<div><label>Scheduled Value</label><input type="text" value="${fmtD(c.sv)}" disabled style="background:#f5f5f5;font-weight:600;"></div>`;
+      h+=`<div><label>OH % of Direct</label><input type="number" step="0.1" min="0" value="${Math.round((si.ohPct||0)*1000)/10}" onchange="updateSOVField(${idx},'ohPct',parseFloat(this.value)/100||0);renderSOVBuilder()"> </div>`;
+      h+=`<div><label>Profit % of Direct</label><input type="number" step="0.1" min="0" value="${Math.round((si.profitPct||0)*1000)/10}" onchange="updateSOVField(${idx},'profitPct',parseFloat(this.value)/100||0);renderSOVBuilder()"></div>`;
       h+=`<div><label>Retainage %</label><input type="number" step="0.5" min="0" max="100" value="${si.retainagePct}" onchange="updateSOVField(${idx},'retainagePct',parseFloat(this.value)||0)"></div>`;
       h+=`<div><label>% Complete Method</label><select onchange="updateSOVField(${idx},'pctCompleteMethod',this.value)"><option value="cost" ${si.pctCompleteMethod==='cost'?'selected':''}>Cost-Based</option><option value="qty" ${si.pctCompleteMethod==='qty'?'selected':''}>Qty-Based</option></select></div>`;
+      if(si._autoPrice){
+        h+=`<div><label>&nbsp;</label><button class="btn-secondary btn-sm" style="font-size:10px;padding:4px 8px;margin-top:2px;" onclick="updateSOVField(${idx},'_autoPrice',false);renderSOVBuilder()">Override Price</button></div>`;
+      }else{
+        h+=`<div><label>&nbsp;</label><button class="btn-secondary btn-sm" style="font-size:10px;padding:4px 8px;margin-top:2px;color:var(--green);border-color:var(--green);" onclick="updateSOVField(${idx},'_autoPrice',true);renderSOVBuilder()">Auto Price</button></div>`;
+      }
       h+='</div>';
 
       // Cost rollup summary
       h+=`<div style="margin-top:10px;padding:8px 12px;background:var(--ash);border-radius:6px;font-size:12px;display:flex;gap:16px;flex-wrap:wrap;">`;
-      h+=`<span><strong>Direct:</strong> ${fmtD(dc)}</span>`;
-      h+=`<span>Labor: ${fmtD(labor)}</span>`;
-      h+=`<span>Material: ${fmtD(mat)}</span>`;
-      h+=`<span>Subs: ${fmtD(subs)}</span>`;
-      h+=`<span>Equipment: ${fmtD(eqp)}</span>`;
+      h+=`<span><strong>Direct:</strong> ${fmtD(c.dc)}</span>`;
+      h+=`<span>Labor: ${fmtD(c.labor)}</span>`;
+      h+=`<span>Material: ${fmtD(c.mat)}</span>`;
+      h+=`<span>Subs: ${fmtD(c.subs)}</span>`;
+      h+=`<span>Equipment: ${fmtD(c.eqp)}</span>`;
+      h+=`<span style="color:var(--blue);"><strong>OH:</strong> ${fmtD(c.oh)} (${Math.round((si.ohPct||0)*1000)/10}%)</span>`;
+      h+=`<span style="color:var(--green);"><strong>Profit:</strong> ${fmtD(c.profit)} (${Math.round((si.profitPct||0)*1000)/10}%)</span>`;
+      h+=`<span style="font-weight:700;">Total: ${fmtD(c.total)}</span>`;
       h+=`</div>`;
 
       // Activities list
@@ -1700,17 +1734,26 @@ function addNewSOVItem(){
   let newId='PAY-'+(job.sovItems.length+1);
   let c=job.sovItems.length+1;
   while(existingIds.includes(newId)){c++;newId='PAY-'+c}
+  // Default OH/profit ratios from job average
+  const totalDC=job.activities.reduce((s,a)=>s+(a.directTotal||0),0);
+  const totalOH=job.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
+  const totalPr=job.bidItems.reduce((s,b)=>s+(b.markup||0),0);
+  const avgOH=totalDC>0?totalOH/totalDC:0;
+  const avgPr=totalDC>0?totalPr/totalDC:0;
   job.sovItems.push({
     id:newId,
     clientItemNo:'',
     description:'',
-    contractQty:0,
+    contractQty:1,
     unit:'LS',
     unitPrice:0,
     retainagePct:10,
     pctCompleteMethod:'cost',
     activityIds:[],
-    _original:false
+    ohPct:avgOH,
+    profitPct:avgPr,
+    _original:false,
+    _autoPrice:true
   });
   _sovExpandedBIs[job.sovItems.length-1]=true;
   renderSOVBuilder();
@@ -1847,12 +1890,12 @@ async function saveSOVItems(){
   job.bidItems=job.sovItems.map(si=>{
     const acts=si.activityIds.map(id=>actMap[id]).filter(Boolean);
     const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
-    const labor=acts.reduce((s,a)=>s+(a.labor||0),0);
-    const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
-    const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
-    const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
-    const sv=si.contractQty*si.unitPrice;
-    const margin=sv-dc;
+    const oh=dc*(si.ohPct||0);
+    const profit=dc*(si.profitPct||0);
+    const total=dc+oh+profit;
+    const qty=si.contractQty||1;
+    const unitPrice=si._autoPrice?Math.round(total/qty*100)/100:si.unitPrice;
+    const sv=qty*unitPrice;
     // Find existing bid item for discipline override
     const existBI=job.bidItems.find(b=>String(b.biditem)===String(si.id));
     return {
@@ -1860,25 +1903,27 @@ async function saveSOVItems(){
       description:si.description,
       units:si.unit,
       bidQuantity:si.contractQty,
-      unitPrice:si.unitPrice,
-      labor:labor,
+      unitPrice:unitPrice,
+      labor:acts.reduce((s,a)=>s+(a.labor||0),0),
       permMat:acts.reduce((s,a)=>s+(a.permMat||0),0),
       constMat:acts.reduce((s,a)=>s+(a.constMat||0),0),
-      subs:subs,
+      subs:acts.reduce((s,a)=>s+(a.subs||0),0),
       eqpOper:acts.reduce((s,a)=>s+(a.eqpOper||0),0),
       compEqp:acts.reduce((s,a)=>s+(a.compEqp||0),0),
       outsideEqp:acts.reduce((s,a)=>s+(a.outsideEqp||0),0),
       directTotal:dc,
-      indirects:existBI?existBI.indirects||0:0,
-      addonBond:existBI?existBI.addonBond||0:0,
-      markup:margin>0?margin:0,
+      indirects:Math.round(oh*100)/100,
+      addonBond:0,
+      markup:Math.round(profit*100)/100,
       takeoffTotal:sv,
       _disciplineOverride:existBI?existBI._disciplineOverride:null,
       _sovBilling:{
         clientItemNo:si.clientItemNo,
         retainagePct:si.retainagePct,
         pctCompleteMethod:si.pctCompleteMethod,
-        scheduledValue:sv
+        scheduledValue:sv,
+        ohPct:si.ohPct,
+        profitPct:si.profitPct
       }
     };
   });
@@ -1901,21 +1946,34 @@ async function saveSOVItems(){
 // CASH FLOW — CONFIG (Project Set Up tab)
 // ═══════════════════════════════════════════
 const CF_DEFAULTS={
-  laborTiming:'weekly',laborLagDays:7,
-  burdenTiming:'weekly',burdenLagDays:7,
-  eqpTiming:'weekly',eqpLagDays:7,
-  matTiming:'monthly',matLagDays:30,
-  subsTiming:'when_paid',subsLagDays:45,
-  truckingTiming:'weekly',truckingLagDays:7,
+  laborTiming:'weekly',laborLagPeriods:1,   // 1 = next week
+  burdenTiming:'weekly',burdenLagPeriods:1,
+  eqpTiming:'weekly',eqpLagPeriods:1,
+  matTiming:'monthly',matLagPeriods:1,      // 1 = next month
+  subsTiming:'monthly',subsLagPeriods:2,    // 2 = two months after
+  truckingTiming:'weekly',truckingLagPeriods:1,
   billingFreq:'monthly',
   mobPct:0,
-  ownerPayTerms:30,
+  ownerPayTerms:1,  // 1 month after billing
   retainagePct:10
 };
 
 function getCFConfig(job){
   if(!job.cashFlowConfig)job.cashFlowConfig={...CF_DEFAULTS};
-  return job.cashFlowConfig;
+  const c=job.cashFlowConfig;
+  // Migrate old day-based lag to period-based if needed
+  if(c.laborLagDays!==undefined&&c.laborLagPeriods===undefined){
+    c.laborLagPeriods=Math.max(1,Math.round(c.laborLagDays/7));
+    c.burdenLagPeriods=Math.max(1,Math.round((c.burdenLagDays||7)/7));
+    c.eqpLagPeriods=Math.max(1,Math.round((c.eqpLagDays||7)/7));
+    c.matLagPeriods=Math.max(1,Math.round((c.matLagDays||30)/30));
+    c.subsLagPeriods=Math.max(1,Math.round((c.subsLagDays||45)/30));
+    c.truckingLagPeriods=Math.max(1,Math.round((c.truckingLagDays||7)/7));
+    if(c.ownerPayTerms>6)c.ownerPayTerms=Math.max(1,Math.round(c.ownerPayTerms/30));
+    delete c.laborLagDays;delete c.burdenLagDays;delete c.eqpLagDays;
+    delete c.matLagDays;delete c.subsLagDays;delete c.truckingLagDays;
+  }
+  return c;
 }
 
 function renderCashFlowConfig(){
@@ -1924,16 +1982,19 @@ function renderCashFlowConfig(){
   if(!job){area.innerHTML='';return}
   const cf=getCFConfig(job);
 
-  const timingOpts=(val)=>`<option value="weekly" ${val==='weekly'?'selected':''}>Weekly</option><option value="biweekly" ${val==='biweekly'?'selected':''}>Bi-Weekly</option><option value="monthly" ${val==='monthly'?'selected':''}>Monthly</option><option value="when_paid" ${val==='when_paid'?'selected':''}>When Paid</option>`;
+  const timingOpts=(val)=>`<option value="weekly" ${val==='weekly'?'selected':''}>Weekly</option><option value="biweekly" ${val==='biweekly'?'selected':''}>Bi-Weekly</option><option value="monthly" ${val==='monthly'?'selected':''}>Monthly</option>`;
+
+  const periodLabel=(timing)=>timing==='weekly'?'weeks after':(timing==='biweekly'?'pay periods after':'months after');
 
   const costRow=(label,timingKey,lagKey)=>{
+    const timing=cf[timingKey]||'monthly';
     return `<div class="cf-config-row">
       <div class="cf-cost-type">${label}</div>
       <div style="flex:1;display:flex;gap:8px;align-items:center;">
-        <select style="max-width:140px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;" onchange="updateCFConfig('${timingKey}',this.value)">${timingOpts(cf[timingKey])}</select>
-        <label style="font-size:11px;white-space:nowrap;margin:0;">Lag:</label>
-        <input type="number" min="0" max="120" value="${cf[lagKey]}" style="width:60px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:center;" onchange="updateCFConfig('${lagKey}',parseInt(this.value)||0)">
-        <span style="font-size:11px;color:var(--text-light);">days after activity</span>
+        <span style="font-size:12px;color:var(--text-light);min-width:60px;">Paid</span>
+        <select style="max-width:140px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;" onchange="updateCFConfig('${timingKey}',this.value);renderCashFlowConfig()">${timingOpts(timing)}</select>
+        <input type="number" min="0" max="12" value="${cf[lagKey]}" style="width:50px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:center;" onchange="updateCFConfig('${lagKey}',parseInt(this.value)||0)">
+        <span style="font-size:11px;color:var(--text-light);">${periodLabel(timing)} work performed</span>
       </div>
     </div>`;
   };
@@ -1954,7 +2015,7 @@ function renderCashFlowConfig(){
   h+='<div class="cf-config-grid">';
   h+=`<div><label>Billing Frequency</label><select onchange="updateCFConfig('billingFreq',this.value)"><option value="monthly" ${cf.billingFreq==='monthly'?'selected':''}>Monthly</option><option value="milestone" ${cf.billingFreq==='milestone'?'selected':''}>Milestone</option></select></div>`;
   h+=`<div><label>Mobilization / Front-Load %</label><input type="number" min="0" max="50" step="0.5" value="${cf.mobPct}" onchange="updateCFConfig('mobPct',parseFloat(this.value)||0)"></div>`;
-  h+=`<div><label>Owner Payment Terms (days)</label><input type="number" min="0" max="120" value="${cf.ownerPayTerms}" onchange="updateCFConfig('ownerPayTerms',parseInt(this.value)||0)"></div>`;
+  h+=`<div><label>Owner Pays (months after billing)</label><input type="number" min="0" max="6" value="${cf.ownerPayTerms}" onchange="updateCFConfig('ownerPayTerms',parseInt(this.value)||0)"></div>`;
   h+=`<div><label>Retainage %</label><input type="number" min="0" max="20" step="0.5" value="${cf.retainagePct}" onchange="updateCFConfig('retainagePct',parseFloat(this.value)||0)"></div>`;
   h+='</div>';
 
@@ -2049,9 +2110,9 @@ function renderCashFlowProjection(){
 
   let projStart=new Date(Math.min(...allStarts));
   let projEnd=new Date(Math.max(...allEnds));
-  // Extend end by max lag to capture all cash outflows
-  const maxLag=Math.max(cf.laborLagDays,cf.burdenLagDays,cf.eqpLagDays,cf.matLagDays,cf.subsLagDays,cf.truckingLagDays,cf.ownerPayTerms);
-  projEnd=new Date(projEnd.getTime()+maxLag*86400000+60*86400000);
+  // Extend end to capture lagged payouts (max periods × 30 days + buffer)
+  const maxLagPeriods=Math.max(cf.laborLagPeriods||1,cf.burdenLagPeriods||1,cf.eqpLagPeriods||1,cf.matLagPeriods||1,cf.subsLagPeriods||2,cf.truckingLagPeriods||1,cf.ownerPayTerms||1);
+  projEnd=new Date(projEnd.getTime()+(maxLagPeriods+2)*30*86400000);
 
   // Build monthly buckets
   const months=[];
@@ -2074,29 +2135,52 @@ function renderCashFlowProjection(){
     return 0;
   }
 
-  // Helper: get payout date for a cost incurred at actMidDate with given timing/lag
-  function payoutDate(actStart,actEnd,timing,lagDays){
+  // Helper: compute payout month index based on period-boundary logic
+  // "N periods after work performed" means:
+  //   weekly:   find the week the activity midpoint falls in, then N weeks later → that month
+  //   biweekly: same but 2-week periods
+  //   monthly:  find the month the activity falls in, then N months later
+  function payoutMonthIdx(actStart,actEnd,timing,lagPeriods){
     const mid=new Date((actStart.getTime()+actEnd.getTime())/2);
-    return new Date(mid.getTime()+lagDays*86400000);
+    const incurredMi=monthIdx(mid);
+    if(incurredMi<0)return -1;
+    const lag=lagPeriods||1;
+    if(timing==='weekly'){
+      // Weekly payroll: activity happens in some week, paid N weeks later
+      // Convert weeks to months: figure out the actual calendar date
+      // Get the Monday of the week the work happened
+      const day=mid.getDay();
+      const weekStart=new Date(mid);weekStart.setDate(weekStart.getDate()-(day===0?6:day-1));
+      // Add N weeks
+      const payDate=new Date(weekStart);payDate.setDate(payDate.getDate()+lag*7);
+      return Math.min(monthIdx(payDate),months.length-1);
+    }else if(timing==='biweekly'){
+      const day=mid.getDay();
+      const weekStart=new Date(mid);weekStart.setDate(weekStart.getDate()-(day===0?6:day-1));
+      const payDate=new Date(weekStart);payDate.setDate(payDate.getDate()+lag*14);
+      return Math.min(monthIdx(payDate),months.length-1);
+    }else{
+      // Monthly: incurred in month X, paid out N months later
+      return Math.min(incurredMi+lag,months.length-1);
+    }
   }
 
   // Spread each activity's costs into monthly buckets based on payout timing
   acts.forEach(a=>{
     if(!a._cfStart||!a._cfEnd)return;
-    const pd=(timing,lag)=>payoutDate(a._cfStart,a._cfEnd,timing,lag);
 
-    const addCost=(bucket,field,amount)=>{
-      const d=pd(cf[field+'Timing']||'monthly',cf[field+'LagDays']||30);
-      const mi=monthIdx(d);
-      if(mi>=0&&mi<costBuckets.length){costBuckets[mi][bucket]+=(amount||0);costBuckets[mi].total+=(amount||0)}
+    const addCost=(bucket,timingKey,lagKey,amount)=>{
+      if(!amount)return;
+      const mi=payoutMonthIdx(a._cfStart,a._cfEnd,cf[timingKey]||'monthly',cf[lagKey]||1);
+      if(mi>=0&&mi<costBuckets.length){costBuckets[mi][bucket]+=amount;costBuckets[mi].total+=amount}
     };
 
-    addCost('labor','labor',a.labor||0);
-    addCost('burden','burden',a.burden||0);
-    addCost('eqp','eqp',(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0));
-    addCost('mat','mat',(a.permMat||0)+(a.constMat||0));
-    addCost('subs','subs',a.subs||0);
-    addCost('trucking','trucking',a.trucking||0);
+    addCost('labor','laborTiming','laborLagPeriods',a.labor||0);
+    addCost('burden','burdenTiming','burdenLagPeriods',a.burden||0);
+    addCost('eqp','eqpTiming','eqpLagPeriods',(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0));
+    addCost('mat','matTiming','matLagPeriods',(a.permMat||0)+(a.constMat||0));
+    addCost('subs','subsTiming','subsLagPeriods',a.subs||0);
+    addCost('trucking','truckingTiming','truckingLagPeriods',a.trucking||0);
   });
 
   // Revenue: monthly billing based on cost incurred that month (cost-based % complete)
@@ -2104,16 +2188,16 @@ function renderCashFlowProjection(){
   const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
   const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
   const retPct=cf.retainagePct/100;
-  const ownerLagMonths=Math.ceil(cf.ownerPayTerms/30);
+  const ownerLagMonths=cf.ownerPayTerms||1;
 
-  // Mob payment in first month
+  // Mob payment: first billing cycle + owner lag
   if(cf.mobPct>0){
     const mobAmt=totalContract*(cf.mobPct/100)*(1-retPct);
     const mobMi=Math.min(ownerLagMonths,months.length-1);
     if(mobMi>=0)revBuckets[mobMi]+=mobAmt;
   }
 
-  // Monthly billings: revenue = cost incurred * ratio, minus retainage, delayed by owner terms
+  // Monthly billings: costs incurred in month → billed end of month → owner pays N months later
   costBuckets.forEach((cb,i)=>{
     if(cb.total<=0)return;
     const earnedRev=cb.total*costToRevRatio;
