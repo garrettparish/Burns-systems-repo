@@ -525,7 +525,7 @@ document.querySelectorAll('.nav-tab').forEach(tab=>{
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
     document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
     if(tab.dataset.tab==='global')renderGlobalView();
-    if(tab.dataset.tab==='job')renderActiveSubTab();
+    if(tab.dataset.tab==='job'){if(Store.activeJob){document.getElementById('subNav').style.display='flex';document.getElementById('noJobMsg').style.display='none';document.getElementById('editJobBtn').style.display='inline-block'}renderActiveSubTab()}
   });
 });
 
@@ -545,6 +545,12 @@ function switchToSubTab(sub){
   document.querySelector('.nav-tab[data-tab="job"]')?.classList.add('active');
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-job').classList.add('active');
+  // Ensure sub-nav is visible when a job is active
+  if(Store.activeJob){
+    document.getElementById('subNav').style.display='flex';
+    document.getElementById('noJobMsg').style.display='none';
+    document.getElementById('editJobBtn').style.display='inline-block';
+  }
   switchSubTab(sub);
 }
 
