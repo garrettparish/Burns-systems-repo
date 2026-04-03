@@ -23,6 +23,12 @@ body{font-family:'Source Serif 4',Georgia,serif;background:var(--bg);color:var(-
 .nav-tab .badge{background:var(--orange);color:var(--white);font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px}
 .panel{display:none;padding:24px;max-width:1400px;margin:0 auto}
 .panel.active{display:block}
+.sub-nav{display:flex;gap:0;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:3px;margin-bottom:16px;overflow-x:auto}
+.sub-tab{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--text-light);padding:8px 16px;cursor:pointer;border:none;background:none;border-radius:6px;transition:all .2s;white-space:nowrap}
+.sub-tab:hover{color:var(--text);background:var(--white)}
+.sub-tab.active{background:var(--green);color:var(--white);font-weight:600}
+.sub-panel{display:none}
+.sub-panel.active{display:block}
 .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
 .card-title{font-family:Oswald,sans-serif;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid var(--ash);display:flex;align-items:center;justify-content:space-between}
 .import-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
@@ -176,27 +182,81 @@ tr:hover{background:#FAF8F5}
 
 <div class="topbar">
   <div class="topbar-brand">Burns Dirt <span>Project Controls</span></div>
-  <div class="topbar-phase">Phase 1A — Import & Dashboard</div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div class="topbar-phase">Phase 1A</div>
+    <button onclick="switchToSubTab('setup')" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:18px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Project Set Up" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#9881;</button>
+  </div>
 </div>
 
 <div class="nav">
-  <button class="nav-tab active" data-tab="import">Project Set Up</button>
-  <button class="nav-tab" data-tab="dashboard">Job Dashboard</button>
   <button class="nav-tab" data-tab="global">Global View</button>
-  <button class="nav-tab" data-tab="biditems">Bid Items</button>
-  <button class="nav-tab" data-tab="schedule">Schedule</button>
-  <button class="nav-tab" data-tab="jcs">Job Cost Schedule</button>
+  <button class="nav-tab active" data-tab="job">Job Dashboard</button>
 </div>
 
-<!-- IMPORT -->
-<div id="panel-import" class="panel active">
-  <div class="job-bar">
+<!-- GLOBAL VIEW -->
+<div id="panel-global" class="panel"><div id="globalContent"></div></div>
+
+<!-- JOB DASHBOARD (with sub-tabs) -->
+<div id="panel-job" class="panel active">
+  <div class="job-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <label>Active Job:</label>
     <select class="job-select" id="jobSelect" onchange="switchJob()"><option value="">— Create or select a job —</option></select>
     <button class="btn-green btn-sm" onclick="showNewJobModal()">+ New Job</button>
     <button class="edit-btn" id="editJobBtn" onclick="showEditJobModal()" style="display:none;">Edit Job</button>
   </div>
-  <div id="importArea" style="display:none;">
+  <!-- Sub-tab nav -->
+  <div class="sub-nav" id="subNav" style="display:none;">
+    <button class="sub-tab active" data-sub="overview" onclick="switchSubTab('overview')">Overview</button>
+    <button class="sub-tab" data-sub="biditems" onclick="switchSubTab('biditems')">Pay Items</button>
+    <button class="sub-tab" data-sub="schedule" onclick="switchSubTab('schedule')">Schedule</button>
+    <button class="sub-tab" data-sub="jcs" onclick="switchSubTab('jcs')">Job Cost Schedule</button>
+    <button class="sub-tab" data-sub="cashflow" onclick="switchSubTab('cashflow')">Cash Flow</button>
+    <button class="sub-tab" data-sub="setup" onclick="switchSubTab('setup')">Project Set Up</button>
+  </div>
+
+  <!-- Sub-panel: Overview -->
+  <div id="sub-overview" class="sub-panel active">
+    <div id="dashContent"></div>
+  </div>
+
+  <!-- Sub-panel: Bid Items -->
+  <div id="sub-biditems" class="sub-panel">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+      <input type="text" class="search-input" placeholder="Search bid items..." id="bidSearch" oninput="renderBidItems()" style="max-width:320px;">
+    </div>
+    <div class="filter-bar" id="bidFilters"></div>
+    <div id="bidContent"></div>
+  </div>
+
+  <!-- Sub-panel: Schedule -->
+  <div id="sub-schedule" class="sub-panel">
+    <div id="schContent"></div>
+  </div>
+
+  <!-- Sub-panel: JCS -->
+  <div id="sub-jcs" class="sub-panel">
+    <div class="jcs-header">
+      <div class="jcs-title-bar">
+        <div class="jcs-title">JOB COST SCHEDULE (GANTT + COST)</div>
+        <div class="jcs-phase-badge">PHASE 1A</div>
+      </div>
+      <div class="jcs-subtitle">Precon builds, PM owns. Shows tasks on a Gantt timeline with costs/hours spread across weeks.</div>
+      <div class="jcs-actions">
+        <button class="jcs-btn" onclick="document.getElementById('file-activities').click()">Import HeavyBid</button>
+        <button class="jcs-btn" onclick="alert('Set Baseline coming in Phase 1B')">Set Baseline</button>
+        <button class="jcs-btn jcs-btn-push" onclick="alert('Push to Planner coming in Phase 1B')">Push to Planner</button>
+      </div>
+    </div>
+    <div id="jcsContent"></div>
+  </div>
+
+  <!-- Sub-panel: Cash Flow -->
+  <div id="sub-cashflow" class="sub-panel">
+    <div id="jcsCashFlowContent"></div>
+  </div>
+
+  <!-- Sub-panel: Project Set Up -->
+  <div id="sub-setup" class="sub-panel">
     <div style="background:#FFF3CD;border:1px solid #F26722;border-radius:8px;padding:10px 16px;margin-bottom:12px;font-size:13px;color:#363636;font-family:'Source Serif 4',serif;"><strong style="color:#F26722;">&#9888; Important:</strong> Make sure to convert HeavyBid exports from .xls to .xlsx before importing!</div>
     <div class="import-grid">
       <div class="import-zone" id="zone-activities" onclick="document.getElementById('file-activities').click()">
@@ -219,7 +279,7 @@ tr:hover{background:#FAF8F5}
       </div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-      <button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule → Bid Items</button>
+      <button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule &rarr; Bid Items</button>
       <button class="btn-primary" id="sovBtn" style="display:none;background:var(--orange);" onclick="toggleSOVBuilder()">Build SOV / Pay Items</button>
     </div>
     <div id="stagingArea" style="display:none;"></div>
@@ -238,63 +298,8 @@ tr:hover{background:#FAF8F5}
       <div id="importLog" style="font-size:13px;color:var(--text-light);max-height:200px;overflow-y:auto;"><em>Waiting for file uploads...</em></div>
     </div>
   </div>
+
   <div id="noJobMsg" class="empty-state"><h2>No Job Selected</h2><p>Create a new job to get started.</p></div>
-</div>
-
-<!-- DASHBOARD -->
-<div id="panel-dashboard" class="panel">
-  <div class="job-bar">
-    <label>Job:</label>
-    <select class="job-select" id="dashJobSelect" onchange="switchJobFromDash()"></select>
-    <button class="edit-btn" onclick="showEditJobModal()">Edit Job</button>
-  </div>
-  <div id="dashContent"></div>
-</div>
-
-<!-- GLOBAL VIEW -->
-<div id="panel-global" class="panel"><div id="globalContent"></div></div>
-
-<!-- BID ITEMS -->
-<div id="panel-biditems" class="panel">
-  <div class="job-bar">
-    <label>Job:</label>
-    <select class="job-select" id="bidJobSelect" onchange="switchJobFromBid()"></select>
-    <input type="text" class="search-input" placeholder="Search bid items..." id="bidSearch" oninput="renderBidItems()">
-  </div>
-  <div class="filter-bar" id="bidFilters"></div>
-  <div id="bidContent"></div>
-</div>
-
-<!-- SCHEDULE -->
-<div id="panel-schedule" class="panel">
-  <div class="job-bar">
-    <label>Job:</label>
-    <select class="job-select" id="schJobSelect" onchange="switchJobFromSch()"></select>
-  </div>
-  <div id="schContent"></div>
-</div>
-
-<!-- JOB COST SCHEDULE -->
-<div id="panel-jcs" class="panel">
-  <div class="jcs-header">
-    <div class="jcs-title-bar">
-      <div class="jcs-title">JOB COST SCHEDULE (GANTT + COST)</div>
-      <div class="jcs-phase-badge">PHASE 1A</div>
-    </div>
-    <div class="jcs-subtitle">Per-job view: Precon builds, PM owns. Shows tasks on a Gantt timeline with costs/hours spread across weeks.</div>
-    <div class="jcs-actions">
-      <select class="job-select" id="jcsJobSelect" onchange="switchJobFromJCS()"></select>
-      <div style="display:flex;border:1px solid rgba(255,255,255,.3);border-radius:6px;overflow:hidden;">
-        <button class="jcs-btn" id="jcsViewCost" style="border:none;border-radius:0;background:rgba(255,255,255,.15);font-weight:600;" onclick="switchJCSView('cost')">Cost Schedule</button>
-        <button class="jcs-btn" id="jcsViewCash" style="border:none;border-radius:0;" onclick="switchJCSView('cashflow')">Cash Flow</button>
-      </div>
-      <button class="jcs-btn" onclick="document.getElementById('file-activities').click()">Import HeavyBid</button>
-      <button class="jcs-btn" onclick="alert('Set Baseline coming in Phase 1B')">Set Baseline</button>
-      <button class="jcs-btn jcs-btn-push" onclick="alert('Push to Planner coming in Phase 1B')">Push to Planner</button>
-    </div>
-  </div>
-  <div id="jcsContent"></div>
-  <div id="jcsCashFlowContent" style="display:none;"></div>
 </div>
 
 <!-- JOB MODAL -->
@@ -434,7 +439,7 @@ async function loadJobs(){
   if(ids.length){
     Store.activeJob = ids[0];
     refreshJobSelectors();
-    updateImportPanel();
+    switchJob();
     log(`Loaded ${ids.length} job(s) from database.`);
   }
 }
@@ -526,17 +531,51 @@ const fmtPct=n=>n!=null?Number(n).toFixed(1)+'%':'—';
 const fmtDate=d=>{if(!d)return'—';const dt=d instanceof Date?d:new Date(d);return isNaN(dt)?'—':dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})};
 
 // ═══════════════════════════════════════════
-// NAV TABS
+// NAV TABS (two-tier: top nav + sub-tabs)
 // ═══════════════════════════════════════════
+let _activeSubTab='overview';
+
 document.querySelectorAll('.nav-tab').forEach(tab=>{
   tab.addEventListener('click',()=>{
     document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
     tab.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
     document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
-    ({dashboard:renderDashboard,global:renderGlobalView,biditems:renderBidItems,schedule:renderSchedule,jcs:renderJobCostSchedule})[tab.dataset.tab]?.();
+    if(tab.dataset.tab==='global')renderGlobalView();
+    if(tab.dataset.tab==='job')renderActiveSubTab();
   });
 });
+
+function switchSubTab(sub){
+  _activeSubTab=sub;
+  document.querySelectorAll('.sub-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelector('.sub-tab[data-sub="'+sub+'"]')?.classList.add('active');
+  document.querySelectorAll('.sub-panel').forEach(p=>p.classList.remove('active'));
+  const panel=document.getElementById('sub-'+sub);
+  if(panel)panel.classList.add('active');
+  renderActiveSubTab();
+}
+
+function switchToSubTab(sub){
+  // Navigate to Job Dashboard tab, then to a specific sub-tab
+  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelector('.nav-tab[data-tab="job"]')?.classList.add('active');
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('panel-job').classList.add('active');
+  switchSubTab(sub);
+}
+
+function renderActiveSubTab(){
+  const renderers={
+    overview:renderDashboard,
+    biditems:renderBidItems,
+    schedule:renderSchedule,
+    jcs:renderJobCostSchedule,
+    cashflow:renderCashFlowProjection,
+    setup:updateImportPanel
+  };
+  if(renderers[_activeSubTab])renderers[_activeSubTab]();
+}
 
 // Load saved jobs on startup
 loadJobs();
@@ -549,19 +588,25 @@ updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 let _editingJobId=null;
 function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('jobDeleteBtn').style.display='none';document.getElementById('newJobModal').classList.add('show')}
 function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('jobDeleteBtn').style.display='inline-block';document.getElementById('newJobModal').classList.add('show')}
-function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderDashboard();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
-function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();updateImportPanel();renderDashboard();log(`Job deleted: #${m.number} ${m.name}`)}
+function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
+function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();switchJob();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
-function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();updateImportPanel();log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
 
-function switchJob(){Store.activeJob=document.getElementById('jobSelect').value||null;syncSel('jobSelect');updateImportPanel()}
-function switchJobFromDash(){Store.activeJob=document.getElementById('dashJobSelect').value||null;syncSel('dashJobSelect');renderDashboard()}
-function switchJobFromBid(){Store.activeJob=document.getElementById('bidJobSelect').value||null;syncSel('bidJobSelect');renderBidItems()}
-function switchJobFromSch(){Store.activeJob=document.getElementById('schJobSelect').value||null;syncSel('schJobSelect');renderSchedule()}
-function switchJobFromJCS(){Store.activeJob=document.getElementById('jcsJobSelect').value||null;syncSel('jcsJobSelect');renderJobCostSchedule()}
-function syncSel(src){const v=Store.activeJob||'';['jobSelect','dashJobSelect','bidJobSelect','schJobSelect','jcsJobSelect'].forEach(id=>{if(id!==src)document.getElementById(id).value=v})}
-function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;['jobSelect','dashJobSelect','bidJobSelect','schJobSelect','jcsJobSelect'].forEach(id=>{document.getElementById(id).innerHTML=base;document.getElementById(id).value=Store.activeJob||''})}
-function updateImportPanel(){const has=!!Store.activeJob;document.getElementById('importArea').style.display=has?'block':'none';document.getElementById('noJobMsg').style.display=has?'none':'block';document.getElementById('editJobBtn').style.display=has?'inline-block':'none';if(has){updateImportZones();renderEditLog()}}
+function switchJob(){
+  Store.activeJob=document.getElementById('jobSelect').value||null;
+  const has=!!Store.activeJob;
+  document.getElementById('subNav').style.display=has?'flex':'none';
+  document.getElementById('noJobMsg').style.display=has?'none':'block';
+  document.getElementById('editJobBtn').style.display=has?'inline-block':'none';
+  // Hide all sub-panels when no job
+  if(!has)document.querySelectorAll('.sub-panel').forEach(p=>p.classList.remove('active'));
+  else{document.querySelectorAll('.sub-panel').forEach(p=>p.classList.remove('active'));document.getElementById('sub-'+_activeSubTab)?.classList.add('active')}
+  renderActiveSubTab();
+  updateNavBadges();
+}
+function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
+function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog()}
 function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(data&&data.length){zone.classList.add('loaded');st.className='status loaded';st.textContent=data.length+' records loaded'}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if(job.bidItems.length&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Bid Items'}else{mapBtn.style.display='none'}}
@@ -571,7 +616,7 @@ function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)retur
   const cfArea=document.getElementById('cashflowConfigArea');
   if(cfArea){if(job.activities.length&&job.schedule.length){cfArea.style.display='block';renderCashFlowConfig()}else{cfArea.style.display='none'}}
   updateNavBadges()}
-function updateNavBadges(){document.querySelectorAll('.nav-tab .badge').forEach(b=>b.remove());if(!Store.activeJob)return;const j=Store.jobs[Store.activeJob];const c={biditems:j.bidItems.length,schedule:j.schedule.length,jcs:j.activities.length};document.querySelectorAll('.nav-tab').forEach(t=>{if(c[t.dataset.tab]){const b=document.createElement('span');b.className='badge';b.textContent=c[t.dataset.tab];t.appendChild(b)}})}
+function updateNavBadges(){document.querySelectorAll('.sub-tab .badge').forEach(b=>b.remove());if(!Store.activeJob)return;const j=Store.jobs[Store.activeJob];const c={biditems:(j.sovItems||[]).length||j.bidItems.length,schedule:j.schedule.length,jcs:j.activities.length};document.querySelectorAll('.sub-tab').forEach(t=>{if(c[t.dataset.sub]){const b=document.createElement('span');b.className='badge';b.textContent=c[t.dataset.sub];t.appendChild(b)}})}
 function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${msg}</div>`;el.scrollTop=el.scrollHeight}
 
 // ═══════════════════════════════════════════
@@ -1105,7 +1150,7 @@ function renderDashboard(){
   const el=document.getElementById('dashContent');
   if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
   const job=Store.jobs[Store.activeJob],m=job.meta,bids=job.bidItems,acts=job.activities,sched=job.schedule;
-  if(!bids.length){el.innerHTML='<div class="empty-state"><h2>No Data Yet</h2><p>Import bid items from the Import tab.</p></div>';return}
+  if(!bids.length){el.innerHTML='<div class="empty-state"><h2>No Data Yet</h2><p>Import bid items from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>.</p></div>';return}
 
   const bidSummaries=bids.map(b=>{
     const disc=getBidItemDiscipline(b.biditem,acts,job);
@@ -1153,7 +1198,52 @@ function renderDashboard(){
   costCats.push({l:'Overhead',v:totalOverhead,c:'#E67E22'},{l:'Profit',v:totalProfit,c:'var(--teal)'});
   const maxC=Math.max(...costCats.map(c=>c.v),1);
 
-  let h='<div class="kpi-row">';
+  // ── Alerts & Status ──
+  const alerts=[];
+  if(!sched.length) alerts.push({icon:'&#128197;',msg:'No schedule imported yet',action:'setup',label:'Import'});
+  else if(!Object.keys(job.taskMap||{}).length) alerts.push({icon:'&#128279;',msg:'Schedule not mapped to bid items',action:'setup',label:'Map Now'});
+  if(!job.sovItems||!job.sovItems.length) alerts.push({icon:'&#128203;',msg:'SOV / Pay Items not built yet',action:'setup',label:'Build SOV'});
+  else{
+    // Check for unbilled activities
+    const sovActIds=new Set((job.sovItems||[]).flatMap(si=>si.activityIds||[]));
+    const unbilled=acts.filter(a=>!sovActIds.has(a.code)&&a.directTotal>0);
+    if(unbilled.length) alerts.push({icon:'&#9888;',msg:`${unbilled.length} activities (${fmtD(unbilled.reduce((s,a)=>s+a.directTotal,0))}) not assigned to any SOV item`,action:'setup',label:'Fix SOV'});
+  }
+  if(!job.cashFlowConfig) alerts.push({icon:'&#128176;',msg:'Cash flow timing not configured',action:'setup',label:'Configure'});
+
+  let h='';
+  if(alerts.length){
+    h+='<div style="margin-bottom:16px;">';
+    alerts.forEach(a=>{
+      h+=`<div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:#FFF8F0;border:1px solid var(--orange);border-radius:6px;margin-bottom:6px;font-size:13px;">`;
+      h+=`<span style="font-size:16px;">${a.icon}</span>`;
+      h+=`<span style="flex:1;color:var(--text);">${a.msg}</span>`;
+      h+=`<button class="edit-btn" style="border-color:var(--orange);color:var(--orange);" onclick="switchSubTab('${a.action}')">${a.label}</button>`;
+      h+=`</div>`;
+    });
+    h+='</div>';
+  }
+
+  // ── Quick Nav Cards ──
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:16px;">';
+  const navCards=[
+    {sub:'biditems',icon:'&#128209;',label:'Pay Items',count:(job.sovItems||[]).length||bids.length},
+    {sub:'schedule',icon:'&#128197;',label:'Schedule',count:sched.length},
+    {sub:'jcs',icon:'&#128202;',label:'Job Cost Schedule',count:acts.length},
+    {sub:'cashflow',icon:'&#128176;',label:'Cash Flow',count:sched.length&&acts.length?'View':'—'},
+    {sub:'setup',icon:'&#9881;',label:'Project Set Up',count:''}
+  ];
+  navCards.forEach(nc=>{
+    h+=`<div onclick="switchSubTab('${nc.sub}')" style="cursor:pointer;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;text-align:center;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,.04);" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='var(--border)'">`;
+    h+=`<div style="font-size:20px;margin-bottom:4px;">${nc.icon}</div>`;
+    h+=`<div style="font-family:Oswald;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);">${nc.label}</div>`;
+    if(nc.count)h+=`<div style="font-family:Oswald;font-size:16px;font-weight:600;color:var(--green);margin-top:2px;">${nc.count}</div>`;
+    h+=`</div>`;
+  });
+  h+='</div>';
+
+  // ── KPIs ──
+  h+='<div class="kpi-row">';
   h+=`<div class="kpi"><div class="kpi-value">${fmtD(contract)}</div><div class="kpi-label">Contract Total</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${fmtD(totalDirect)}</div><div class="kpi-label">Direct Cost</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${fmtD(totalOverhead)}</div><div class="kpi-label">Overhead · ${overheadPct.toFixed(1)}%</div></div>`;
@@ -1171,18 +1261,35 @@ function renderDashboard(){
   discList.forEach(d=>{h+=`<tr><td><span class="disc-dot" style="background:${d.color}"></span>${d.name}</td><td class="num">${d.count}</td><td class="num">${fmtD(d.direct)}</td><td class="num">${fmtD(d.overhead)}</td><td class="num">${fmtD(d.profit)}</td><td class="num">${fmtD(d.contract)}</td></tr>`});
   h+='</table></div></div>';
 
-  const sorted=[...bidSummaries].sort((a,b)=>(b.takeoffTotal||0)-(a.takeoffTotal||0));
-  h+='<div class="card"><div class="card-title">Bid Items</div><div class="table-wrap"><table>';
-  h+='<tr><th>#</th><th>Description</th><th>Discipline</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th></tr>';
-  sorted.forEach(b=>{
-    const bOH=(b.indirects||0)+(b.addonBond||0);
-    const bContract=b.takeoffTotal||0;
-    const pPct=bContract>0?((b.markup||0)/bContract*100):0;
-    const pClass=pPct<3?'negative':pPct<8?'':'positive';
-    h+=`<tr><td>${b.biditem}</td><td>${b.description}</td><td><span class="disc-dot" style="background:${b.discipline.color}"></span>${b.discipline.name}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(bOH)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(bContract)}</strong></td><td class="num ${pClass}">${fmtPct(pPct)}</td></tr>`;
-  });
-  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalDirect)}</td><td class="num">${fmtD(totalOverhead)}</td><td class="num">${fmtD(totalProfit)}</td><td class="num">${fmtD(contract)}</td><td class="num">${fmtPct(profitPct)}</td></tr>`;
-  h+='</table></div></div>';
+  // Pay Items (SOV) table — or fall back to raw bid items if SOV not built
+  const sovItems=job.sovItems||[];
+  if(sovItems.length){
+    h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Pay Items (SOV)<button class="edit-btn" onclick="switchSubTab(\'biditems\')">View All &rarr;</button></div><div class="table-wrap"><table>';
+    h+='<tr><th>#</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th></tr>';
+    let tSV=0,tDC2=0,tOHP=0;
+    sovItems.forEach((si,i)=>{
+      const c=calcSOVItem(si,acts);
+      const margin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
+      const mCls=margin<5?'negative':margin<10?'':'positive';
+      tSV+=c.sv;tDC2+=c.dc;tOHP+=c.oh+c.profit;
+      h+=`<tr><td>${si.clientItemNo||si.id}</td><td>${esc(si.description)}</td><td>${si.unit}</td><td class="num">${fmt(si.contractQty)}</td><td class="num">${fmtD2(c.unitPrice)}</td><td class="num"><strong>${fmtD(c.sv)}</strong></td><td class="num">${fmtD(c.dc)}</td><td class="num">${fmtD(c.oh+c.profit)}</td><td class="num ${mCls}">${fmtPct(margin)}</td></tr>`;
+    });
+    const tMargin=tSV>0?((tSV-tDC2)/tSV*100):0;
+    h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="5">TOTALS</td><td class="num">${fmtD(tSV)}</td><td class="num">${fmtD(tDC2)}</td><td class="num">${fmtD(tOHP)}</td><td class="num">${fmtPct(tMargin)}</td></tr>`;
+    h+='</table></div></div>';
+  } else {
+    const sorted=[...bidSummaries].sort((a,b)=>(b.takeoffTotal||0)-(a.takeoffTotal||0));
+    h+='<div class="card"><div class="card-title">Bid Items <span style="font-weight:300;font-size:12px;color:var(--orange);">(SOV not built yet)</span></div><div class="table-wrap"><table>';
+    h+='<tr><th>#</th><th>Description</th><th>Discipline</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct Cost</th><th class="num">Contract</th><th class="num">Profit %</th></tr>';
+    sorted.forEach(b=>{
+      const bContract=b.takeoffTotal||0;
+      const pPct=bContract>0?((b.markup||0)/bContract*100):0;
+      const pClass=pPct<3?'negative':pPct<8?'':'positive';
+      h+=`<tr><td>${b.biditem}</td><td>${b.description}</td><td><span class="disc-dot" style="background:${b.discipline.color}"></span>${b.discipline.name}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num"><strong>${fmtD(bContract)}</strong></td><td class="num ${pClass}">${fmtPct(pPct)}</td></tr>`;
+    });
+    h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalDirect)}</td><td class="num">${fmtD(contract)}</td><td class="num">${fmtPct(profitPct)}</td></tr>`;
+    h+='</table></div></div>';
+  }
 
   if(sched.length){h+='<div class="card"><div class="card-title">Schedule Overview</div>'+renderGantt(sched,m)+'</div>'}
   el.innerHTML=h;
@@ -1269,6 +1376,29 @@ function renderGlobalView(){
   ids.forEach(id=>{const j=Store.jobs[id],m=j.meta;const dc=j.bidItems.reduce((s,b)=>s+b.directTotal,0);const oh=j.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=j.bidItems.reduce((s,b)=>s+(b.markup||0),0);const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const ppC=pp<5?'negative':pp<10?'':'positive';const dt=m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—';
     h+=`<tr><td><strong>${m.name} #${m.number}</strong></td><td>${m.client||'—'}</td><td>${m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(dc)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(pr)}</td><td class="num"><strong>${fmtD(ct)}</strong></td><td class="num ${ppC}">${fmtPct(pp)}</td><td class="num">${j.bidItems.length}</td><td>${dt}</td></tr>`});
   h+='</table></div></div>';
+
+  // ─── Product Roadmap ───
+  h+='<div class="card"><div class="card-title">Product Roadmap</div>';
+  const phases=[
+    {phase:'Phase 1A',status:'live',label:'LIVE',items:['HeavyBid import (Activities, Bid Items)','Smartsheet schedule import + mapping','SOV / Pay Items builder with OH+P','Job Dashboard with Overview, Pay Items, Schedule, JCS, Cash Flow sub-tabs','Per-job & company-wide cash flow projections','Period-based payment timing (weekly/monthly/after billing)','Edit log tracking','Global multi-job view with stacked cash flow']},
+    {phase:'Phase 1B',status:'active',label:'IN PROGRESS',items:['Inline schedule editing (edit dates, durations, status directly)','Schedule changes cascade to JCS + Cash Flow automatically','Set baseline schedule for variance tracking']},
+    {phase:'Phase 2',status:'planned',label:'PLANNED',items:['Built-in schedule builder (create tasks, durations, crews — no Smartsheet needed)','Task predecessor logic with auto-cascade','Pay application generator (% complete → billing → retainage)','Change order tracking and contract value adjustments','Actual cost entry and earned value analysis (EV, CPI, SPI)']},
+    {phase:'Phase 3',status:'planned',label:'FUTURE',items:['Drag-to-resize Gantt bars for schedule editing','Resource loading and crew capacity planning','Subcontractor payment tracking (when owner pays flow)','Document management (submittals, RFIs, daily reports)','Multi-user real-time collaboration','Mobile field reporting']}
+  ];
+  phases.forEach(p=>{
+    const col=p.status==='live'?'var(--green)':p.status==='active'?'var(--orange)':'var(--sand)';
+    const bgCol=p.status==='live'?'#F4F7F4':p.status==='active'?'#FFF8F4':'var(--bg)';
+    h+=`<div style="margin-bottom:12px;padding:14px 18px;background:${bgCol};border-left:4px solid ${col};border-radius:0 6px 6px 0;">`;
+    h+=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">`;
+    h+=`<span style="font-family:Oswald;font-size:14px;font-weight:600;letter-spacing:.5px;">${p.phase}</span>`;
+    h+=`<span style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;background:${col};color:var(--white);padding:2px 8px;border-radius:3px;">${p.label}</span>`;
+    h+=`</div>`;
+    h+=`<div style="font-size:13px;color:var(--text-light);line-height:1.6;">`;
+    p.items.forEach(item=>{h+=`<div style="padding-left:8px;">${p.status==='live'?'&#10003;':p.status==='active'?'&#9654;':'&#9675;'} ${item}</div>`});
+    h+=`</div></div>`;
+  });
+  h+='</div>';
+
   el.innerHTML=h;
 }
 
@@ -1385,70 +1515,176 @@ function renderGlobalCashFlow(jobIds){
   const totalCostOut=rC,totalRevIn=rR;
 
   // ─── RENDER ───
-  let h='<div class="card"><div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">';
-  h+='<span>Company Cash Flow — All Jobs Combined</span>';
-  h+=`<span style="font-size:12px;font-weight:300;">Total Cost Out: ${fmtD(totalCostOut)} | Total Revenue In: ${fmtD(totalRevIn)} | Net: ${fmtD(totalRevIn-totalCostOut)}</span>`;
+  const jobColors=['#E67E22','#3498DB','#9B59B6','#1ABC9C','#E74C3C','#2ECC71','#F39C12','#34495E'];
+  const netColor='#2980B9';
+
+  // ── Summary KPIs ──
+  let h='<div class="card" style="padding:24px 28px;">';
+  h+='<div class="card-title" style="margin-bottom:16px;">Company Cash Flow — All Jobs Combined</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;">';
+  const netVal=totalRevIn-totalCostOut;
+  const netCls=netVal>=0?'color:var(--green)':'color:var(--red)';
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Total Cost Out</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--red);">${fmtD(totalCostOut)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Total Revenue In</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--green);">${fmtD(totalRevIn)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Net Margin</div><div style="font-family:Oswald;font-size:20px;font-weight:600;${netCls}">${fmtD(netVal)}</div></div>`;
+  const peakNeg=Math.min(...netCash);
+  const peakNegMo=netCash.indexOf(peakNeg);
+  h+=`<div style="text-align:center;padding:12px;background:${peakNeg<0?'#FFF5F5':'var(--bg)'};border-radius:6px;border:${peakNeg<0?'1px solid var(--red)':'none'};"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Peak Cash Exposure</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--red);">${fmtD(peakNeg)}</div><div style="font-size:11px;color:var(--text-light);">${months[peakNegMo]?.label||'—'}</div></div>`;
   h+='</div>';
 
-  // S-Curve
-  const svgW=Math.max(months.length*50,600),svgH=220,padL=65,padR=20,padT=20,padB=30;
+  // ── S-Curve (Cumulative) ──
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:10px;">Cumulative Cash Flow</div>';
+  const svgW=Math.max(months.length*60,700),svgH=300,padL=72,padR=24,padT=40,padB=36;
   const plotW=svgW-padL-padR,plotH=svgH-padT-padB;
   const xStep=months.length>1?plotW/(months.length-1):plotW;
-  h+=`<div style="overflow-x:auto;margin-bottom:12px;"><svg width="${svgW}" height="${svgH}" style="display:block;">`;
-  for(let g=0;g<=4;g++){const y=padT+plotH*(1-g/4);h+=`<line x1="${padL}" y1="${y}" x2="${svgW-padR}" y2="${y}" stroke="var(--border)" stroke-dasharray="3,3"/><text x="${padL-6}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="Oswald">${fmtD(maxVal*g/4)}</text>`}
-  months.forEach((m,i)=>{if(i%Math.ceil(months.length/14)===0||months.length<=14){const x=padL+i*xStep;h+=`<text x="${x}" y="${svgH-5}" text-anchor="middle" font-size="10" fill="var(--text-light)" font-family="Oswald">${m.label}</text>`}});
-  let cp='M';cumCost.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);cp+=(i?'L':'')+x+','+y});
-  h+=`<path d="${cp}" class="cf-s-curve" stroke="var(--red)"/>`;
-  let rp='M';cumRev.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);rp+=(i?'L':'')+x+','+y});
-  h+=`<path d="${rp}" class="cf-s-curve" stroke="var(--green)"/>`;
-  // Per-job cost curves (lighter, thinner)
-  const jobColors=['#E67E22','#3498DB','#9B59B6','#1ABC9C','#E74C3C','#2ECC71','#F39C12','#34495E'];
+  // Include net cash in Y-axis range
+  const yMin=Math.min(0,...netCash);
+  const yMax=Math.max(...cumCost,...cumRev,1);
+  const yRange=yMax-yMin||1;
+
+  function yPos(v){return padT+plotH*(1-(v-yMin)/yRange)}
+
+  h+=`<div style="overflow-x:auto;margin-bottom:20px;"><svg width="${svgW}" height="${svgH}" style="display:block;">`;
+  // Shaded area between cost and revenue curves
+  let areaPath='M';
+  cumRev.forEach((v,i)=>{const x=padL+i*xStep;areaPath+=(i?'L':'')+x+','+yPos(v)});
+  for(let i=cumCost.length-1;i>=0;i--){const x=padL+i*xStep;areaPath+='L'+x+','+yPos(cumCost[i])}
+  areaPath+='Z';
+  h+=`<path d="${areaPath}" fill="var(--green)" opacity=".07"/>`;
+  // Grid lines — 5 divisions
+  const nGrid=5;
+  for(let g=0;g<=nGrid;g++){
+    const val=yMin+(yRange*g/nGrid);
+    const y=yPos(val);
+    h+=`<line x1="${padL}" y1="${y}" x2="${svgW-padR}" y2="${y}" stroke="var(--border)" stroke-dasharray="3,3"/>`;
+    h+=`<text x="${padL-8}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="Oswald">${fmtD(Math.round(val))}</text>`;
+  }
+  // Zero line if net goes negative
+  if(yMin<0){const zy=yPos(0);h+=`<line x1="${padL}" y1="${zy}" x2="${svgW-padR}" y2="${zy}" stroke="var(--text-light)" stroke-width=".5"/>`}
+  // X-axis month labels
+  const showEvery=Math.ceil(months.length/16);
+  months.forEach((m,i)=>{if(i%showEvery===0||i===months.length-1){const x=padL+i*xStep;h+=`<text x="${x}" y="${svgH-8}" text-anchor="middle" font-size="10" fill="var(--text-light)" font-family="Oswald">${m.label}</text>`;h+=`<line x1="${x}" y1="${padT}" x2="${x}" y2="${svgH-padB}" stroke="var(--border)" stroke-dasharray="2,4" opacity=".4"/>`}});
+  // Per-job cost curves (dashed, behind main lines)
   jobFlows.forEach((jf,ji)=>{
     const jc=jobCostByMonth[jf.id];let cumJ=0;let jp='M';
-    jc.forEach((v,i)=>{cumJ+=v;const x=padL+i*xStep;const y=padT+plotH*(1-cumJ/maxVal);jp+=(i?'L':'')+x+','+y});
-    h+=`<path d="${jp}" fill="none" stroke="${jobColors[ji%jobColors.length]}" stroke-width="1.2" stroke-dasharray="4,3" opacity=".6"/>`;
+    jc.forEach((v,i)=>{cumJ+=v;const x=padL+i*xStep;jp+=(i?'L':'')+x+','+yPos(cumJ)});
+    h+=`<path d="${jp}" fill="none" stroke="${jobColors[ji%jobColors.length]}" stroke-width="1.5" stroke-dasharray="6,4" opacity=".45"/>`;
   });
-  h+=`<circle cx="${padL+10}" cy="${padT+8}" r="4" fill="var(--red)"/><text x="${padL+18}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Cost Out</text>`;
-  h+=`<circle cx="${padL+130}" cy="${padT+8}" r="4" fill="var(--green)"/><text x="${padL+138}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Revenue In</text>`;
-  jobFlows.forEach((jf,ji)=>{const lx=padL+260+ji*100;if(lx<svgW-60)h+=`<line x1="${lx}" y1="${padT+6}" x2="${lx+15}" y2="${padT+6}" stroke="${jobColors[ji%jobColors.length]}" stroke-width="1.2" stroke-dasharray="4,3"/><text x="${lx+19}" y="${padT+10}" font-size="9" fill="var(--text-light)" font-family="Oswald">#${jf.number}</text>`});
+  // Main cumulative cost line
+  let cp='M';cumCost.forEach((v,i)=>{const x=padL+i*xStep;cp+=(i?'L':'')+x+','+yPos(v)});
+  h+=`<path d="${cp}" fill="none" stroke="var(--red)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // Main cumulative revenue line
+  let rp='M';cumRev.forEach((v,i)=>{const x=padL+i*xStep;rp+=(i?'L':'')+x+','+yPos(v)});
+  h+=`<path d="${rp}" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // Net cash position line
+  let np='M';netCash.forEach((v,i)=>{const x=padL+i*xStep;np+=(i?'L':'')+x+','+yPos(v)});
+  h+=`<path d="${np}" fill="none" stroke="${netColor}" stroke-width="2" stroke-dasharray="8,4" stroke-linecap="round"/>`;
+  // Dot on peak negative
+  if(peakNeg<0&&peakNegMo>=0){
+    const px=padL+peakNegMo*xStep,py=yPos(peakNeg);
+    h+=`<circle cx="${px}" cy="${py}" r="5" fill="var(--red)" stroke="var(--white)" stroke-width="2"/>`;
+    h+=`<text x="${px}" y="${py-10}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--red)" font-family="Oswald">${fmtD(peakNeg)}</text>`;
+  }
+  // End-value labels on last data point
+  if(months.length>0){
+    const lx=padL+(months.length-1)*xStep+8;
+    h+=`<text x="${lx}" y="${yPos(cumCost[months.length-1])+4}" font-size="10" font-weight="600" fill="var(--red)" font-family="Oswald">${fmtD(rC)}</text>`;
+    h+=`<text x="${lx}" y="${yPos(cumRev[months.length-1])+4}" font-size="10" font-weight="600" fill="var(--green)" font-family="Oswald">${fmtD(rR)}</text>`;
+  }
+  // Legend row — positioned below title area
+  const legY=14;
+  h+=`<line x1="${padL}" y1="${legY}" x2="${padL+22}" y2="${legY}" stroke="var(--red)" stroke-width="3" stroke-linecap="round"/>`;
+  h+=`<text x="${padL+28}" y="${legY+4}" font-size="11" fill="var(--text)" font-family="Oswald">Cost Out</text>`;
+  h+=`<line x1="${padL+95}" y1="${legY}" x2="${padL+117}" y2="${legY}" stroke="var(--green)" stroke-width="3" stroke-linecap="round"/>`;
+  h+=`<text x="${padL+123}" y="${legY+4}" font-size="11" fill="var(--text)" font-family="Oswald">Revenue In</text>`;
+  h+=`<line x1="${padL+205}" y1="${legY}" x2="${padL+227}" y2="${legY}" stroke="${netColor}" stroke-width="2" stroke-dasharray="8,4" stroke-linecap="round"/>`;
+  h+=`<text x="${padL+233}" y="${legY+4}" font-size="11" fill="var(--text)" font-family="Oswald">Net Cash</text>`;
+  // Job legend
+  let jlx=padL+320;
+  jobFlows.forEach((jf,ji)=>{
+    if(jlx>svgW-100)return;
+    h+=`<line x1="${jlx}" y1="${legY}" x2="${jlx+18}" y2="${legY}" stroke="${jobColors[ji%jobColors.length]}" stroke-width="1.5" stroke-dasharray="6,4"/>`;
+    h+=`<text x="${jlx+24}" y="${legY+4}" font-size="10" fill="var(--text-light)" font-family="Oswald">${jf.name||'#'+jf.number}</text>`;
+    jlx+=Math.max((jf.name||'#'+jf.number).length*7+36,80);
+  });
   h+=`</svg></div>`;
 
-  // Stacked bar chart — monthly cost out by job
+  // ── Stacked Bar Chart — monthly cost out by job ──
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:8px;">Monthly Cost Out by Job</div>';
   const maxMoCost=Math.max(...globalCost,1);
-  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;">Monthly Cost Out by Job</div>';
-  h+='<div style="overflow-x:auto;"><div style="display:flex;gap:2px;align-items:flex-end;height:100px;min-width:'+Math.max(months.length*30,300)+'px;">';
+  const barChartH=140;
+  h+=`<div style="overflow-x:auto;margin-bottom:16px;"><div style="display:flex;gap:3px;align-items:flex-end;height:${barChartH+24}px;min-width:${Math.max(months.length*42,400)}px;">`;
   months.forEach((_,i)=>{
-    if(globalCost[i]===0)return;
-    const barH=Math.max(globalCost[i]/maxMoCost*90,2);
-    h+=`<div style="flex:1;min-width:20px;display:flex;flex-direction:column;justify-content:flex-end;height:100px;" title="${months[i].label}: ${fmtD(globalCost[i])}">`;
-    // Stacked segments per job
-    jobFlows.forEach((jf,ji)=>{
-      const jc=jobCostByMonth[jf.id][i]||0;
-      if(jc<=0)return;
-      const segH=Math.max(jc/maxMoCost*90,1);
-      h+=`<div style="height:${segH}px;background:${jobColors[ji%jobColors.length]};opacity:.85;" title="${jf.name} #${jf.number}: ${fmtD(jc)}"></div>`;
-    });
-    h+=`<div style="font-size:8px;text-align:center;color:var(--text-light);font-family:Oswald;margin-top:2px;">${months[i].label}</div>`;
+    const tot=globalCost[i];
+    h+=`<div style="flex:1;min-width:28px;display:flex;flex-direction:column;justify-content:flex-end;height:${barChartH+24}px;">`;
+    if(tot>0){
+      // Stacked segments per job
+      jobFlows.forEach((jf,ji)=>{
+        const jc=jobCostByMonth[jf.id][i]||0;
+        if(jc<=0)return;
+        const segH=Math.max(jc/maxMoCost*barChartH,2);
+        h+=`<div style="height:${segH}px;background:${jobColors[ji%jobColors.length]};border-radius:${ji===0?'3px 3px ':''}0 0;opacity:.85;" title="${jf.name} #${jf.number}: ${fmtD(jc)}"></div>`;
+      });
+      // Total label on top of bar
+      if(tot>maxMoCost*0.05){
+        h+=`<div style="font-size:8px;text-align:center;color:var(--text);font-family:Oswald;margin-bottom:1px;order:-1;">${fmtD(tot)}</div>`;
+      }
+    } else {
+      h+=`<div style="height:2px;background:var(--border);border-radius:1px;opacity:.3;"></div>`;
+    }
+    // Month label
+    const showLbl=i%showEvery===0||i===months.length-1;
+    h+=`<div style="font-size:9px;text-align:center;color:var(--text-light);font-family:Oswald;margin-top:4px;height:16px;${showLbl?'':'visibility:hidden;'}">${months[i].label}</div>`;
     h+='</div>';
   });
   h+='</div></div>';
 
-  // Net cash position
-  const peakNeg=Math.min(...netCash);
-  const peakNegMo=netCash.indexOf(peakNeg);
-  if(peakNeg<0){
-    h+=`<div style="margin-top:12px;padding:12px 16px;background:#FFF0F0;border:1px solid var(--red);border-radius:6px;font-size:13px;">`;
-    h+=`<strong style="color:var(--red);">Peak Company Cash Exposure:</strong> ${fmtD(peakNeg)} in ${months[peakNegMo]?.label||'—'}. `;
-    h+=`Total working capital needed across all jobs before owner payments catch up.`;
-    h+=`</div>`;
+  // ── Job Legend for bar chart ──
+  if(jobFlows.length>1){
+    h+='<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px;">';
+    jobFlows.forEach((jf,ji)=>{
+      h+=`<div style="display:flex;align-items:center;gap:5px;font-size:12px;font-family:Oswald;color:var(--text-light);"><div style="width:12px;height:12px;border-radius:2px;background:${jobColors[ji%jobColors.length]};opacity:.85;"></div>${jf.name} #${jf.number}</div>`;
+    });
+    h+='</div>';
   }
+
+  // ── Detail Table — Monthly Breakdown ──
+  h+='<details style="margin-top:8px;"><summary style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);cursor:pointer;margin-bottom:8px;">Monthly Detail Table</summary>';
+  h+='<div class="table-wrap" style="max-height:300px;"><table><tr><th>Month</th><th class="num">Cost Out</th><th class="num">Revenue In</th><th class="num">Net Monthly</th><th class="num">Cum. Cost</th><th class="num">Cum. Revenue</th><th class="num">Net Cash Position</th></tr>';
+  months.forEach((m,i)=>{
+    const netMo=globalRev[i]-globalCost[i];
+    const netMoCls=netMo<0?'negative':'positive';
+    const netCls2=netCash[i]<0?'negative':'positive';
+    h+=`<tr><td>${m.label}</td><td class="num">${fmtD(globalCost[i])}</td><td class="num">${fmtD(globalRev[i])}</td><td class="num ${netMoCls}">${fmtD(netMo)}</td><td class="num">${fmtD(cumCost[i])}</td><td class="num">${fmtD(cumRev[i])}</td><td class="num ${netCls2}"><strong>${fmtD(netCash[i])}</strong></td></tr>`;
+  });
+  h+='</table></div></details>';
 
   h+='</div>';
   return h;
 }
 
 // ═══════════════════════════════════════════
-// BID ITEMS (primary view with activity drill-down)
+// SOV CALC (standalone — used by Pay Items view + SOV Builder)
+// ═══════════════════════════════════════════
+function calcSOVItem(si, activities){
+  const actMap={};activities.forEach(a=>{actMap[a.code]=a});
+  const acts=(si.activityIds||[]).map(id=>actMap[id]).filter(Boolean);
+  const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
+  const labor=acts.reduce((s,a)=>s+(a.labor||0),0);
+  const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
+  const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
+  const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
+  const oh=dc*(si.ohPct||0);
+  const profit=dc*(si.profitPct||0);
+  const total=dc+oh+profit;
+  const qty=si.contractQty||1;
+  const unitPrice=si._autoPrice?Math.round(total/qty*100)/100:si.unitPrice;
+  const sv=qty*unitPrice;
+  return {acts,dc,labor,mat,subs,eqp,oh,profit,total,unitPrice,sv};
+}
+
+// ═══════════════════════════════════════════
+// PAY ITEMS (SOV view with billing — replaces old Bid Items)
 // ═══════════════════════════════════════════
 let _drillBidItem = null;
 
@@ -1456,88 +1692,216 @@ function renderBidItems(){
   const el=document.getElementById('bidContent'),fEl=document.getElementById('bidFilters');
   if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';fEl.innerHTML='';return}
   const job=Store.jobs[Store.activeJob];
-  if(!job.bidItems.length){el.innerHTML='<div class="empty-state"><h2>No Bid Items</h2><p>Import from the Import tab.</p></div>';fEl.innerHTML='';return}
+  const sovItems=job.sovItems||[];
+  const acts=job.activities||[];
 
-  const items=job.bidItems.map((b,i)=>{
-    const disc=getBidItemDiscipline(b.biditem,job.activities,job);
-    const children=job.activities.filter(a=>String(a.biditem)===String(b.biditem));
-    return{...b,discipline:disc,activityCount:children.length,actCost:children.reduce((s,a)=>s+a.directTotal,0),idx:i};
+  // If no SOV items built yet, prompt user
+  if(!sovItems.length){
+    if(!job.bidItems.length){el.innerHTML='<div class="empty-state"><h2>No Pay Items</h2><p>Import bid items and build your SOV from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>.</p></div>';fEl.innerHTML='';return}
+    el.innerHTML='<div class="empty-state"><h2>SOV Not Built Yet</h2><p>Your bid items are imported but you need to build the Schedule of Values first.</p><button class="btn-primary" style="margin-top:12px;" onclick="switchSubTab(\'setup\');setTimeout(()=>{const b=document.getElementById(\'sovBtn\');if(b)b.click()},200);">Build SOV / Pay Items</button></div>';
+    fEl.innerHTML='';return;
+  }
+
+  // Build computed data for each SOV item
+  const items=sovItems.map((si,i)=>{
+    const c=calcSOVItem(si,acts);
+    return{...si,idx:i,c};
   });
 
-  const discs=[...new Set(items.map(b=>b.discipline.name))].sort();
-  let fh='<span style="font-size:12px;color:var(--text-light);margin-right:4px;">Filter:</span>';
-  fh+=`<button class="filter-chip ${!window._bidFilter?'active':''}" onclick="window._bidFilter=null;renderBidItems()">All</button>`;
-  discs.forEach(d=>{fh+=`<button class="filter-chip ${window._bidFilter===d?'active':''}" onclick="window._bidFilter='${d}';renderBidItems()">${d}</button>`});
-  fEl.innerHTML=fh;
-
+  // Filter bar
+  const search=(document.getElementById('bidSearch')?.value||'').toLowerCase();
   let filtered=items;
-  if(window._bidFilter) filtered=filtered.filter(b=>b.discipline.name===window._bidFilter);
-  const search=(document.getElementById('bidSearch').value||'').toLowerCase();
-  if(search) filtered=filtered.filter(b=>b.description.toLowerCase().includes(search)||String(b.biditem).toLowerCase().includes(search));
+  if(search) filtered=filtered.filter(it=>it.description.toLowerCase().includes(search)||String(it.id).toLowerCase().includes(search)||(it.clientItemNo||'').toLowerCase().includes(search));
 
-  const tc=filtered.reduce((s,b)=>s+b.directTotal,0);
-  const ct=filtered.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const totalSV=filtered.reduce((s,it)=>s+it.c.sv,0);
+  const totalDC=filtered.reduce((s,it)=>s+it.c.dc,0);
+  const totalOH=filtered.reduce((s,it)=>s+it.c.oh,0);
+  const totalProfit=filtered.reduce((s,it)=>s+it.c.profit,0);
+  const retPct=(job.cashFlowConfig?.retainagePct||5)/100;
 
-  let h=`<div style="font-size:13px;color:var(--text-light);margin-bottom:8px;">Showing ${filtered.length} bid items — ${fmtD(tc)} direct cost — ${fmtD(ct)} contract</div>`;
+  // Summary KPIs
+  let h='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">';
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:2px;">Pay Items</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--green);">${filtered.length}</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:2px;">Scheduled Value</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--text);">${fmtD(totalSV)}</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:2px;">Direct Cost</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--red);">${fmtD(totalDC)}</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:2px;">OH + Profit</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--teal);">${fmtD(totalOH+totalProfit)}</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:2px;">Retainage (${(retPct*100).toFixed(0)}%)</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--yellow);">${fmtD(totalSV*retPct)}</div></div>`;
+  h+='</div>';
+
+  fEl.innerHTML=`<span style="font-size:12px;color:var(--text-light);margin-right:4px;">Showing ${filtered.length} of ${sovItems.length} pay items</span>`;
+
+  // ── Pay Items Table ──
   h+='<div class="card"><div class="table-wrap"><table>';
-  h+='<tr><th>#</th><th>Description</th><th>Discipline</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th><th class="num">Act.</th><th></th></tr>';
+  h+='<tr><th>#</th><th>Item No.</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th><th class="num">Ret. %</th><th class="num">Activities</th><th></th></tr>';
 
-  filtered.forEach(b=>{
-    const bOH=(b.indirects||0)+(b.addonBond||0);
-    const bContract=b.takeoffTotal||0;
-    const pPct=bContract>0?((b.markup||0)/bContract*100):0;
-    const pClass=pPct<3?'negative':pPct<8?'':'positive';
-    const isOpen=_drillBidItem===b.biditem;
-    h+=`<tr style="${isOpen?'background:#EBF5FB;':''}"><td>${b.biditem}</td><td><strong>${b.description}</strong></td><td><span class="disc-dot" style="background:${b.discipline.color}"></span>${b.discipline.name}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(bOH)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(bContract)}</strong></td><td class="num ${pClass}">${fmtPct(pPct)}</td><td class="num">${b.activityCount}</td><td><button class="drill-btn" onclick="toggleDrill('${b.biditem}')">${isOpen?'Close':'Drill'}</button> <button class="edit-btn" onclick="editRow('biditem',${b.idx},false)">Edit</button></td></tr>`;
+  filtered.forEach(it=>{
+    const c=it.c;
+    const margin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
+    const marginCls=margin<5?'negative':margin<10?'':'positive';
+    const isOpen=_drillBidItem===it.id;
+    const flag=c.sv<c.total-1?'&#9888; ':'';
 
+    h+=`<tr style="${isOpen?'background:#EBF5FB;':''}">`;
+    h+=`<td>${it.idx+1}</td>`;
+    h+=`<td>${it.clientItemNo||it.id}</td>`;
+    h+=`<td><strong>${flag}${esc(it.description)}</strong></td>`;
+    h+=`<td>${it.unit}</td>`;
+    h+=`<td class="num">${fmt(it.contractQty)}</td>`;
+    h+=`<td class="num">${fmtD2(c.unitPrice)}</td>`;
+    h+=`<td class="num"><strong>${fmtD(c.sv)}</strong></td>`;
+    h+=`<td class="num">${fmtD(c.dc)}</td>`;
+    h+=`<td class="num">${fmtD(c.oh+c.profit)}</td>`;
+    h+=`<td class="num ${marginCls}">${fmtPct(margin)}</td>`;
+    h+=`<td class="num">${((it.retainagePct||5)).toFixed(0)}%</td>`;
+    h+=`<td class="num">${c.acts.length}</td>`;
+    h+=`<td><button class="drill-btn" onclick="toggleDrill('${escJS(it.id)}')">${isOpen?'Close':'Drill'}</button></td>`;
+    h+=`</tr>`;
+
+    // Drill-down: activities in this pay item
     if(isOpen){
-      const children=job.activities.filter(a=>String(a.biditem)===String(b.biditem));
-      if(children.length){
-        h+=`<tr><td colspan="13" style="padding:0 12px 12px 12px;background:#F0F7FD;"><div class="drill-panel"><div class="card-title" style="color:var(--blue);border-bottom-color:#D0E3F5;">Activities in Bid Item ${b.biditem} <span style="font-weight:300;font-size:12px;">(${children.length} activities, ${fmtD(b.actCost)} total)</span></div><table><tr><th style="background:var(--blue);">Code</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th><th style="background:var(--blue);"></th></tr>`;
-        children.forEach(a=>{const ai=job.activities.indexOf(a);h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD(a.totalMaterial)}</td><td class="num">${fmtD(a.totalEquipment)}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td><td><button class="edit-btn" onclick="editRow('activity',${ai},false)">Edit</button></td></tr>`});
-        const variance=b.directTotal-b.actCost;
-        if(Math.abs(variance)>1){h+=`<tr style="background:#FFF8E1;"><td colspan="10" style="text-align:right;font-weight:600;">Variance (Bid Item − Activities):</td><td class="num ${variance<0?'negative':'positive'}"><strong>${fmtD(variance)}</strong></td><td></td></tr>`}
+      if(c.acts.length){
+        h+=`<tr><td colspan="13" style="padding:0 12px 12px 12px;background:#F0F7FD;"><div class="drill-panel">`;
+        h+=`<div class="card-title" style="color:var(--blue);border-bottom-color:#D0E3F5;">Activities in Pay Item ${esc(it.clientItemNo||it.id)} <span style="font-weight:300;font-size:12px;">(${c.acts.length} activities, ${fmtD(c.dc)} direct cost)</span></div>`;
+        h+=`<table><tr><th style="background:var(--blue);">Code</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th></tr>`;
+        c.acts.forEach(a=>{
+          h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
+        });
+        h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">SUBTOTAL</td><td class="num">${fmtD(c.labor)}</td><td class="num">${fmtD(c.mat)}</td><td class="num">${fmtD(c.eqp)}</td><td class="num">${fmtD(c.subs)}</td><td class="num">${fmtD(c.dc)}</td></tr>`;
+        // Show OH + Profit breakdown
+        h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Overhead (${((it.ohPct||0)*100).toFixed(1)}%)</td><td colspan="4"></td><td class="num">${fmtD(c.oh)}</td></tr>`;
+        h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Profit (${((it.profitPct||0)*100).toFixed(1)}%)</td><td colspan="4"></td><td class="num">${fmtD(c.profit)}</td></tr>`;
+        h+=`<tr style="background:#E8F5E9;font-weight:600;"><td colspan="6" style="text-align:right;">Scheduled Value</td><td colspan="4"></td><td class="num">${fmtD(c.sv)}</td></tr>`;
         h+='</table></div></td></tr>';
       }else{
-        h+=`<tr><td colspan="13" style="padding:12px;background:#F0F7FD;color:var(--text-light);font-style:italic;">No activities mapped to this bid item.</td></tr>`;
+        h+=`<tr><td colspan="13" style="padding:12px;background:#F0F7FD;color:var(--text-light);font-style:italic;">No activities assigned to this pay item. <a href="#" onclick="switchSubTab('setup');return false;" style="color:var(--orange);">Edit in SOV Builder</a></td></tr>`;
       }
     }
   });
 
-  const fTotalDC=filtered.reduce((s,b)=>s+b.directTotal,0),fTotalOH=filtered.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0),fTotalProfit=filtered.reduce((s,b)=>s+(b.markup||0),0),fTotalContract=filtered.reduce((s,b)=>s+(b.takeoffTotal||0),0);
-  const fProfitPct=fTotalContract>0?(fTotalProfit/fTotalContract*100):0;
-  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(fTotalDC)}</td><td class="num">${fmtD(fTotalOH)}</td><td class="num">${fmtD(fTotalProfit)}</td><td class="num">${fmtD(fTotalContract)}</td><td class="num">${fmtPct(fProfitPct)}</td><td></td><td></td></tr>`;
+  // Totals row
+  const fMargin=totalSV>0?((totalSV-totalDC)/totalSV*100):0;
+  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalSV)}</td><td class="num">${fmtD(totalDC)}</td><td class="num">${fmtD(totalOH+totalProfit)}</td><td class="num">${fmtPct(fMargin)}</td><td></td><td class="num">${filtered.reduce((s,it)=>s+it.c.acts.length,0)}</td><td></td></tr>`;
   h+='</table></div></div>';
+
+  // ── Unbilled Activities Warning ──
+  const sovActIds=new Set(sovItems.flatMap(si=>(si.activityIds||[])));
+  const unbilled=acts.filter(a=>!sovActIds.has(a.code)&&a.directTotal>0);
+  if(unbilled.length){
+    h+=`<div class="card" style="border-color:var(--orange);"><div class="card-title" style="color:var(--orange);">&#9888; Unbilled Activities (${unbilled.length} — ${fmtD(unbilled.reduce((s,a)=>s+a.directTotal,0))} not in any pay item)</div>`;
+    h+='<div class="table-wrap" style="max-height:200px;"><table><tr><th>Code</th><th>Bid Item</th><th>Description</th><th class="num">Direct Cost</th></tr>';
+    unbilled.forEach(a=>{h+=`<tr><td>${a.code}</td><td>${a.biditem}</td><td>${a.description}</td><td class="num">${fmtD(a.directTotal)}</td></tr>`});
+    h+='</table></div></div>';
+  }
+
   el.innerHTML=h;
 }
 
-function toggleDrill(bidItemId){_drillBidItem=_drillBidItem===bidItemId?null:bidItemId;renderBidItems()}
+function toggleDrill(id){_drillBidItem=_drillBidItem===id?null:id;renderBidItems()}
 
 // ═══════════════════════════════════════════
-// SCHEDULE
+// SCHEDULE (editable master schedule)
 // ═══════════════════════════════════════════
 function renderSchedule(){
   const el=document.getElementById('schContent');
   if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
   const job=Store.jobs[Store.activeJob];
-  if(!job.schedule.length){el.innerHTML='<div class="empty-state"><h2>No Schedule</h2><p>Import from the Import tab.</p></div>';return}
+  if(!job.schedule.length){el.innerHTML='<div class="empty-state"><h2>No Schedule</h2><p>Import from Project Set Up.</p></div>';return}
 
   const m=job.meta;
   if(m.startDate) m.startDate=toDate(m.startDate);
   if(m.endDate) m.endDate=toDate(m.endDate);
-  // If meta dates missing, compute from schedule tasks
   if(!m.startDate||!m.endDate){const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);if(dates.length){m.startDate=new Date(Math.min(...dates));m.endDate=new Date(Math.max(...dates))}}
-  let h='';
+
+  // KPIs
+  const tasks=job.schedule;
+  const totalTasks=tasks.length;
+  const complete=tasks.filter(t=>t.status==='Complete').length;
+  const inProg=tasks.filter(t=>t.status==='In Progress').length;
+  const notStarted=totalTasks-complete-inProg;
+  const pctComplete=totalTasks>0?Math.round(complete/totalTasks*100):0;
+  const projDays=m.startDate&&m.endDate?Math.ceil((m.endDate-m.startDate)/86400000):0;
+  const mapped=Object.keys(job.taskMap||{}).length;
+
+  let h='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px;">';
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Tasks</div><div style="font-family:Oswald;font-size:20px;font-weight:600;">${totalTasks}</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Complete</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--teal);">${complete} (${pctComplete}%)</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">In Progress</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--blue);">${inProg}</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Not Started</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:var(--text-light);">${notStarted}</div></div>`;
+  if(projDays)h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Duration</div><div style="font-family:Oswald;font-size:20px;font-weight:600;">${projDays}d</div></div>`;
+  h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Mapped</div><div style="font-family:Oswald;font-size:20px;font-weight:600;color:${mapped>=totalTasks?'var(--green)':'var(--orange)'};">${mapped}/${totalTasks}</div></div>`;
+  h+='</div>';
+
+  // Gantt
   if(m.startDate&&m.endDate){h+='<div class="card"><div class="card-title">Gantt Chart</div>'+renderGantt(job.schedule,m)+'</div>'}
 
-  h+='<div class="card"><div class="card-title">Task List</div><div class="table-wrap"><table>';
-  h+='<tr><th>#</th><th>Task</th><th>Start</th><th>Finish</th><th>Duration</th><th>Predecessors</th><th>Status</th><th>Crew</th><th></th></tr>';
-  job.schedule.forEach((t,i)=>{
-    const sc=t.status==='Complete'?'color:var(--teal)':t.status==='In Progress'?'color:var(--blue)':'';
-    h+=`<tr><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.predecessors||'—'}</td><td style="${sc}">${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editRow('schedule',${i},false)">Edit</button></td></tr>`;
+  // Editable task table
+  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Master Schedule<span style="font-size:11px;font-weight:300;color:var(--text-light);">Edit dates and status directly — changes update JCS &amp; Cash Flow</span></div>';
+  h+='<div class="table-wrap" style="max-height:600px;"><table>';
+  h+='<tr><th>#</th><th style="min-width:200px;">Task</th><th style="min-width:130px;">Start</th><th style="min-width:130px;">Finish</th><th class="num">Days</th><th>Status</th><th>Crew</th><th>Predecessors</th></tr>';
+
+  tasks.forEach((t,i)=>{
+    const sd=toDate(t.start);
+    const fd=toDate(t.finish);
+    const startVal=sd?sd.toISOString().slice(0,10):'';
+    const finishVal=fd?fd.toISOString().slice(0,10):'';
+    const days=sd&&fd?Math.max(Math.ceil((fd-sd)/86400000),0):'—';
+    const sc=t.status==='Complete'?'var(--teal)':t.status==='In Progress'?'var(--blue)':'var(--text-light)';
+
+    h+=`<tr>`;
+    h+=`<td style="color:var(--text-light);font-size:11px;">${t.id}</td>`;
+    h+=`<td><strong>${esc(t.name)}</strong></td>`;
+    h+=`<td><input type="date" value="${startVal}" onchange="updateScheduleTask(${i},'start',this.value)" style="font-family:inherit;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;width:120px;"></td>`;
+    h+=`<td><input type="date" value="${finishVal}" onchange="updateScheduleTask(${i},'finish',this.value)" style="font-family:inherit;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;width:120px;"></td>`;
+    h+=`<td class="num">${days}</td>`;
+    h+=`<td><select onchange="updateScheduleTask(${i},'status',this.value)" style="font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;color:${sc};">`;
+    ['Not Started','In Progress','Complete','On Hold'].forEach(s=>{
+      h+=`<option value="${s}" ${(t.status||'Not Started')===s?'selected':''}>${s}</option>`;
+    });
+    h+=`</select></td>`;
+    h+=`<td style="font-size:12px;">${esc(t.crew||'')}</td>`;
+    h+=`<td style="font-size:12px;color:var(--text-light);">${esc(t.predecessors||'')}</td>`;
+    h+=`</tr>`;
   });
   h+='</table></div></div>';
   el.innerHTML=h;
+}
+
+// Update a single schedule task field, recalc meta dates, save, and refresh downstream
+function updateScheduleTask(idx,field,value){
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  const t=job.schedule[idx];
+  if(!t)return;
+
+  const oldVal=field==='status'?(t.status||'Not Started'):fmtDate(t[field]);
+
+  if(field==='start'||field==='finish'){
+    t[field]=value?new Date(value+'T00:00:00'):null;
+    // Recalculate duration string
+    const s=toDate(t.start),f=toDate(t.finish);
+    if(s&&f){
+      const d=Math.max(Math.ceil((f-s)/86400000),0);
+      t.durationDays=d;
+      t.durationStr=d+'d';
+    }
+  }else if(field==='status'){
+    t.status=value;
+  }
+
+  // Recalc project meta dates from all schedule tasks
+  const allDates=job.schedule.map(tk=>toDate(tk.start)).concat(job.schedule.map(tk=>toDate(tk.finish))).filter(d=>d);
+  if(allDates.length){
+    job.meta.startDate=new Date(Math.min(...allDates));
+    job.meta.endDate=new Date(Math.max(...allDates));
+  }
+
+  // Log the change
+  const newVal=field==='status'?value:fmtDate(t[field]);
+  addEditLog(`Schedule: ${t.name} — ${field} changed from ${oldVal} to ${newVal}`);
+
+  // Save and re-render
+  saveJob(Store.activeJob);
+  renderSchedule();
 }
 
 // ═══════════════════════════════════════════
@@ -1550,7 +1914,7 @@ function renderJobCostSchedule(){
   const acts=job.activities||[];
   const sched=job.schedule||[];
   const tm=job.taskMap||{};
-  if(!acts.length){el.innerHTML='<div class="empty-state"><h2>No Activities Imported</h2><p>Import HeavyBid Activities from the Import tab first.</p></div>';return}
+  if(!acts.length){el.innerHTML='<div class="empty-state"><h2>No Activities Imported</h2><p>Import HeavyBid Activities from Project Set Up first.</p></div>';return}
 
   // Build reverse map: bidItem → {earliest start, latest finish} from schedule via taskMap
   const biDates={};
@@ -2296,7 +2660,7 @@ function renderCashFlowConfig(){
 
   let h='<div class="cf-config">';
   h+='<div class="cf-config-title">Cash Flow & Payment Setup</div>';
-  h+='<p style="font-size:12px;color:var(--text-light);margin:0 0 12px;">Configure how each cost type gets paid out and when you receive payment from the owner. This drives the cash flow projection on the Job Cost Schedule tab.</p>';
+  h+='<p style="font-size:12px;color:var(--text-light);margin:0 0 12px;">Configure how each cost type gets paid out and when you receive payment from the owner. This drives the Cash Flow projection.</p>';
 
   h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;margin-top:8px;">Cost Payout Timing</div>';
   h+=costRow('Labor','laborTiming','laborLagPeriods',false);
@@ -2335,26 +2699,6 @@ async function saveCFConfig(){
 // ═══════════════════════════════════════════
 // CASH FLOW — JCS VIEW SWITCHER
 // ═══════════════════════════════════════════
-let _jcsView='cost'; // 'cost' or 'cashflow'
-
-function switchJCSView(view){
-  _jcsView=view;
-  const costBtn=document.getElementById('jcsViewCost');
-  const cashBtn=document.getElementById('jcsViewCash');
-  const costEl=document.getElementById('jcsContent');
-  const cashEl=document.getElementById('jcsCashFlowContent');
-  if(view==='cost'){
-    costBtn.style.background='rgba(255,255,255,.15)';costBtn.style.fontWeight='600';
-    cashBtn.style.background='transparent';cashBtn.style.fontWeight='400';
-    costEl.style.display='block';cashEl.style.display='none';
-  }else{
-    cashBtn.style.background='rgba(255,255,255,.15)';cashBtn.style.fontWeight='600';
-    costBtn.style.background='transparent';costBtn.style.fontWeight='400';
-    costEl.style.display='none';cashEl.style.display='block';
-    renderCashFlowProjection();
-  }
-}
-
 // ═══════════════════════════════════════════
 // CASH FLOW — PROJECTION ENGINE
 // ═══════════════════════════════════════════
@@ -2526,75 +2870,153 @@ function renderCashFlowProjection(){
   const maxNet=Math.max(...netCash,0);
 
   // ─── RENDER ───
-  let h='<div class="card" style="margin-top:16px;">';
-  h+='<div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">';
-  h+='<span>Cash Flow Projection — Monthly</span>';
-  h+=`<span style="font-size:12px;font-weight:300;">Contract: ${fmtD(totalContract)} | Direct Cost: ${fmtD(totalDirect)} | Margin: ${fmtPct(totalDirect>0?(totalContract-totalDirect)/totalContract*100:0)}</span>`;
+  const netColor2='#2980B9';
+  const peakNeg=Math.min(...netCash);
+  const peakNegMo=netCash.indexOf(peakNeg);
+  const marginPct=totalDirect>0?(totalContract-totalDirect)/totalContract*100:0;
+
+  let h='<div class="card" style="margin-top:16px;padding:24px 28px;">';
+  h+='<div class="card-title" style="margin-bottom:16px;">Cash Flow Projection — Monthly</div>';
+
+  // ── Summary KPIs ──
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px;">';
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Contract</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--text);">${fmtD(totalContract)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Direct Cost</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--red);">${fmtD(totalDirect)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Margin</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:${marginPct>=10?'var(--green)':marginPct>=5?'var(--yellow)':'var(--red)'};">${fmtPct(marginPct)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:${peakNeg<0?'#FFF5F5':'var(--bg)'};border-radius:6px;${peakNeg<0?'border:1px solid var(--red);':''}"><div style="font-family:Oswald;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Peak Cash Exposure</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--red);">${fmtD(peakNeg)}</div><div style="font-size:11px;color:var(--text-light);">${months[peakNegMo]?.label||'—'}</div></div>`;
   h+='</div>';
 
-  // S-Curve SVG
-  const svgW=Math.max(months.length*60,600),svgH=200,padL=60,padR=20,padT=20,padB=30;
+  // ── S-Curve SVG ──
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:10px;">Cumulative Cash Flow</div>';
+  const svgW=Math.max(months.length*60,700),svgH=300,padL=72,padR=24,padT=40,padB=36;
   const plotW=svgW-padL-padR,plotH=svgH-padT-padB;
   const xStep=months.length>1?plotW/(months.length-1):plotW;
+  // Y-axis includes net cash (may go negative)
+  const yMin2=Math.min(0,...netCash);
+  const yMax2=Math.max(...cumCost,...cumRev,1);
+  const yRange2=yMax2-yMin2||1;
+  function yP(v){return padT+plotH*(1-(v-yMin2)/yRange2)}
 
-  h+=`<div style="overflow-x:auto;margin-bottom:16px;"><svg width="${svgW}" height="${svgH}" style="display:block;">`;
-  // Grid lines
-  for(let g=0;g<=4;g++){
-    const y=padT+plotH*(1-g/4);
+  h+=`<div style="overflow-x:auto;margin-bottom:20px;"><svg width="${svgW}" height="${svgH}" style="display:block;">`;
+  // Shaded area between curves
+  let aPath='M';
+  cumRev.forEach((v,i)=>{const x=padL+i*xStep;aPath+=(i?'L':'')+x+','+yP(v)});
+  for(let i=cumCost.length-1;i>=0;i--){const x=padL+i*xStep;aPath+='L'+x+','+yP(cumCost[i])}
+  aPath+='Z';
+  h+=`<path d="${aPath}" fill="var(--green)" opacity=".07"/>`;
+  // Grid lines — 5 divisions
+  for(let g=0;g<=5;g++){
+    const val=yMin2+(yRange2*g/5);
+    const y=yP(val);
     h+=`<line x1="${padL}" y1="${y}" x2="${svgW-padR}" y2="${y}" stroke="var(--border)" stroke-dasharray="3,3"/>`;
-    h+=`<text x="${padL-6}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="Oswald">${fmtD(maxVal*g/4)}</text>`;
+    h+=`<text x="${padL-8}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="Oswald">${fmtD(Math.round(val))}</text>`;
   }
-  // Month labels
-  months.forEach((m,i)=>{
-    if(i%Math.ceil(months.length/12)===0||months.length<=14){
-      const x=padL+i*xStep;
-      h+=`<text x="${x}" y="${svgH-5}" text-anchor="middle" font-size="10" fill="var(--text-light)" font-family="Oswald">${m.label}</text>`;
-    }
-  });
+  // Zero line
+  if(yMin2<0){const zy=yP(0);h+=`<line x1="${padL}" y1="${zy}" x2="${svgW-padR}" y2="${zy}" stroke="var(--text-light)" stroke-width=".5"/>`}
+  // X-axis labels
+  const showEvery2=Math.ceil(months.length/16);
+  months.forEach((m,i)=>{if(i%showEvery2===0||i===months.length-1){const x=padL+i*xStep;h+=`<text x="${x}" y="${svgH-8}" text-anchor="middle" font-size="10" fill="var(--text-light)" font-family="Oswald">${m.label}</text>`;h+=`<line x1="${x}" y1="${padT}" x2="${x}" y2="${svgH-padB}" stroke="var(--border)" stroke-dasharray="2,4" opacity=".4"/>`}});
   // Cost curve (red)
   let costPath='M';
-  cumCost.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);costPath+=(i?'L':'')+x+','+y});
-  h+=`<path d="${costPath}" class="cf-s-curve" stroke="var(--red)"/>`;
+  cumCost.forEach((v,i)=>{const x=padL+i*xStep;costPath+=(i?'L':'')+x+','+yP(v)});
+  h+=`<path d="${costPath}" fill="none" stroke="var(--red)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
   // Revenue curve (green)
   let revPath='M';
-  cumRev.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);revPath+=(i?'L':'')+x+','+y});
-  h+=`<path d="${revPath}" class="cf-s-curve" stroke="var(--green)"/>`;
+  cumRev.forEach((v,i)=>{const x=padL+i*xStep;revPath+=(i?'L':'')+x+','+yP(v)});
+  h+=`<path d="${revPath}" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // Net cash position line (blue dashed)
+  let netPath='M';
+  netCash.forEach((v,i)=>{const x=padL+i*xStep;netPath+=(i?'L':'')+x+','+yP(v)});
+  h+=`<path d="${netPath}" fill="none" stroke="${netColor2}" stroke-width="2" stroke-dasharray="8,4" stroke-linecap="round"/>`;
+  // Peak negative dot
+  if(peakNeg<0&&peakNegMo>=0){
+    const px=padL+peakNegMo*xStep,py=yP(peakNeg);
+    h+=`<circle cx="${px}" cy="${py}" r="5" fill="var(--red)" stroke="var(--white)" stroke-width="2"/>`;
+    h+=`<text x="${px}" y="${py-10}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--red)" font-family="Oswald">${fmtD(peakNeg)}</text>`;
+  }
+  // End-value labels
+  if(months.length>0){
+    const lx=padL+(months.length-1)*xStep+8;
+    h+=`<text x="${lx}" y="${yP(cumCost[months.length-1])+4}" font-size="10" font-weight="600" fill="var(--red)" font-family="Oswald">${fmtD(runCost)}</text>`;
+    h+=`<text x="${lx}" y="${yP(cumRev[months.length-1])+4}" font-size="10" font-weight="600" fill="var(--green)" font-family="Oswald">${fmtD(runRev)}</text>`;
+  }
   // Legend
-  h+=`<circle cx="${padL+10}" cy="${padT+8}" r="4" fill="var(--red)"/><text x="${padL+18}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Cost Out</text>`;
-  h+=`<circle cx="${padL+130}" cy="${padT+8}" r="4" fill="var(--green)"/><text x="${padL+138}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Revenue In</text>`;
+  const legY2=14;
+  h+=`<line x1="${padL}" y1="${legY2}" x2="${padL+22}" y2="${legY2}" stroke="var(--red)" stroke-width="3" stroke-linecap="round"/>`;
+  h+=`<text x="${padL+28}" y="${legY2+4}" font-size="11" fill="var(--text)" font-family="Oswald">Cost Out</text>`;
+  h+=`<line x1="${padL+95}" y1="${legY2}" x2="${padL+117}" y2="${legY2}" stroke="var(--green)" stroke-width="3" stroke-linecap="round"/>`;
+  h+=`<text x="${padL+123}" y="${legY2+4}" font-size="11" fill="var(--text)" font-family="Oswald">Revenue In</text>`;
+  h+=`<line x1="${padL+205}" y1="${legY2}" x2="${padL+227}" y2="${legY2}" stroke="${netColor2}" stroke-width="2" stroke-dasharray="8,4" stroke-linecap="round"/>`;
+  h+=`<text x="${padL+233}" y="${legY2+4}" font-size="11" fill="var(--text)" font-family="Oswald">Net Cash</text>`;
   h+=`</svg></div>`;
 
-  // Net Cash Position bar
-  h+='<div style="margin-bottom:16px;">';
-  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;">Monthly Net Cash Position</div>';
+  // ── Monthly Cost Out Bar Chart ──
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:8px;">Monthly Cost Out vs Revenue In</div>';
+  const maxMoVal=Math.max(...costBuckets.map(b=>b.total),...revBuckets,1);
+  const barH2=120;
+  h+=`<div style="overflow-x:auto;margin-bottom:20px;"><div style="display:flex;gap:3px;align-items:flex-end;height:${barH2+24}px;min-width:${Math.max(months.length*50,400)}px;">`;
+  months.forEach((m,i)=>{
+    const cTot=costBuckets[i].total;
+    const rTot=revBuckets[i];
+    h+=`<div style="flex:1;min-width:32px;display:flex;flex-direction:column;justify-content:flex-end;height:${barH2+24}px;">`;
+    h+='<div style="display:flex;gap:1px;align-items:flex-end;flex:1;">';
+    // Cost bar
+    const cH=cTot>0?Math.max(cTot/maxMoVal*barH2,2):0;
+    h+=`<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;">`;
+    if(cH>0)h+=`<div style="height:${cH}px;background:var(--red);border-radius:3px 3px 0 0;opacity:.75;" title="Cost: ${fmtD(cTot)}"></div>`;
+    h+='</div>';
+    // Revenue bar
+    const rH=rTot>0?Math.max(rTot/maxMoVal*barH2,2):0;
+    h+=`<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;">`;
+    if(rH>0)h+=`<div style="height:${rH}px;background:var(--green);border-radius:3px 3px 0 0;opacity:.75;" title="Revenue: ${fmtD(rTot)}"></div>`;
+    h+='</div>';
+    h+='</div>';
+    // Month label
+    const showLbl2=i%showEvery2===0||i===months.length-1;
+    h+=`<div style="font-size:9px;text-align:center;color:var(--text-light);font-family:Oswald;margin-top:4px;height:16px;${showLbl2?'':'visibility:hidden;'}">${m.label}</div>`;
+    h+='</div>';
+  });
+  h+='</div></div>';
+  // Mini legend for bars
+  h+='<div style="display:flex;gap:16px;margin-bottom:16px;">';
+  h+=`<div style="display:flex;align-items:center;gap:5px;font-size:12px;font-family:Oswald;color:var(--text-light);"><div style="width:12px;height:12px;border-radius:2px;background:var(--red);opacity:.75;"></div>Cost Out</div>`;
+  h+=`<div style="display:flex;align-items:center;gap:5px;font-size:12px;font-family:Oswald;color:var(--text-light);"><div style="width:12px;height:12px;border-radius:2px;background:var(--green);opacity:.75;"></div>Revenue In</div>`;
+  h+='</div>';
+
+  // ── Net Cash Position Butterfly Bar ──
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:8px;">Net Cash Position by Month</div>';
   const absMax=Math.max(Math.abs(minNet),Math.abs(maxNet),1);
+  h+='<div style="margin-bottom:20px;">';
   months.forEach((m,i)=>{
     const net=netCash[i];
-    const pct=Math.abs(net)/absMax*50;
+    if(net===0&&costBuckets[i].total===0&&revBuckets[i]===0)return;
+    const pct=Math.abs(net)/absMax*45;
     const isNeg=net<0;
     const color=isNeg?'var(--red)':'var(--green)';
-    h+=`<div style="display:flex;align-items:center;gap:4px;margin-bottom:1px;">`;
-    h+=`<div style="width:60px;min-width:60px;font-size:10px;font-family:Oswald;color:var(--text-light);text-align:right;">${m.label}</div>`;
-    h+=`<div style="flex:1;display:flex;height:14px;">`;
-    h+=`<div style="width:50%;display:flex;justify-content:flex-end;"><div style="width:${isNeg?pct:0}%;background:${isNeg?color:'transparent'};border-radius:2px 0 0 2px;"></div></div>`;
+    h+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">`;
+    h+=`<div style="width:52px;min-width:52px;font-size:10px;font-family:Oswald;color:var(--text-light);text-align:right;">${m.label}</div>`;
+    h+=`<div style="flex:1;display:flex;height:16px;">`;
+    h+=`<div style="width:50%;display:flex;justify-content:flex-end;"><div style="width:${isNeg?pct:0}%;background:${isNeg?color:'transparent'};border-radius:3px 0 0 3px;transition:width .3s;"></div></div>`;
     h+=`<div style="width:1px;background:var(--text-light);"></div>`;
-    h+=`<div style="width:50%;"><div style="width:${isNeg?0:pct}%;background:${isNeg?'transparent':color};border-radius:0 2px 2px 0;"></div></div>`;
+    h+=`<div style="width:50%;"><div style="width:${isNeg?0:pct}%;background:${isNeg?'transparent':color};border-radius:0 3px 3px 0;transition:width .3s;"></div></div>`;
     h+=`</div>`;
-    h+=`<div style="width:70px;min-width:70px;font-size:10px;font-family:Oswald;color:${color};text-align:right;">${fmtD(net)}</div>`;
+    h+=`<div style="width:72px;min-width:72px;font-size:10px;font-family:Oswald;color:${color};text-align:right;font-weight:${Math.abs(net)>absMax*0.5?'600':'400'};">${fmtD(net)}</div>`;
     h+=`</div>`;
   });
   h+='</div>';
 
-  // Detail table
-  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;">Monthly Detail</div>';
-  h+='<div class="table-wrap"><table style="font-size:12px;">';
-  h+='<tr><th>Month</th><th class="num">Labor</th><th class="num">Burden</th><th class="num">Equip</th><th class="num">Material</th><th class="num">Subs</th><th class="num">Trucking</th><th class="num" style="font-weight:700;">Cost Out</th><th class="num" style="color:var(--green);">Revenue In</th><th class="num" style="font-weight:700;">Net Cash</th><th class="num">Cum. Cash</th></tr>';
+  // ── Detail Table (collapsible) ──
+  h+='<details style="margin-top:4px;"><summary style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);cursor:pointer;margin-bottom:8px;">Monthly Detail Table</summary>';
+  h+='<div class="table-wrap" style="max-height:400px;"><table style="font-size:12px;">';
+  h+='<tr><th>Month</th><th class="num">Labor</th><th class="num">Burden</th><th class="num">Equip</th><th class="num">Material</th><th class="num">Subs</th><th class="num">Trucking</th><th class="num">Cost Out</th><th class="num">Revenue In</th><th class="num">Net Monthly</th><th class="num">Cum. Cash</th></tr>';
   let runNet=0;
   months.forEach((m,i)=>{
     const cb=costBuckets[i];
-    if(cb.total===0&&revBuckets[i]===0)return; // skip empty months
-    runNet+=(revBuckets[i]-cb.total);
-    const netColor=runNet<0?'color:var(--red)':'color:var(--green)';
+    if(cb.total===0&&revBuckets[i]===0)return;
+    const moNet=revBuckets[i]-cb.total;
+    runNet+=moNet;
+    const moNetCls=moNet<0?'color:var(--red)':'color:var(--green)';
+    const cumCls=runNet<0?'color:var(--red)':'color:var(--green)';
     h+=`<tr>`;
     h+=`<td>${m.label}</td>`;
     h+=`<td class="num">${fmtD(cb.labor)}</td>`;
@@ -2605,24 +3027,14 @@ function renderCashFlowProjection(){
     h+=`<td class="num">${fmtD(cb.trucking)}</td>`;
     h+=`<td class="num" style="font-weight:600;">${fmtD(cb.total)}</td>`;
     h+=`<td class="num" style="color:var(--green);font-weight:600;">${fmtD(revBuckets[i])}</td>`;
-    h+=`<td class="num" style="font-weight:600;${revBuckets[i]-cb.total<0?'color:var(--red)':'color:var(--green)'}">${fmtD(revBuckets[i]-cb.total)}</td>`;
-    h+=`<td class="num" style="${netColor};font-weight:600;">${fmtD(runNet)}</td>`;
+    h+=`<td class="num" style="font-weight:600;${moNetCls}">${fmtD(moNet)}</td>`;
+    h+=`<td class="num" style="${cumCls};font-weight:600;">${fmtD(runNet)}</td>`;
     h+=`</tr>`;
   });
-  // Totals
+  // Totals row
   const totCost=cumCost[cumCost.length-1]||0,totRev=cumRev[cumRev.length-1]||0;
   h+=`<tr style="background:var(--ash);font-weight:600;"><td>TOTAL</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.labor,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.burden,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.eqp,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.mat,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.subs,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.trucking,0))}</td><td class="num">${fmtD(totCost)}</td><td class="num" style="color:var(--green)">${fmtD(totRev)}</td><td class="num" style="color:var(--green)">${fmtD(totRev-totCost)}</td><td class="num">${fmtD(totRev-totCost)}</td></tr>`;
-  h+='</table></div>';
-
-  // Peak negative cash
-  const peakNeg=Math.min(...netCash);
-  const peakNegMo=netCash.indexOf(peakNeg);
-  if(peakNeg<0){
-    h+=`<div style="margin-top:12px;padding:12px 16px;background:#FFF0F0;border:1px solid var(--red);border-radius:6px;font-size:13px;">`;
-    h+=`<strong style="color:var(--red);">Peak Cash Exposure:</strong> ${fmtD(peakNeg)} in ${months[peakNegMo]?.label||'—'}. `;
-    h+=`This is the maximum amount of working capital needed before owner payments catch up.`;
-    h+=`</div>`;
-  }
+  h+='</table></div></details>';
 
   h+='</div>';
   el.innerHTML=h;
