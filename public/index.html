@@ -655,16 +655,42 @@ function showMapping(){
 function hideMapping(){document.getElementById('mappingArea').style.display='none'}
 
 function showAddTaskForBid(biditem, desc){
+  const job=Store.jobs[Store.activeJob];
   const form=document.getElementById('addTaskForm');
   form.style.display='block';
-  document.getElementById('addTaskFormTitle').textContent='Add Schedule Task for Bid Item '+biditem+' — '+desc;
+
+  // Compute suggested duration from activities under this bid item
+  const biActs=(job?job.activities:[]).filter(a=>String(a.biditem)===String(biditem));
+  const totalCalcDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0);
+  const totalHours=biActs.reduce((s,a)=>s+(a.manHours||0),0);
+  const totalCost=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
+
+  // Suggest a start date: use project end date (last scheduled finish) so new tasks go at end
+  let suggestedStart='';
+  if(job&&job.meta&&job.meta.endDate){
+    const end=toDate(job.meta.endDate);
+    if(end) suggestedStart=end.toISOString().split('T')[0];
+  }
+
+  let titleHtml='Add Schedule Task for Bid Item '+biditem+' — '+desc;
+  titleHtml+=`<div style="font-family:'Source Serif 4',serif;font-size:12px;font-weight:400;color:var(--text-light);margin-top:6px;text-transform:none;letter-spacing:0;">`;
+  titleHtml+=`Based on ${biActs.length} activities: <strong>${totalCalcDays} calc days</strong>, ${fmt(totalHours)} man-hours, ${fmtD(totalCost)} direct cost`;
+  titleHtml+=`</div>`;
+  document.getElementById('addTaskFormTitle').innerHTML=titleHtml;
   document.getElementById('addTaskName').value=desc||'';
   document.getElementById('addTaskBidItem').value=biditem;
-  document.getElementById('addTaskStart').value='';
-  document.getElementById('addTaskFinish').value='';
-  document.getElementById('addTaskDuration').value='';
+  document.getElementById('addTaskStart').value=suggestedStart;
+  document.getElementById('addTaskDuration').value=totalCalcDays||'';
+  // Auto-calc finish from suggested values
+  if(suggestedStart&&totalCalcDays){
+    const s=new Date(suggestedStart+'T00:00:00');
+    const f=new Date(s.getTime()+totalCalcDays*86400000);
+    document.getElementById('addTaskFinish').value=f.toISOString().split('T')[0];
+  }else{
+    document.getElementById('addTaskFinish').value='';
+  }
   form.scrollIntoView({behavior:'smooth',block:'center'});
-  // Auto-calc finish from start+duration
+  // Auto-calc finish from start+duration on change
   const startEl=document.getElementById('addTaskStart');
   const durEl=document.getElementById('addTaskDuration');
   const finEl=document.getElementById('addTaskFinish');
@@ -807,14 +833,17 @@ function renderMapping(){
     h+='<div class="card" style="margin-top:12px;border-color:var(--orange);">';
     h+='<div class="card-title" style="color:var(--orange);border-bottom-color:var(--orange);">Bid Items Missing Schedule Tasks <span style="font-weight:300;font-size:12px;">('+orphanBids.length+' bid items have no schedule task — activities under these won\'t appear on the Job Cost Schedule timeline)</span></div>';
     h+='<div class="table-wrap"><table class="map-table">';
-    h+='<tr><th>Bid Item</th><th>Description</th><th>Activities</th><th>Direct Cost</th><th></th></tr>';
+    h+='<tr><th>Bid Item</th><th>Description</th><th>Activities</th><th>Suggested Days</th><th>Direct Cost</th><th></th></tr>';
     orphanBids.forEach(b=>{
-      const actCount=job.activities.filter(a=>String(a.biditem)===String(b.biditem)).length;
-      const actCost=job.activities.filter(a=>String(a.biditem)===String(b.biditem)).reduce((s,a)=>s+(a.directTotal||0),0);
+      const biActs=job.activities.filter(a=>String(a.biditem)===String(b.biditem));
+      const actCount=biActs.length;
+      const actCost=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
+      const calcDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0);
       h+=`<tr style="background:#FFF8F0;">`;
       h+=`<td><strong>${b.biditem}</strong></td>`;
       h+=`<td>${b.description||'—'}</td>`;
       h+=`<td>${actCount} activities</td>`;
+      h+=`<td><strong>${calcDays}d</strong></td>`;
       h+=`<td>${fmtD(actCost)}</td>`;
       h+=`<td><button class="btn-primary btn-sm" style="background:var(--orange);white-space:nowrap;" onclick="showAddTaskForBid('${b.biditem}','${(b.description||'').replace(/'/g,"\\'")}')">+ Add Task</button></td>`;
       h+='</tr>';
