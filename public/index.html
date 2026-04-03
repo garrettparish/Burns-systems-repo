@@ -111,7 +111,32 @@ tr:hover{background:#FAF8F5}
 .map-summary .unmapped-count{color:var(--yellow)}
 .map-auto-btn{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;background:var(--blue);color:var(--white);border:none;padding:6px 14px;border-radius:4px;cursor:pointer}
 .map-auto-btn:hover{background:#1A6DAA}
-@media(max-width:768px){.import-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.nav-tab{padding:10px 12px;font-size:11px}}
+/* Job Cost Schedule */
+.jcs-header{background:var(--green);border-radius:8px;padding:20px 24px;margin-bottom:16px;color:var(--white)}
+.jcs-title-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.jcs-title{font-family:Oswald,sans-serif;font-size:16px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase}
+.jcs-phase-badge{font-family:Oswald,sans-serif;font-size:11px;background:var(--orange);color:var(--white);padding:4px 12px;border-radius:4px;letter-spacing:1px;font-weight:600}
+.jcs-subtitle{font-family:'Source Serif 4',serif;font-size:13px;color:var(--sand);font-style:italic;margin-bottom:14px}
+.jcs-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.jcs-actions .job-select{max-width:220px}
+.jcs-btn{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;text-transform:uppercase;padding:7px 16px;border:1px solid rgba(255,255,255,.3);border-radius:6px;background:transparent;color:var(--white);cursor:pointer;transition:all .2s}
+.jcs-btn:hover{background:rgba(255,255,255,.12)}
+.jcs-btn-push{background:var(--orange);border-color:var(--orange);font-weight:600}
+.jcs-btn-push:hover{background:#e05a1a}
+.jcs-table-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.jcs-table{width:100%;border-collapse:collapse;font-size:13px;min-width:900px}
+.jcs-table th{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--green);padding:10px 12px;border-bottom:2px solid var(--ash);text-align:left;white-space:nowrap;position:sticky;top:0;background:var(--card);z-index:2}
+.jcs-table td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.jcs-disc-row td{background:var(--green);color:var(--white);font-family:Oswald,sans-serif;font-size:12px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;padding:8px 12px;border:none}
+.jcs-task-name{font-weight:400;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jcs-gantt-cell{position:relative;padding:0 !important;height:36px}
+.jcs-gantt-bar{position:absolute;top:8px;height:20px;border-radius:3px;display:flex;align-items:center;padding:0 6px;font-size:10px;font-family:Oswald,sans-serif;color:var(--white);letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:24px}
+.jcs-today-line{position:absolute;top:0;bottom:0;width:2px;background:var(--orange);z-index:1}
+.jcs-footer{display:flex;gap:32px;align-items:center;padding:16px 20px;font-family:Oswald,sans-serif;font-size:13px;letter-spacing:.5px;color:var(--text);border-top:2px solid var(--ash);background:var(--card);border-radius:0 0 8px 8px}
+.jcs-footer strong{color:var(--green)}
+.jcs-today-legend{color:var(--orange);display:flex;align-items:center;gap:4px}
+.jcs-today-legend::before{content:'';display:inline-block;width:8px;height:8px;background:var(--orange);border-radius:2px}
+@media(max-width:768px){.import-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.nav-tab{padding:10px 12px;font-size:11px}.jcs-actions{flex-direction:column}}
 </style>
 </head>
 <body>
@@ -127,6 +152,7 @@ tr:hover{background:#FAF8F5}
   <button class="nav-tab" data-tab="global">Global View</button>
   <button class="nav-tab" data-tab="biditems">Bid Items</button>
   <button class="nav-tab" data-tab="schedule">Schedule</button>
+  <button class="nav-tab" data-tab="jcs">Job Cost Schedule</button>
 </div>
 
 <!-- IMPORT -->
@@ -201,6 +227,25 @@ tr:hover{background:#FAF8F5}
     <select class="job-select" id="schJobSelect" onchange="switchJobFromSch()"></select>
   </div>
   <div id="schContent"></div>
+</div>
+
+<!-- JOB COST SCHEDULE -->
+<div id="panel-jcs" class="panel">
+  <div class="jcs-header">
+    <div class="jcs-title-bar">
+      <div class="jcs-title">JOB COST SCHEDULE (GANTT + COST)</div>
+      <div class="jcs-phase-badge">PHASE 1A</div>
+    </div>
+    <div class="jcs-subtitle">Per-job view: Precon builds, PM owns. Shows tasks on a Gantt timeline with costs/hours spread across weeks.</div>
+    <div class="jcs-actions">
+      <select class="job-select" id="jcsJobSelect" onchange="switchJobFromJCS()"></select>
+      <button class="jcs-btn" onclick="alert('Add Task coming in Phase 1B')">+ Add Task</button>
+      <button class="jcs-btn" onclick="document.getElementById('file-activities').click()">Import HeavyBid</button>
+      <button class="jcs-btn" onclick="alert('Set Baseline coming in Phase 1B')">Set Baseline</button>
+      <button class="jcs-btn jcs-btn-push" onclick="alert('Push to Planner coming in Phase 1B')">Push to Planner</button>
+    </div>
+  </div>
+  <div id="jcsContent"></div>
 </div>
 
 <!-- JOB MODAL -->
@@ -370,7 +415,7 @@ document.querySelectorAll('.nav-tab').forEach(tab=>{
     tab.classList.add('active');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
     document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
-    ({dashboard:renderDashboard,global:renderGlobalView,biditems:renderBidItems,schedule:renderSchedule})[tab.dataset.tab]?.();
+    ({dashboard:renderDashboard,global:renderGlobalView,biditems:renderBidItems,schedule:renderSchedule,jcs:renderJobCostSchedule})[tab.dataset.tab]?.();
   });
 });
 
@@ -392,14 +437,15 @@ function switchJob(){Store.activeJob=document.getElementById('jobSelect').value|
 function switchJobFromDash(){Store.activeJob=document.getElementById('dashJobSelect').value||null;syncSel('dashJobSelect');renderDashboard()}
 function switchJobFromBid(){Store.activeJob=document.getElementById('bidJobSelect').value||null;syncSel('bidJobSelect');renderBidItems()}
 function switchJobFromSch(){Store.activeJob=document.getElementById('schJobSelect').value||null;syncSel('schJobSelect');renderSchedule()}
-function syncSel(src){const v=Store.activeJob||'';['jobSelect','dashJobSelect','bidJobSelect','schJobSelect'].forEach(id=>{if(id!==src)document.getElementById(id).value=v})}
-function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;['jobSelect','dashJobSelect','bidJobSelect','schJobSelect'].forEach(id=>{document.getElementById(id).innerHTML=base;document.getElementById(id).value=Store.activeJob||''})}
+function switchJobFromJCS(){Store.activeJob=document.getElementById('jcsJobSelect').value||null;syncSel('jcsJobSelect');renderJobCostSchedule()}
+function syncSel(src){const v=Store.activeJob||'';['jobSelect','dashJobSelect','bidJobSelect','schJobSelect','jcsJobSelect'].forEach(id=>{if(id!==src)document.getElementById(id).value=v})}
+function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;['jobSelect','dashJobSelect','bidJobSelect','schJobSelect','jcsJobSelect'].forEach(id=>{document.getElementById(id).innerHTML=base;document.getElementById(id).value=Store.activeJob||''})}
 function updateImportPanel(){const has=!!Store.activeJob;document.getElementById('importArea').style.display=has?'block':'none';document.getElementById('noJobMsg').style.display=has?'none':'block';document.getElementById('editJobBtn').style.display=has?'inline-block':'none';if(has)updateImportZones()}
 function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(data&&data.length){zone.classList.add('loaded');st.className='status loaded';st.textContent=data.length+' records loaded'}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if(job.bidItems.length&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Bid Items'}else{mapBtn.style.display='none'}}
   updateNavBadges()}
-function updateNavBadges(){document.querySelectorAll('.nav-tab .badge').forEach(b=>b.remove());if(!Store.activeJob)return;const j=Store.jobs[Store.activeJob];const c={biditems:j.bidItems.length,schedule:j.schedule.length};document.querySelectorAll('.nav-tab').forEach(t=>{if(c[t.dataset.tab]){const b=document.createElement('span');b.className='badge';b.textContent=c[t.dataset.tab];t.appendChild(b)}})}
+function updateNavBadges(){document.querySelectorAll('.nav-tab .badge').forEach(b=>b.remove());if(!Store.activeJob)return;const j=Store.jobs[Store.activeJob];const c={biditems:j.bidItems.length,schedule:j.schedule.length,jcs:j.activities.length};document.querySelectorAll('.nav-tab').forEach(t=>{if(c[t.dataset.tab]){const b=document.createElement('span');b.className='badge';b.textContent=c[t.dataset.tab];t.appendChild(b)}})}
 function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${msg}</div>`;el.scrollTop=el.scrollHeight}
 
 // ═══════════════════════════════════════════
@@ -973,6 +1019,143 @@ function renderSchedule(){
     h+=`<tr><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.predecessors||'—'}</td><td style="${sc}">${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editRow('schedule',${i},false)">Edit</button></td></tr>`;
   });
   h+='</table></div></div>';
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// JOB COST SCHEDULE (GANTT + COST)
+// ═══════════════════════════════════════════
+function renderJobCostSchedule(){
+  const el=document.getElementById('jcsContent');
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2><p>Select a job above to view the cost schedule.</p></div>';return}
+  const job=Store.jobs[Store.activeJob];
+  const acts=job.activities||[];
+  if(!acts.length){el.innerHTML='<div class="empty-state"><h2>No Activities Imported</h2><p>Import HeavyBid Activities from the Import tab first.</p></div>';return}
+
+  // Group activities by discipline
+  const discGroups={};
+  acts.forEach(a=>{
+    const d=a.discipline||getDiscipline(a.code);
+    const key=d.name;
+    if(!discGroups[key])discGroups[key]={name:key,color:d.color,activities:[]};
+    discGroups[key].activities.push(a);
+  });
+  const groups=Object.values(discGroups).sort((a,b)=>b.activities.reduce((s,x)=>s+(x.directTotal||0),0)-a.activities.reduce((s,x)=>s+(x.directTotal||0),0));
+
+  // Compute project timeline from calculated days
+  // Build sequential timeline: each activity gets start/end based on cumulative days
+  let totalCalcDays=0;
+  const allActs=[];
+  groups.forEach(g=>{
+    g.activities.forEach(a=>{
+      const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
+      allActs.push({...a,_days:days,_discColor:g.color,_discName:g.name});
+      totalCalcDays+=days;
+    });
+  });
+
+  // Determine project start date (from meta or default to today)
+  const m=job.meta;
+  let projStart=toDate(m.startDate)||new Date();
+  // Total duration in weeks
+  const totalWeeks=Math.max(Math.ceil(totalCalcDays/5),4);// working days to weeks
+  const projEnd=new Date(projStart.getTime()+totalWeeks*7*86400000);
+
+  // Build month headers from projStart to projEnd
+  const months=[];
+  let cursor=new Date(projStart.getFullYear(),projStart.getMonth(),1);
+  while(cursor<=projEnd){
+    months.push({label:cursor.toLocaleString('default',{month:'short'}).toUpperCase(),year:cursor.getFullYear(),start:new Date(cursor)});
+    cursor=new Date(cursor.getFullYear(),cursor.getMonth()+1,1);
+  }
+  const totalMs=projEnd.getTime()-projStart.getTime();
+
+  // Today marker
+  const today=new Date();
+  const todayPct=totalMs>0?Math.max(0,Math.min(100,(today-projStart)/totalMs*100)):-1;
+
+  // Accumulate day offsets per discipline for Gantt positioning
+  let dayOffset=0;
+  const discOffsets={};
+  groups.forEach(g=>{
+    const groupStart=dayOffset;
+    g.activities.forEach(a=>{
+      const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
+      a._ganttStart=dayOffset;
+      a._ganttEnd=dayOffset+days;
+      dayOffset+=days;
+    });
+    discOffsets[g.name]={start:groupStart,end:dayOffset};
+  });
+  const totalDays=Math.max(dayOffset,1);
+
+  // Totals
+  let grandHours=0,grandCost=0;
+  acts.forEach(a=>{grandHours+=(a.manHours||0);grandCost+=(a.directTotal||0)});
+
+  // Build table — use a single wide Gantt column with month grid lines
+  const ganttWidth=Math.max(500,months.length*80);
+  let h='<div class="jcs-table-wrap"><table class="jcs-table">';
+  // Header row
+  h+='<tr><th style="min-width:200px;">Task</th><th style="min-width:80px;">QTY</th><th style="min-width:60px;">Rate</th><th style="min-width:50px;">Days</th><th style="min-width:60px;">Hours</th>';
+  h+=`<th colspan="${months.length||1}" style="min-width:${ganttWidth}px;padding:0;">`;
+  // Month labels as a sub-grid
+  h+='<div style="display:flex;width:100%;">';
+  months.forEach((mo,mi)=>{
+    h+=`<div style="flex:1;text-align:center;padding:10px 4px;border-left:${mi?'1px solid var(--ash)':'none'};font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--green);">${mo.label}</div>`;
+  });
+  h+='</div></th></tr>';
+
+  // Rows grouped by discipline
+  groups.forEach(g=>{
+    // Discipline header row
+    h+=`<tr class="jcs-disc-row"><td colspan="${6}" style="background:${g.color};border-left:4px solid ${g.color};">${g.name.toUpperCase()}</td></tr>`;
+
+    g.activities.forEach(a=>{
+      const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
+      const qty=a.quantity?fmt(a.quantity):'—';
+      const units=a.units||'';
+      const rate=a.productivityRate?fmt(a.productivityRate)+(a.units?'/d':''):'—';
+      const hrs=a.manHours?fmt(a.manHours):'—';
+      const shortName=a.description||(a.code||'Activity');
+      const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
+
+      h+=`<tr>`;
+      h+=`<td class="jcs-task-name" title="${shortName}">${shortName}</td>`;
+      h+=`<td>${qty}${units?' '+units:''}</td>`;
+      h+=`<td>${rate}</td>`;
+      h+=`<td>${days}</td>`;
+      h+=`<td>${hrs}</td>`;
+
+      // Single Gantt cell spanning all month columns
+      const barLeftPct=(a._ganttStart/totalDays)*100;
+      const barWPct=Math.max(((a._ganttEnd-a._ganttStart)/totalDays)*100,0.5);
+      h+=`<td colspan="${months.length||1}" class="jcs-gantt-cell" style="min-width:${ganttWidth}px;">`;
+      // Month grid lines
+      months.forEach((mo,mi)=>{
+        if(mi>0) h+=`<div style="position:absolute;left:${(mi/months.length)*100}%;top:0;bottom:0;width:1px;background:var(--ash);"></div>`;
+      });
+      // Today line
+      if(todayPct>=0&&todayPct<=100){
+        h+=`<div class="jcs-today-line" style="left:${todayPct}%;"></div>`;
+      }
+      // Bar
+      h+=`<div class="jcs-gantt-bar" style="left:${barLeftPct}%;width:${barWPct}%;background:${g.color};">${barLabel}</div>`;
+      h+='</td>';
+      h+='</tr>';
+    });
+  });
+
+  h+='</table>';
+  // Footer
+  h+=`<div class="jcs-footer">`;
+  h+=`<div><strong>Total Hours:</strong> ${fmt(grandHours)}</div>`;
+  h+=`<div><strong>Total Cost:</strong> ${fmtD(grandCost)}</div>`;
+  h+=`<div><strong>Duration:</strong> ${totalWeeks} weeks</div>`;
+  if(todayPct>=0&&todayPct<=100) h+=`<div class="jcs-today-legend">Today marker</div>`;
+  h+=`</div>`;
+  h+='</div>';
+
   el.innerHTML=h;
 }
 </script>
