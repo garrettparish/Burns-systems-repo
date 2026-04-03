@@ -111,6 +111,39 @@ tr:hover{background:#FAF8F5}
 .map-summary .unmapped-count{color:var(--yellow)}
 .map-auto-btn{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;background:var(--blue);color:var(--white);border:none;padding:6px 14px;border-radius:4px;cursor:pointer}
 .map-auto-btn:hover{background:#1A6DAA}
+/* Cash Flow Config */
+.cf-config{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;margin-top:16px}
+.cf-config-title{font-family:Oswald,sans-serif;font-size:14px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:12px}
+.cf-config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.cf-config-grid label{font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);display:block;margin-bottom:2px}
+.cf-config-grid input,.cf-config-grid select{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:inherit;box-sizing:border-box}
+.cf-config-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.cf-config-row:last-child{border-bottom:none}
+.cf-cost-type{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;text-transform:uppercase;min-width:120px;font-weight:500}
+/* Cash Flow Chart */
+.cf-bar-out{height:32px;background:#F0EDE8;border-radius:4px;position:relative;overflow:hidden;margin-bottom:2px}
+.cf-bar-in{height:100%;border-radius:4px;display:flex;align-items:center;padding:0 8px;font-size:11px;font-family:Oswald,sans-serif;color:var(--white);letter-spacing:.5px;white-space:nowrap;min-width:2px}
+.cf-s-curve{stroke-width:2.5;fill:none;stroke-linecap:round;stroke-linejoin:round}
+/* SOV Builder */
+.sov-bi-card{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden}
+.sov-bi-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer;gap:12px;transition:background .15s}
+.sov-bi-header:hover{background:#F8F7F5}
+.sov-bi-header.open{background:#F0F7FD;border-bottom:1px solid var(--border)}
+.sov-bi-title{font-family:Oswald,sans-serif;font-size:14px;font-weight:500;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+.sov-bi-meta{font-size:12px;color:var(--text-light);display:flex;gap:16px}
+.sov-bi-body{padding:12px 16px}
+.sov-act-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid #F0EDE8;font-size:12px;transition:background .1s}
+.sov-act-row:hover{background:#FFF8F0}
+.sov-act-row .act-desc{flex:1;font-weight:500}
+.sov-act-row .act-cost{min-width:80px;text-align:right;font-family:Oswald,sans-serif}
+.sov-move-btn{font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light)}
+.sov-move-btn:hover{border-color:var(--orange);color:var(--orange)}
+.sov-split-btn{font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--card);cursor:pointer;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--blue)}
+.sov-split-btn:hover{border-color:var(--blue);background:#F0F7FD}
+.sov-new-bi{background:#FFF8F0;border:2px dashed var(--orange);border-radius:8px;padding:16px;margin-bottom:12px}
+.sov-billing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:10px}
+.sov-billing-grid label{font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);display:block;margin-bottom:2px}
+.sov-billing-grid input,.sov-billing-grid select{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:inherit}
 /* Job Cost Schedule */
 .jcs-header{background:var(--green);border-radius:8px;padding:20px 24px;margin-bottom:16px;color:var(--white)}
 .jcs-title-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
@@ -147,7 +180,7 @@ tr:hover{background:#FAF8F5}
 </div>
 
 <div class="nav">
-  <button class="nav-tab active" data-tab="import">Import Data</button>
+  <button class="nav-tab active" data-tab="import">Project Set Up</button>
   <button class="nav-tab" data-tab="dashboard">Job Dashboard</button>
   <button class="nav-tab" data-tab="global">Global View</button>
   <button class="nav-tab" data-tab="biditems">Bid Items</button>
@@ -185,9 +218,14 @@ tr:hover{background:#FAF8F5}
         <input type="file" id="file-schedule" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'schedule')">
       </div>
     </div>
-    <div style="margin-top:12px;"><button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule → Bid Items</button></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule → Bid Items</button>
+      <button class="btn-primary" id="sovBtn" style="display:none;background:var(--orange);" onclick="toggleSOVBuilder()">Build SOV / Pay Items</button>
+    </div>
     <div id="stagingArea" style="display:none;"></div>
     <div id="mappingArea" style="display:none;"></div>
+    <div id="sovArea" style="display:none;"></div>
+    <div id="cashflowConfigArea" style="display:none;"></div>
     <div class="card" style="margin-top:20px;">
       <div class="card-title">Import Log</div>
       <div id="importLog" style="font-size:13px;color:var(--text-light);max-height:200px;overflow-y:auto;"><em>Waiting for file uploads...</em></div>
@@ -239,13 +277,17 @@ tr:hover{background:#FAF8F5}
     <div class="jcs-subtitle">Per-job view: Precon builds, PM owns. Shows tasks on a Gantt timeline with costs/hours spread across weeks.</div>
     <div class="jcs-actions">
       <select class="job-select" id="jcsJobSelect" onchange="switchJobFromJCS()"></select>
-      <button class="jcs-btn" onclick="alert('Add Task coming in Phase 1B')">+ Add Task</button>
+      <div style="display:flex;border:1px solid rgba(255,255,255,.3);border-radius:6px;overflow:hidden;">
+        <button class="jcs-btn" id="jcsViewCost" style="border:none;border-radius:0;background:rgba(255,255,255,.15);font-weight:600;" onclick="switchJCSView('cost')">Cost Schedule</button>
+        <button class="jcs-btn" id="jcsViewCash" style="border:none;border-radius:0;" onclick="switchJCSView('cashflow')">Cash Flow</button>
+      </div>
       <button class="jcs-btn" onclick="document.getElementById('file-activities').click()">Import HeavyBid</button>
       <button class="jcs-btn" onclick="alert('Set Baseline coming in Phase 1B')">Set Baseline</button>
       <button class="jcs-btn jcs-btn-push" onclick="alert('Push to Planner coming in Phase 1B')">Push to Planner</button>
     </div>
   </div>
   <div id="jcsContent"></div>
+  <div id="jcsCashFlowContent" style="display:none;"></div>
 </div>
 
 <!-- JOB MODAL -->
@@ -466,6 +508,11 @@ function updateImportPanel(){const has=!!Store.activeJob;document.getElementById
 function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(data&&data.length){zone.classList.add('loaded');st.className='status loaded';st.textContent=data.length+' records loaded'}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if(job.bidItems.length&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Bid Items'}else{mapBtn.style.display='none'}}
+  const sovBtn=document.getElementById('sovBtn');
+  if(sovBtn){if(job.bidItems.length&&job.activities.length){sovBtn.style.display='inline-block';const sovCount=job.sovItems?job.sovItems.length:0;sovBtn.textContent=sovCount?`SOV / Pay Items (${sovCount})`:'Build SOV / Pay Items'}else{sovBtn.style.display='none'}}
+  // Cash flow config — show when activities + schedule exist
+  const cfArea=document.getElementById('cashflowConfigArea');
+  if(cfArea){if(job.activities.length&&job.schedule.length){cfArea.style.display='block';renderCashFlowConfig()}else{cfArea.style.display='none'}}
   updateNavBadges()}
 function updateNavBadges(){document.querySelectorAll('.nav-tab .badge').forEach(b=>b.remove());if(!Store.activeJob)return;const j=Store.jobs[Store.activeJob];const c={biditems:j.bidItems.length,schedule:j.schedule.length,jcs:j.activities.length};document.querySelectorAll('.nav-tab').forEach(t=>{if(c[t.dataset.tab]){const b=document.createElement('span');b.className='badge';b.textContent=c[t.dataset.tab];t.appendChild(b)}})}
 function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${msg}</div>`;el.scrollTop=el.scrollHeight}
@@ -1453,6 +1500,747 @@ function renderJobCostSchedule(){
   h+=`</div>`;
   h+='</div>';
 
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// SOV BUILDER / PAY ITEMS
+// ═══════════════════════════════════════════
+let _sovOpen=false;
+let _sovExpandedBIs={};
+let _sovSplitTarget=null; // {actIndex, fromBI}
+
+function toggleSOVBuilder(){
+  _sovOpen=!_sovOpen;
+  const area=document.getElementById('sovArea');
+  if(_sovOpen){area.style.display='block';renderSOVBuilder()}
+  else{area.style.display='none'}
+}
+
+function renderSOVBuilder(){
+  const area=document.getElementById('sovArea');
+  const job=Store.jobs[Store.activeJob];
+  if(!job){area.innerHTML='';return}
+  if(!job.sovItems){
+    // Initialize SOV items from current bid items
+    job.sovItems=job.bidItems.map(bi=>({
+      id:bi.biditem,
+      clientItemNo:'',
+      description:bi.description||'',
+      contractQty:bi.bidQuantity||0,
+      unit:bi.units||'LS',
+      unitPrice:bi.unitPrice||0,
+      retainagePct:10,
+      pctCompleteMethod:'cost', // 'cost' or 'qty'
+      activityIds:job.activities.filter(a=>String(a.biditem)===String(bi.biditem)).map(a=>a.code),
+      _original:true
+    }));
+  }
+
+  const sovItems=job.sovItems;
+  // Compute rollup costs for each SOV item
+  const actMap={};
+  job.activities.forEach(a=>{actMap[a.code]=a});
+
+  let h='<div style="margin-top:16px;">';
+  h+='<div class="sov-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">';
+  h+='<div><h3 style="font-family:Oswald;font-size:16px;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin:0;">Schedule of Values / Pay Items</h3>';
+  h+='<p style="font-size:12px;color:var(--text-light);margin:4px 0 0;">Create pay items, reassign activities, and set up billing fields. Costs auto-rollup from assigned activities.</p></div>';
+  h+='<div style="display:flex;gap:8px;">';
+  h+='<button class="btn-primary btn-sm" style="background:var(--orange);" onclick="addNewSOVItem()">+ New Pay Item</button>';
+  h+='<button class="btn-green btn-sm" onclick="saveSOVItems()">Save SOV</button>';
+  h+='</div></div>';
+
+  // Summary row
+  let totalScheduledValue=0, totalDirectCost=0;
+  sovItems.forEach(si=>{
+    const acts=si.activityIds.map(id=>actMap[id]).filter(Boolean);
+    const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
+    const sv=si.contractQty*si.unitPrice;
+    totalDirectCost+=dc;
+    totalScheduledValue+=sv;
+  });
+  h+=`<div style="display:flex;gap:16px;margin-bottom:12px;font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;">`;
+  h+=`<span>${sovItems.length} Pay Items</span>`;
+  h+=`<span style="color:var(--green);">Direct Cost: ${fmtD(totalDirectCost)}</span>`;
+  h+=`<span style="color:var(--blue);">Scheduled Value: ${fmtD(totalScheduledValue)}</span>`;
+  h+=`</div>`;
+
+  // Render each SOV item as a card
+  sovItems.forEach((si,idx)=>{
+    const acts=si.activityIds.map(id=>actMap[id]).filter(Boolean);
+    const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
+    const labor=acts.reduce((s,a)=>s+(a.labor||0),0);
+    const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
+    const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
+    const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
+    const sv=si.contractQty*si.unitPrice;
+    const isOpen=_sovExpandedBIs[idx];
+
+    h+='<div class="sov-bi-card">';
+    h+=`<div class="sov-bi-header ${isOpen?'open':''}" onclick="toggleSOVCard(${idx})">`;
+    h+=`<div class="sov-bi-title"><span style="color:var(--orange);">${si.clientItemNo||si.id}</span> — ${si.description||'(untitled)'}</div>`;
+    h+=`<div class="sov-bi-meta">`;
+    h+=`<span>${acts.length} activities</span>`;
+    h+=`<span>Cost: ${fmtD(dc)}</span>`;
+    h+=`<span>Value: ${fmtD(sv)}</span>`;
+    h+=`<span>${si.contractQty} ${si.unit}</span>`;
+    h+=`</div></div>`;
+
+    if(isOpen){
+      h+='<div class="sov-bi-body">';
+
+      // Billing fields grid
+      h+='<div class="sov-billing-grid">';
+      h+=`<div><label>Client Item #</label><input type="text" value="${esc(si.clientItemNo)}" onchange="updateSOVField(${idx},'clientItemNo',this.value)"></div>`;
+      h+=`<div><label>Description</label><input type="text" value="${esc(si.description)}" onchange="updateSOVField(${idx},'description',this.value)"></div>`;
+      h+=`<div><label>Contract Qty</label><input type="number" value="${si.contractQty}" onchange="updateSOVField(${idx},'contractQty',parseFloat(this.value)||0)"></div>`;
+      h+=`<div><label>Unit</label><input type="text" value="${esc(si.unit)}" onchange="updateSOVField(${idx},'unit',this.value)"></div>`;
+      h+=`<div><label>Unit Price</label><input type="number" step="0.01" value="${si.unitPrice}" onchange="updateSOVField(${idx},'unitPrice',parseFloat(this.value)||0)"></div>`;
+      h+=`<div><label>Scheduled Value</label><input type="text" value="${fmtD(sv)}" disabled style="background:#f5f5f5;"></div>`;
+      h+=`<div><label>Retainage %</label><input type="number" step="0.5" min="0" max="100" value="${si.retainagePct}" onchange="updateSOVField(${idx},'retainagePct',parseFloat(this.value)||0)"></div>`;
+      h+=`<div><label>% Complete Method</label><select onchange="updateSOVField(${idx},'pctCompleteMethod',this.value)"><option value="cost" ${si.pctCompleteMethod==='cost'?'selected':''}>Cost-Based</option><option value="qty" ${si.pctCompleteMethod==='qty'?'selected':''}>Qty-Based</option></select></div>`;
+      h+='</div>';
+
+      // Cost rollup summary
+      h+=`<div style="margin-top:10px;padding:8px 12px;background:var(--ash);border-radius:6px;font-size:12px;display:flex;gap:16px;flex-wrap:wrap;">`;
+      h+=`<span><strong>Direct:</strong> ${fmtD(dc)}</span>`;
+      h+=`<span>Labor: ${fmtD(labor)}</span>`;
+      h+=`<span>Material: ${fmtD(mat)}</span>`;
+      h+=`<span>Subs: ${fmtD(subs)}</span>`;
+      h+=`<span>Equipment: ${fmtD(eqp)}</span>`;
+      h+=`</div>`;
+
+      // Activities list
+      h+=`<div style="margin-top:10px;font-family:Oswald;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Assigned Activities</div>`;
+      if(acts.length===0){
+        h+=`<div style="padding:12px;text-align:center;color:var(--text-light);font-style:italic;font-size:12px;">No activities assigned — move activities here from another pay item</div>`;
+      }else{
+        acts.forEach(a=>{
+          const actIdx=job.activities.indexOf(a);
+          h+=`<div class="sov-act-row">`;
+          h+=`<span class="act-desc">${a.code} — ${a.description||'(no desc)'}</span>`;
+          h+=`<span class="act-cost">${fmtD(a.directTotal)}</span>`;
+          h+=`<button class="sov-move-btn" onclick="showMoveActivity('${escJS(a.code)}',${idx})">Move</button>`;
+          h+=`<button class="sov-split-btn" onclick="showSplitActivity('${escJS(a.code)}',${idx})">Split</button>`;
+          h+=`</div>`;
+        });
+      }
+
+      // Delete button for non-original items (or items with no activities)
+      if(!si._original||acts.length===0){
+        h+=`<div style="margin-top:10px;text-align:right;"><button class="btn-secondary btn-sm" style="color:var(--red);border-color:var(--red);" onclick="removeSOVItem(${idx})">Delete Pay Item</button></div>`;
+      }
+
+      h+='</div>'; // sov-bi-body
+    }
+    h+='</div>'; // sov-bi-card
+  });
+
+  // Unassigned activities (not in any SOV item)
+  const allAssigned=new Set();
+  sovItems.forEach(si=>si.activityIds.forEach(id=>allAssigned.add(id)));
+  const unassigned=job.activities.filter(a=>!allAssigned.has(a.code));
+  if(unassigned.length){
+    h+='<div class="sov-bi-card" style="border-color:var(--orange);">';
+    h+='<div class="sov-bi-header" style="background:#FFF8F0;">';
+    h+=`<div class="sov-bi-title" style="color:var(--orange);">⚠ Unassigned Activities (${unassigned.length})</div>`;
+    h+='</div><div class="sov-bi-body">';
+    unassigned.forEach(a=>{
+      h+=`<div class="sov-act-row" style="background:#FFF8F0;">`;
+      h+=`<span class="act-desc">${a.code} — ${a.description||'(no desc)'} <span style="color:var(--text-light);">[BI: ${a.biditem}]</span></span>`;
+      h+=`<span class="act-cost">${fmtD(a.directTotal)}</span>`;
+      h+=`<button class="sov-move-btn" onclick="showMoveActivity('${escJS(a.code)}',-1)">Assign</button>`;
+      h+=`</div>`;
+    });
+    h+='</div></div>';
+  }
+
+  h+='</div>';
+
+  // Move modal (hidden by default)
+  h+=`<div id="sovMoveModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">`;
+  h+=`<div style="background:var(--white);border-radius:12px;padding:24px;max-width:420px;width:90%;max-height:80vh;overflow-y:auto;">`;
+  h+=`<h3 style="font-family:Oswald;margin:0 0 12px;letter-spacing:.5px;">Move Activity</h3>`;
+  h+=`<div id="sovMoveContent"></div>`;
+  h+=`<div style="margin-top:12px;text-align:right;"><button class="btn-secondary btn-sm" onclick="closeSovModal()">Cancel</button></div>`;
+  h+=`</div></div>`;
+
+  // Split modal
+  h+=`<div id="sovSplitModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">`;
+  h+=`<div style="background:var(--white);border-radius:12px;padding:24px;max-width:420px;width:90%;">`;
+  h+=`<h3 style="font-family:Oswald;margin:0 0 12px;letter-spacing:.5px;">Split Activity</h3>`;
+  h+=`<div id="sovSplitContent"></div>`;
+  h+=`<div style="margin-top:12px;text-align:right;"><button class="btn-secondary btn-sm" onclick="closeSovModal()">Cancel</button></div>`;
+  h+=`</div></div>`;
+
+  area.innerHTML=h;
+}
+
+function esc(s){return(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
+function escJS(s){return(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
+
+function toggleSOVCard(idx){
+  _sovExpandedBIs[idx]=!_sovExpandedBIs[idx];
+  renderSOVBuilder();
+}
+
+function updateSOVField(idx,field,value){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems[idx])return;
+  job.sovItems[idx][field]=value;
+  // Don't re-render on every keystroke, just update the data
+}
+
+function addNewSOVItem(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  // Generate next available ID
+  const existingIds=job.sovItems.map(s=>s.id);
+  let newId='PAY-'+(job.sovItems.length+1);
+  let c=job.sovItems.length+1;
+  while(existingIds.includes(newId)){c++;newId='PAY-'+c}
+  job.sovItems.push({
+    id:newId,
+    clientItemNo:'',
+    description:'',
+    contractQty:0,
+    unit:'LS',
+    unitPrice:0,
+    retainagePct:10,
+    pctCompleteMethod:'cost',
+    activityIds:[],
+    _original:false
+  });
+  _sovExpandedBIs[job.sovItems.length-1]=true;
+  renderSOVBuilder();
+}
+
+function removeSOVItem(idx){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems[idx])return;
+  const si=job.sovItems[idx];
+  if(si.activityIds.length>0){
+    if(!confirm(`This pay item has ${si.activityIds.length} activities. They will become unassigned. Continue?`))return;
+  }
+  job.sovItems.splice(idx,1);
+  _sovExpandedBIs={};
+  renderSOVBuilder();
+}
+
+function showMoveActivity(actCode, fromIdx){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  const modal=document.getElementById('sovMoveModal');
+  const content=document.getElementById('sovMoveContent');
+  const act=job.activities.find(a=>a.code===actCode);
+  if(!act){closeSovModal();return}
+
+  let h=`<p style="font-size:13px;margin-bottom:12px;">Move <strong>${actCode} — ${act.description||'(no desc)'}</strong> (${fmtD(act.directTotal)}) to:</p>`;
+  job.sovItems.forEach((si,idx)=>{
+    if(idx===fromIdx)return;
+    h+=`<button style="display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;font-size:13px;" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='var(--border)'" onclick="execMoveActivity('${escJS(actCode)}',${fromIdx},${idx})">`;
+    h+=`<strong>${si.clientItemNo||si.id}</strong> — ${si.description||'(untitled)'}`;
+    h+=`</button>`;
+  });
+  content.innerHTML=h;
+  modal.style.display='flex';
+}
+
+function execMoveActivity(actCode, fromIdx, toIdx){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  // Remove from source
+  if(fromIdx>=0&&job.sovItems[fromIdx]){
+    job.sovItems[fromIdx].activityIds=job.sovItems[fromIdx].activityIds.filter(id=>id!==actCode);
+  }
+  // Add to target
+  if(job.sovItems[toIdx]&&!job.sovItems[toIdx].activityIds.includes(actCode)){
+    job.sovItems[toIdx].activityIds.push(actCode);
+  }
+  closeSovModal();
+  renderSOVBuilder();
+}
+
+function showSplitActivity(actCode, fromIdx){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  const modal=document.getElementById('sovSplitModal');
+  const content=document.getElementById('sovSplitContent');
+  const act=job.activities.find(a=>a.code===actCode);
+  if(!act){closeSovModal();return}
+
+  let h=`<p style="font-size:13px;margin-bottom:8px;">Split <strong>${actCode} — ${act.description||''}</strong></p>`;
+  h+=`<p style="font-size:12px;color:var(--text-light);margin-bottom:12px;">Total Direct Cost: ${fmtD(act.directTotal)}</p>`;
+  h+=`<div style="margin-bottom:12px;">`;
+  h+=`<label style="font-size:12px;font-family:Oswald;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);display:block;margin-bottom:4px;">% to keep in current item</label>`;
+  h+=`<input type="number" id="sovSplitPct" value="50" min="1" max="99" step="1" style="width:80px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:14px;">`;
+  h+=`<span style="font-size:12px;color:var(--text-light);margin-left:6px;">%</span>`;
+  h+=`</div>`;
+  h+=`<label style="font-size:12px;font-family:Oswald;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);display:block;margin-bottom:4px;">Move remainder to:</label>`;
+  job.sovItems.forEach((si,idx)=>{
+    if(idx===fromIdx)return;
+    h+=`<button style="display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;font-size:13px;" onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--border)'" onclick="execSplitActivity('${escJS(actCode)}',${fromIdx},${idx})">`;
+    h+=`<strong>${si.clientItemNo||si.id}</strong> — ${si.description||'(untitled)'}`;
+    h+=`</button>`;
+  });
+  content.innerHTML=h;
+  modal.style.display='flex';
+}
+
+function execSplitActivity(actCode, fromIdx, toIdx){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  const pctKeep=parseFloat(document.getElementById('sovSplitPct').value)||50;
+  if(pctKeep<=0||pctKeep>=100){alert('Enter a percentage between 1 and 99.');return}
+  const pctMove=(100-pctKeep)/100;
+  const pctKeepDec=pctKeep/100;
+
+  const origAct=job.activities.find(a=>a.code===actCode);
+  if(!origAct)return;
+
+  // Create a split copy of the activity
+  const splitCode=actCode+'_S';
+  let counter=1;
+  let finalCode=splitCode;
+  while(job.activities.find(a=>a.code===finalCode)){finalCode=actCode+'_S'+(++counter)}
+
+  const splitAct={...origAct,code:finalCode,description:(origAct.description||'')+' (split '+Math.round(pctMove*100)+'%)'};
+  // Scale cost fields on the split portion
+  const costFields=['labor','burden','permMat','constMat','subs','eqpOper','compEqp','outsideEqp','trucking','coOH','directTotal'];
+  costFields.forEach(f=>{if(splitAct[f])splitAct[f]=Math.round(splitAct[f]*pctMove*100)/100});
+  if(splitAct.quantity)splitAct.quantity=Math.round(splitAct.quantity*pctMove*100)/100;
+  if(splitAct.manHours)splitAct.manHours=Math.round(splitAct.manHours*pctMove*100)/100;
+  if(splitAct.crewHours)splitAct.crewHours=Math.round(splitAct.crewHours*pctMove*100)/100;
+
+  // Scale the original activity down
+  costFields.forEach(f=>{if(origAct[f])origAct[f]=Math.round(origAct[f]*pctKeepDec*100)/100});
+  if(origAct.quantity)origAct.quantity=Math.round(origAct.quantity*pctKeepDec*100)/100;
+  if(origAct.manHours)origAct.manHours=Math.round(origAct.manHours*pctKeepDec*100)/100;
+  if(origAct.crewHours)origAct.crewHours=Math.round(origAct.crewHours*pctKeepDec*100)/100;
+  origAct.description=(origAct.description||'')+' (split '+Math.round(pctKeep)+'%)';
+
+  // Add the split activity to job
+  job.activities.push(splitAct);
+
+  // Assign split to target SOV item
+  if(job.sovItems[toIdx]&&!job.sovItems[toIdx].activityIds.includes(finalCode)){
+    job.sovItems[toIdx].activityIds.push(finalCode);
+  }
+
+  closeSovModal();
+  renderSOVBuilder();
+}
+
+function closeSovModal(){
+  document.getElementById('sovMoveModal').style.display='none';
+  document.getElementById('sovSplitModal').style.display='none';
+}
+
+async function saveSOVItems(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  // Sync SOV items back to bid items structure for downstream use
+  // Rebuild bidItems from sovItems
+  const actMap={};
+  job.activities.forEach(a=>{actMap[a.code]=a});
+  job.bidItems=job.sovItems.map(si=>{
+    const acts=si.activityIds.map(id=>actMap[id]).filter(Boolean);
+    const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
+    const labor=acts.reduce((s,a)=>s+(a.labor||0),0);
+    const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
+    const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
+    const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
+    const sv=si.contractQty*si.unitPrice;
+    const margin=sv-dc;
+    // Find existing bid item for discipline override
+    const existBI=job.bidItems.find(b=>String(b.biditem)===String(si.id));
+    return {
+      biditem:si.id,
+      description:si.description,
+      units:si.unit,
+      bidQuantity:si.contractQty,
+      unitPrice:si.unitPrice,
+      labor:labor,
+      permMat:acts.reduce((s,a)=>s+(a.permMat||0),0),
+      constMat:acts.reduce((s,a)=>s+(a.constMat||0),0),
+      subs:subs,
+      eqpOper:acts.reduce((s,a)=>s+(a.eqpOper||0),0),
+      compEqp:acts.reduce((s,a)=>s+(a.compEqp||0),0),
+      outsideEqp:acts.reduce((s,a)=>s+(a.outsideEqp||0),0),
+      directTotal:dc,
+      indirects:existBI?existBI.indirects||0:0,
+      addonBond:existBI?existBI.addonBond||0:0,
+      markup:margin>0?margin:0,
+      takeoffTotal:sv,
+      _disciplineOverride:existBI?existBI._disciplineOverride:null,
+      _sovBilling:{
+        clientItemNo:si.clientItemNo,
+        retainagePct:si.retainagePct,
+        pctCompleteMethod:si.pctCompleteMethod,
+        scheduledValue:sv
+      }
+    };
+  });
+
+  // Update activity biditem references
+  job.sovItems.forEach(si=>{
+    si.activityIds.forEach(actId=>{
+      const a=actMap[actId];
+      if(a)a.biditem=si.id;
+    });
+  });
+
+  await saveJob(Store.activeJob);
+  log('SOV / Pay Items saved — '+job.sovItems.length+' items, bid items updated.');
+  updateImportZones();
+  renderSOVBuilder();
+}
+
+// ═══════════════════════════════════════════
+// CASH FLOW — CONFIG (Project Set Up tab)
+// ═══════════════════════════════════════════
+const CF_DEFAULTS={
+  laborTiming:'weekly',laborLagDays:7,
+  burdenTiming:'weekly',burdenLagDays:7,
+  eqpTiming:'weekly',eqpLagDays:7,
+  matTiming:'monthly',matLagDays:30,
+  subsTiming:'when_paid',subsLagDays:45,
+  truckingTiming:'weekly',truckingLagDays:7,
+  billingFreq:'monthly',
+  mobPct:0,
+  ownerPayTerms:30,
+  retainagePct:10
+};
+
+function getCFConfig(job){
+  if(!job.cashFlowConfig)job.cashFlowConfig={...CF_DEFAULTS};
+  return job.cashFlowConfig;
+}
+
+function renderCashFlowConfig(){
+  const area=document.getElementById('cashflowConfigArea');
+  const job=Store.jobs[Store.activeJob];
+  if(!job){area.innerHTML='';return}
+  const cf=getCFConfig(job);
+
+  const timingOpts=(val)=>`<option value="weekly" ${val==='weekly'?'selected':''}>Weekly</option><option value="biweekly" ${val==='biweekly'?'selected':''}>Bi-Weekly</option><option value="monthly" ${val==='monthly'?'selected':''}>Monthly</option><option value="when_paid" ${val==='when_paid'?'selected':''}>When Paid</option>`;
+
+  const costRow=(label,timingKey,lagKey)=>{
+    return `<div class="cf-config-row">
+      <div class="cf-cost-type">${label}</div>
+      <div style="flex:1;display:flex;gap:8px;align-items:center;">
+        <select style="max-width:140px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;" onchange="updateCFConfig('${timingKey}',this.value)">${timingOpts(cf[timingKey])}</select>
+        <label style="font-size:11px;white-space:nowrap;margin:0;">Lag:</label>
+        <input type="number" min="0" max="120" value="${cf[lagKey]}" style="width:60px;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;text-align:center;" onchange="updateCFConfig('${lagKey}',parseInt(this.value)||0)">
+        <span style="font-size:11px;color:var(--text-light);">days after activity</span>
+      </div>
+    </div>`;
+  };
+
+  let h='<div class="cf-config">';
+  h+='<div class="cf-config-title">Cash Flow & Payment Setup</div>';
+  h+='<p style="font-size:12px;color:var(--text-light);margin:0 0 12px;">Configure how each cost type gets paid out and when you receive payment from the owner. This drives the cash flow projection on the Job Cost Schedule tab.</p>';
+
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;margin-top:8px;">Cost Payout Timing</div>';
+  h+=costRow('Labor','laborTiming','laborLagDays');
+  h+=costRow('Burden','burdenTiming','burdenLagDays');
+  h+=costRow('Equipment','eqpTiming','eqpLagDays');
+  h+=costRow('Materials','matTiming','matLagDays');
+  h+=costRow('Subcontractors','subsTiming','subsLagDays');
+  h+=costRow('Trucking','truckingTiming','truckingLagDays');
+
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin:16px 0 8px;">Revenue & Billing</div>';
+  h+='<div class="cf-config-grid">';
+  h+=`<div><label>Billing Frequency</label><select onchange="updateCFConfig('billingFreq',this.value)"><option value="monthly" ${cf.billingFreq==='monthly'?'selected':''}>Monthly</option><option value="milestone" ${cf.billingFreq==='milestone'?'selected':''}>Milestone</option></select></div>`;
+  h+=`<div><label>Mobilization / Front-Load %</label><input type="number" min="0" max="50" step="0.5" value="${cf.mobPct}" onchange="updateCFConfig('mobPct',parseFloat(this.value)||0)"></div>`;
+  h+=`<div><label>Owner Payment Terms (days)</label><input type="number" min="0" max="120" value="${cf.ownerPayTerms}" onchange="updateCFConfig('ownerPayTerms',parseInt(this.value)||0)"></div>`;
+  h+=`<div><label>Retainage %</label><input type="number" min="0" max="20" step="0.5" value="${cf.retainagePct}" onchange="updateCFConfig('retainagePct',parseFloat(this.value)||0)"></div>`;
+  h+='</div>';
+
+  h+='<div style="margin-top:12px;text-align:right;"><button class="btn-green btn-sm" onclick="saveCFConfig()">Save Config</button></div>';
+  h+='</div>';
+  area.innerHTML=h;
+}
+
+function updateCFConfig(key,val){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const cf=getCFConfig(job);
+  cf[key]=val;
+}
+
+async function saveCFConfig(){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  await saveJob(Store.activeJob);
+  log('Cash flow configuration saved.');
+}
+
+// ═══════════════════════════════════════════
+// CASH FLOW — JCS VIEW SWITCHER
+// ═══════════════════════════════════════════
+let _jcsView='cost'; // 'cost' or 'cashflow'
+
+function switchJCSView(view){
+  _jcsView=view;
+  const costBtn=document.getElementById('jcsViewCost');
+  const cashBtn=document.getElementById('jcsViewCash');
+  const costEl=document.getElementById('jcsContent');
+  const cashEl=document.getElementById('jcsCashFlowContent');
+  if(view==='cost'){
+    costBtn.style.background='rgba(255,255,255,.15)';costBtn.style.fontWeight='600';
+    cashBtn.style.background='transparent';cashBtn.style.fontWeight='400';
+    costEl.style.display='block';cashEl.style.display='none';
+  }else{
+    cashBtn.style.background='rgba(255,255,255,.15)';cashBtn.style.fontWeight='600';
+    costBtn.style.background='transparent';costBtn.style.fontWeight='400';
+    costEl.style.display='none';cashEl.style.display='block';
+    renderCashFlowProjection();
+  }
+}
+
+// ═══════════════════════════════════════════
+// CASH FLOW — PROJECTION ENGINE
+// ═══════════════════════════════════════════
+function renderCashFlowProjection(){
+  const el=document.getElementById('jcsCashFlowContent');
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.activities.length){el.innerHTML='<div class="empty-state"><h2>No Cost Data</h2><p>Import HeavyBid activities and schedule to generate a cash flow projection.</p></div>';return}
+
+  const cf=getCFConfig(job);
+  const tm=job.taskMap||{};
+  const sched=job.schedule||[];
+  const acts=job.activities;
+
+  // Build activity → date range from schedule via taskMap (same logic as JCS)
+  const biDates={};
+  Object.entries(tm).forEach(([si,bi])=>{
+    const t=sched[parseInt(si)];if(!t)return;
+    const s=toDate(t.start),f=toDate(t.finish);
+    if(!biDates[bi])biDates[bi]={start:null,finish:null};
+    if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+    if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+  });
+
+  // Assign each activity a start/end based on its bid item's schedule
+  const biActGroups={};
+  acts.forEach(a=>{const bi=String(a.biditem);if(!biActGroups[bi])biActGroups[bi]=[];biActGroups[bi].push(a)});
+  Object.entries(biActGroups).forEach(([bi,biActs])=>{
+    const dates=biDates[bi];
+    if(!dates||!dates.start||!dates.finish){
+      // Unmapped — spread across project midpoint
+      biActs.forEach(a=>{a._cfStart=null;a._cfEnd=null});
+      return;
+    }
+    const biStart=dates.start.getTime(),biSpan=Math.max(dates.finish.getTime()-biStart,86400000);
+    const totalDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+    let cursor=0;
+    biActs.forEach(a=>{
+      const days=a.calculatedDays||1;
+      a._cfStart=new Date(biStart+(cursor/totalDays)*biSpan);
+      a._cfEnd=new Date(biStart+((cursor+days)/totalDays)*biSpan);
+      cursor+=days;
+    });
+  });
+
+  // Determine project date range (monthly buckets)
+  const allStarts=acts.filter(a=>a._cfStart).map(a=>a._cfStart);
+  const allEnds=acts.filter(a=>a._cfEnd).map(a=>a._cfEnd);
+  if(!allStarts.length){el.innerHTML='<div class="empty-state"><h2>No Schedule Mapping</h2><p>Map schedule tasks to bid items first so activities have dates.</p></div>';return}
+
+  let projStart=new Date(Math.min(...allStarts));
+  let projEnd=new Date(Math.max(...allEnds));
+  // Extend end by max lag to capture all cash outflows
+  const maxLag=Math.max(cf.laborLagDays,cf.burdenLagDays,cf.eqpLagDays,cf.matLagDays,cf.subsLagDays,cf.truckingLagDays,cf.ownerPayTerms);
+  projEnd=new Date(projEnd.getTime()+maxLag*86400000+60*86400000);
+
+  // Build monthly buckets
+  const months=[];
+  const ms=new Date(projStart.getFullYear(),projStart.getMonth(),1);
+  const me=new Date(projEnd.getFullYear(),projEnd.getMonth()+1,1);
+  let cur=new Date(ms);
+  while(cur<me){
+    months.push({start:new Date(cur),label:cur.toLocaleDateString('en-US',{month:'short',year:'2-digit'})});
+    cur.setMonth(cur.getMonth()+1);
+  }
+
+  // Initialize monthly buckets for costs and revenue
+  const costBuckets=months.map(()=>({labor:0,burden:0,eqp:0,mat:0,subs:0,trucking:0,total:0}));
+  const revBuckets=months.map(()=>0);
+
+  // Helper: find month index for a date
+  function monthIdx(d){
+    if(!d)return -1;
+    for(let i=months.length-1;i>=0;i--){if(d>=months[i].start)return i}
+    return 0;
+  }
+
+  // Helper: get payout date for a cost incurred at actMidDate with given timing/lag
+  function payoutDate(actStart,actEnd,timing,lagDays){
+    const mid=new Date((actStart.getTime()+actEnd.getTime())/2);
+    return new Date(mid.getTime()+lagDays*86400000);
+  }
+
+  // Spread each activity's costs into monthly buckets based on payout timing
+  acts.forEach(a=>{
+    if(!a._cfStart||!a._cfEnd)return;
+    const pd=(timing,lag)=>payoutDate(a._cfStart,a._cfEnd,timing,lag);
+
+    const addCost=(bucket,field,amount)=>{
+      const d=pd(cf[field+'Timing']||'monthly',cf[field+'LagDays']||30);
+      const mi=monthIdx(d);
+      if(mi>=0&&mi<costBuckets.length){costBuckets[mi][bucket]+=(amount||0);costBuckets[mi].total+=(amount||0)}
+    };
+
+    addCost('labor','labor',a.labor||0);
+    addCost('burden','burden',a.burden||0);
+    addCost('eqp','eqp',(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0));
+    addCost('mat','mat',(a.permMat||0)+(a.constMat||0));
+    addCost('subs','subs',a.subs||0);
+    addCost('trucking','trucking',a.trucking||0);
+  });
+
+  // Revenue: monthly billing based on cost incurred that month (cost-based % complete)
+  const totalContract=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
+  const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
+  const retPct=cf.retainagePct/100;
+  const ownerLagMonths=Math.ceil(cf.ownerPayTerms/30);
+
+  // Mob payment in first month
+  if(cf.mobPct>0){
+    const mobAmt=totalContract*(cf.mobPct/100)*(1-retPct);
+    const mobMi=Math.min(ownerLagMonths,months.length-1);
+    if(mobMi>=0)revBuckets[mobMi]+=mobAmt;
+  }
+
+  // Monthly billings: revenue = cost incurred * ratio, minus retainage, delayed by owner terms
+  costBuckets.forEach((cb,i)=>{
+    if(cb.total<=0)return;
+    const earnedRev=cb.total*costToRevRatio;
+    const billed=earnedRev*(1-retPct);
+    const payMi=Math.min(i+ownerLagMonths,months.length-1);
+    revBuckets[payMi]+=billed;
+  });
+
+  // Retainage release at end
+  const totalRetainage=totalContract*retPct;
+  if(months.length>1)revBuckets[months.length-1]+=totalRetainage;
+
+  // Compute cumulative and net cash
+  const cumCost=[],cumRev=[],netCash=[];
+  let runCost=0,runRev=0;
+  months.forEach((_,i)=>{
+    runCost+=costBuckets[i].total;
+    runRev+=revBuckets[i];
+    cumCost.push(runCost);
+    cumRev.push(runRev);
+    netCash.push(runRev-runCost);
+  });
+
+  const maxVal=Math.max(...cumCost,...cumRev,1);
+  const minNet=Math.min(...netCash,0);
+  const maxNet=Math.max(...netCash,0);
+
+  // ─── RENDER ───
+  let h='<div class="card" style="margin-top:16px;">';
+  h+='<div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">';
+  h+='<span>Cash Flow Projection — Monthly</span>';
+  h+=`<span style="font-size:12px;font-weight:300;">Contract: ${fmtD(totalContract)} | Direct Cost: ${fmtD(totalDirect)} | Margin: ${fmtPct(totalDirect>0?(totalContract-totalDirect)/totalContract*100:0)}</span>`;
+  h+='</div>';
+
+  // S-Curve SVG
+  const svgW=Math.max(months.length*60,600),svgH=200,padL=60,padR=20,padT=20,padB=30;
+  const plotW=svgW-padL-padR,plotH=svgH-padT-padB;
+  const xStep=months.length>1?plotW/(months.length-1):plotW;
+
+  h+=`<div style="overflow-x:auto;margin-bottom:16px;"><svg width="${svgW}" height="${svgH}" style="display:block;">`;
+  // Grid lines
+  for(let g=0;g<=4;g++){
+    const y=padT+plotH*(1-g/4);
+    h+=`<line x1="${padL}" y1="${y}" x2="${svgW-padR}" y2="${y}" stroke="var(--border)" stroke-dasharray="3,3"/>`;
+    h+=`<text x="${padL-6}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--text-light)" font-family="Oswald">${fmtD(maxVal*g/4)}</text>`;
+  }
+  // Month labels
+  months.forEach((m,i)=>{
+    if(i%Math.ceil(months.length/12)===0||months.length<=14){
+      const x=padL+i*xStep;
+      h+=`<text x="${x}" y="${svgH-5}" text-anchor="middle" font-size="10" fill="var(--text-light)" font-family="Oswald">${m.label}</text>`;
+    }
+  });
+  // Cost curve (red)
+  let costPath='M';
+  cumCost.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);costPath+=(i?'L':'')+x+','+y});
+  h+=`<path d="${costPath}" class="cf-s-curve" stroke="var(--red)"/>`;
+  // Revenue curve (green)
+  let revPath='M';
+  cumRev.forEach((v,i)=>{const x=padL+i*xStep;const y=padT+plotH*(1-v/maxVal);revPath+=(i?'L':'')+x+','+y});
+  h+=`<path d="${revPath}" class="cf-s-curve" stroke="var(--green)"/>`;
+  // Legend
+  h+=`<circle cx="${padL+10}" cy="${padT+8}" r="4" fill="var(--red)"/><text x="${padL+18}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Cost Out</text>`;
+  h+=`<circle cx="${padL+130}" cy="${padT+8}" r="4" fill="var(--green)"/><text x="${padL+138}" y="${padT+12}" font-size="11" fill="var(--text-light)" font-family="Oswald">Cum. Revenue In</text>`;
+  h+=`</svg></div>`;
+
+  // Net Cash Position bar
+  h+='<div style="margin-bottom:16px;">';
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;">Monthly Net Cash Position</div>';
+  const absMax=Math.max(Math.abs(minNet),Math.abs(maxNet),1);
+  months.forEach((m,i)=>{
+    const net=netCash[i];
+    const pct=Math.abs(net)/absMax*50;
+    const isNeg=net<0;
+    const color=isNeg?'var(--red)':'var(--green)';
+    h+=`<div style="display:flex;align-items:center;gap:4px;margin-bottom:1px;">`;
+    h+=`<div style="width:60px;min-width:60px;font-size:10px;font-family:Oswald;color:var(--text-light);text-align:right;">${m.label}</div>`;
+    h+=`<div style="flex:1;display:flex;height:14px;">`;
+    h+=`<div style="width:50%;display:flex;justify-content:flex-end;"><div style="width:${isNeg?pct:0}%;background:${isNeg?color:'transparent'};border-radius:2px 0 0 2px;"></div></div>`;
+    h+=`<div style="width:1px;background:var(--text-light);"></div>`;
+    h+=`<div style="width:50%;"><div style="width:${isNeg?0:pct}%;background:${isNeg?'transparent':color};border-radius:0 2px 2px 0;"></div></div>`;
+    h+=`</div>`;
+    h+=`<div style="width:70px;min-width:70px;font-size:10px;font-family:Oswald;color:${color};text-align:right;">${fmtD(net)}</div>`;
+    h+=`</div>`;
+  });
+  h+='</div>';
+
+  // Detail table
+  h+='<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin-bottom:6px;">Monthly Detail</div>';
+  h+='<div class="table-wrap"><table style="font-size:12px;">';
+  h+='<tr><th>Month</th><th class="num">Labor</th><th class="num">Burden</th><th class="num">Equip</th><th class="num">Material</th><th class="num">Subs</th><th class="num">Trucking</th><th class="num" style="font-weight:700;">Cost Out</th><th class="num" style="color:var(--green);">Revenue In</th><th class="num" style="font-weight:700;">Net Cash</th><th class="num">Cum. Cash</th></tr>';
+  let runNet=0;
+  months.forEach((m,i)=>{
+    const cb=costBuckets[i];
+    if(cb.total===0&&revBuckets[i]===0)return; // skip empty months
+    runNet+=(revBuckets[i]-cb.total);
+    const netColor=runNet<0?'color:var(--red)':'color:var(--green)';
+    h+=`<tr>`;
+    h+=`<td>${m.label}</td>`;
+    h+=`<td class="num">${fmtD(cb.labor)}</td>`;
+    h+=`<td class="num">${fmtD(cb.burden)}</td>`;
+    h+=`<td class="num">${fmtD(cb.eqp)}</td>`;
+    h+=`<td class="num">${fmtD(cb.mat)}</td>`;
+    h+=`<td class="num">${fmtD(cb.subs)}</td>`;
+    h+=`<td class="num">${fmtD(cb.trucking)}</td>`;
+    h+=`<td class="num" style="font-weight:600;">${fmtD(cb.total)}</td>`;
+    h+=`<td class="num" style="color:var(--green);font-weight:600;">${fmtD(revBuckets[i])}</td>`;
+    h+=`<td class="num" style="font-weight:600;${revBuckets[i]-cb.total<0?'color:var(--red)':'color:var(--green)'}">${fmtD(revBuckets[i]-cb.total)}</td>`;
+    h+=`<td class="num" style="${netColor};font-weight:600;">${fmtD(runNet)}</td>`;
+    h+=`</tr>`;
+  });
+  // Totals
+  const totCost=cumCost[cumCost.length-1]||0,totRev=cumRev[cumRev.length-1]||0;
+  h+=`<tr style="background:var(--ash);font-weight:600;"><td>TOTAL</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.labor,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.burden,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.eqp,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.mat,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.subs,0))}</td><td class="num">${fmtD(costBuckets.reduce((s,b)=>s+b.trucking,0))}</td><td class="num">${fmtD(totCost)}</td><td class="num" style="color:var(--green)">${fmtD(totRev)}</td><td class="num" style="color:var(--green)">${fmtD(totRev-totCost)}</td><td class="num">${fmtD(totRev-totCost)}</td></tr>`;
+  h+='</table></div>';
+
+  // Peak negative cash
+  const peakNeg=Math.min(...netCash);
+  const peakNegMo=netCash.indexOf(peakNeg);
+  if(peakNeg<0){
+    h+=`<div style="margin-top:12px;padding:12px 16px;background:#FFF0F0;border:1px solid var(--red);border-radius:6px;font-size:13px;">`;
+    h+=`<strong style="color:var(--red);">Peak Cash Exposure:</strong> ${fmtD(peakNeg)} in ${months[peakNegMo]?.label||'—'}. `;
+    h+=`This is the maximum amount of working capital needed before owner payments catch up.`;
+    h+=`</div>`;
+  }
+
+  h+='</div>';
   el.innerHTML=h;
 }
 </script>
