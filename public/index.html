@@ -671,11 +671,13 @@ function renderDashboard(){
   const contract=bidSummaries.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const totalMH=bidSummaries.reduce((s,b)=>s+b.manHours,0);
 
-  const totalLabor=bidSummaries.reduce((s,b)=>s+b.labor,0);
-  const totalBurden=bidSummaries.reduce((s,b)=>s+b.burden,0);
-  const totalMat=bidSummaries.reduce((s,b)=>s+(b.permMat||0)+(b.constMat||0),0);
-  const totalEqp=bidSummaries.reduce((s,b)=>s+(b.eqpOper||0)+(b.compEqp||0)+(b.outsideEqp||0),0);
-  const totalSubs=bidSummaries.reduce((s,b)=>s+b.subs,0);
+  // Cost breakdown: prefer activities (HeavyBid activities have detailed cost columns; bid items often don't)
+  const costSrc=acts.length?acts:bids;
+  const totalLabor=costSrc.reduce((s,b)=>s+(b.labor||0),0);
+  const totalBurden=costSrc.reduce((s,b)=>s+(b.burden||0),0);
+  const totalMat=costSrc.reduce((s,b)=>s+(b.totalMaterial||(b.permMat||0)+(b.constMat||0)),0);
+  const totalEqp=costSrc.reduce((s,b)=>s+(b.totalEquipment||(b.eqpOper||0)+(b.compEqp||0)+(b.outsideEqp||0)),0);
+  const totalSubs=costSrc.reduce((s,b)=>s+(b.subs||0),0);
 
   const profitPct=contract>0?(totalProfit/contract*100):0;
   const overheadPct=contract>0?(totalOverhead/contract*100):0;
