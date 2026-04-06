@@ -176,6 +176,23 @@ tr:hover{background:#FAF8F5}
 .jcs-footer strong{color:var(--green)}
 .jcs-today-legend{color:var(--orange);display:flex;align-items:center;gap:4px}
 .jcs-today-legend::before{content:'';display:inline-block;width:8px;height:8px;background:var(--orange);border-radius:2px}
+/* Baseline Lock Feature */
+.baseline-section{background:linear-gradient(135deg,#F4F7F4,#FFFFFF);border:1px solid var(--green);border-radius:8px;padding:16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.baseline-info{flex:1;min-width:200px}
+.baseline-date{font-size:12px;color:var(--text-light);margin-top:2px}
+/* Change Order */
+.co-badge{background:var(--orange);color:var(--white);font-family:Oswald,sans-serif;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-right:4px}
+.co-row{border-left:3px solid var(--orange) !important}
+/* Weekly Cost Loading */
+.weekly-cost-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+.weekly-cost-table th,.weekly-cost-table td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:right}
+.weekly-cost-table th{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;background:var(--green);color:var(--white);text-align:left}
+.weekly-cost-table th:first-child,.weekly-cost-table td:first-child{text-align:left}
+.weekly-cost-table .cumulative{font-weight:600;color:var(--green)}
+/* Actuals Import */
+.actuals-kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+/* Dependency Warning */
+.dep-warn{background:#FFF8F0 !important;border-left:3px solid var(--orange) !important}
 @media(max-width:768px){.import-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.nav-tab{padding:10px 12px;font-size:11px}.jcs-actions{flex-direction:column}}
 </style>
 </head>
@@ -265,6 +282,12 @@ tr:hover{background:#FAF8F5}
         <p>Tasks, dates, durations, crews</p>
         <div class="status pending" id="status-schedule">Drop .xlsx or click</div>
         <input type="file" id="file-schedule" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'schedule')">
+      </div>
+      <div class="import-zone" id="zone-actuals" onclick="document.getElementById('file-actuals').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'actuals')">
+        <h3>HeavyJob Actuals</h3>
+        <p>Costs to date, quantities installed, % complete</p>
+        <div class="status pending" id="status-actuals">Drop .xlsx or click</div>
+        <input type="file" id="file-actuals" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'actuals')">
       </div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -586,7 +609,7 @@ function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.
 function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
 function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();switchJob();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
-function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{}};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[]};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
 
 function switchJob(){
   Store.activeJob=document.getElementById('jobSelect').value||null;
@@ -602,7 +625,7 @@ function switchJob(){
 }
 function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
 function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog()}
-function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';if(type==='biditems'){st.className='status loaded';st.textContent=data.length+' bid items loaded (OH+P included)'}else{st.className='status loaded';st.textContent=data.length+' records loaded'+extra}}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
+function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule','actuals'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';if(type==='biditems'){st.className='status loaded';st.textContent=data.length+' bid items loaded (OH+P included)'}else if(type==='actuals'){st.className='status loaded';st.textContent=data.length+' actuals loaded'}else{st.className='status loaded';st.textContent=data.length+' records loaded'+extra}}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if((job.bidItems.length||job.sovItems?.length)&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Pay Items'}else{mapBtn.style.display='none'}}
   const sovBtn=document.getElementById('sovBtn');
@@ -645,12 +668,13 @@ function handleImportFile(file,type){
       log(`Parsing ${file.name}: ${rows.length} rows, ${Object.keys(rows[0]||{}).length} columns`);
       let parsed;
       if(type==='activities') parsed=parseActivitiesRaw(rows);
-      else if(type==='biditems') parsed=parseBidItemsRaw(rows); // legacy — kept for backward compat
+      else if(type==='biditems') parsed=parseBidItemsRaw(rows);
+      else if(type==='actuals') parsed=parseActualsRaw(rows);
       else parsed=parseScheduleRaw(rows);
-      parsed.forEach(r=>r._selected=true);
+      if(type!=='actuals') parsed.forEach(r=>r._selected=true);
       Store.staging={type,data:parsed};
       log(`${type}: ${parsed.length} records parsed. Review below.`);
-      renderStaging();
+      if(type==='actuals'){confirmActualsStaging();}else{renderStaging();}
     }catch(err){log(`Error parsing ${file.name}: ${err.message}`)}
   };
   reader.readAsArrayBuffer(file);event.target.value='';
@@ -749,6 +773,38 @@ function parseScheduleRaw(rows){
   });
 }
 
+function parseActualsRaw(rows){
+  return rows.filter(r=>r['Activity Code']||r['Code']).map(r=>{
+    const code=String(r['Activity Code']||r['Code']||'');
+    const budgetHours=col(r,['Budget Hours','Budgeted Hours','BudgetHours']);
+    const budgetCost=col(r,['Budget Cost','Budgeted Cost','BudgetCost','Budget']);
+    const actualHours=col(r,['Actual Hours','ActualHours','Actual Hrs']);
+    const actualCost=col(r,['Actual Cost','ActualCost','Actual']);
+    const qtyInstalled=col(r,['Qty Installed','Quantity Installed','QtyInstalled']);
+    const qtyRemaining=col(r,['Qty Remaining','Quantity Remaining','QtyRemaining']);
+    const pctComplete=col(r,['% Complete','Percent Complete','PctComplete','\u0025 Complete']);
+    return{
+      code,
+      description:colStr(r,['Description','Desc']),
+      budgetHours,budgetCost,actualHours,actualCost,qtyInstalled,qtyRemaining,pctComplete
+    };
+  });
+}
+
+function confirmActualsStaging(){
+  const{type,data}=Store.staging;
+  if(type!=='actuals')return;
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  job.actuals=data;
+  log(`${data.length} actuals records confirmed.`);
+  addEditLog('Imported '+data.length+' actuals records');
+  Store.staging={type:null,data:[]};
+  updateImportZones();
+  saveJob(Store.activeJob);
+  renderActiveSubTab();
+}
+
 // ═══════════════════════════════════════════
 // STAGING REVIEW
 // ═══════════════════════════════════════════
@@ -815,7 +871,18 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     }else{
       job.bidItems=sel;
     }
-  }else{job.schedule=sel;const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}log(`${type}: ${sel.length} records confirmed.`);addEditLog('Imported '+sel.length+' '+type+' records');Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none';updateImportZones();saveJob(Store.activeJob);
+  }else if(type==='schedule'){
+    job.schedule=sel;
+    const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);
+    if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}
+    recalcDependencies(job);
+  }
+  log(`${type}: ${sel.length} records confirmed.`);
+  addEditLog('Imported '+sel.length+' '+type+' records');
+  Store.staging={type:null,data:[]};
+  document.getElementById('stagingArea').style.display='none';
+  updateImportZones();
+  saveJob(Store.activeJob);
   if((type==='schedule'||type==='activities')&&job.schedule.length&&(job.bidItems.length||(job.sovItems||[]).length)){showMapping()}
 }
 
@@ -1351,6 +1418,29 @@ function renderDashboard(){
   });
   h+='</div>';
 
+  // ── BASELINE LOCK (Feature 1) ──
+  const hasBaseline=job.baseline&&job.baseline.lockedAt;
+  if(hasBaseline){
+    const baselineDate=new Date(job.baseline.lockedAt);
+    const contractVar=contract-job.baseline.contract;
+    const directVar=totalDirect-job.baseline.totalDirect;
+    const contractVarPct=job.baseline.contract>0?(contractVar/job.baseline.contract*100):0;
+    const directVarPct=job.baseline.totalDirect>0?(directVar/job.baseline.totalDirect*100):0;
+    h+=`<div class="baseline-section">`;
+    h+=`<div class="baseline-info">`;
+    h+=`<strong style="font-family:Oswald;font-size:14px;color:var(--green);">✓ Baseline Locked</strong>`;
+    h+=`<div class="baseline-date">${baselineDate.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})}</div>`;
+    h+=`</div>`;
+    h+=`<div style="display:flex;gap:16px;flex-wrap:wrap;flex:1;">`;
+    const contractVarClass=contractVar>0?'negative':'positive';
+    const directVarClass=directVar>0?'negative':'positive';
+    h+=`<div style="text-align:center;"><div style="font-size:13px;color:var(--text-light);">Contract Variance</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--${contractVarClass});">${fmtD(contractVar)}</div><div style="font-size:11px;color:var(--text-light);">(${contractVarPct>0?'+':''}${contractVarPct.toFixed(1)}%)</div></div>`;
+    h+=`<div style="text-align:center;"><div style="font-size:13px;color:var(--text-light);">Direct Cost Variance</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--${directVarClass});">${fmtD(directVar)}</div><div style="font-size:11px;color:var(--text-light);">(${directVarPct>0?'+':''}${directVarPct.toFixed(1)}%)</div></div>`;
+    h+=`</div>`;
+    h+=`<button class="edit-btn" onclick="resetBaseline()">Reset</button>`;
+    h+=`</div>`;
+  }
+
   // ── KPIs ──
   h+='<div class="kpi-row">';
   h+=`<div class="kpi"><div class="kpi-value">${fmtD(contract)}</div><div class="kpi-label">Contract Total</div></div>`;
@@ -1360,7 +1450,26 @@ function renderDashboard(){
   h+=`<div class="kpi"><div class="kpi-value">${fmt(totalMH)}</div><div class="kpi-label">Total Man Hours</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${bids.length}</div><div class="kpi-label">Pay Items</div></div>`;
   if(schedDur) h+=`<div class="kpi"><div class="kpi-value">${schedDur}d</div><div class="kpi-label">Schedule Duration</div></div>`;
+  if(!hasBaseline) h+=`<div class="kpi" style="border-top-color:var(--sand);"><button class="edit-btn" onclick="lockBaseline()" style="width:100%;background:linear-gradient(135deg,var(--sand),#A89B8F);color:var(--white);border:none;">Lock Baseline</button><div class="kpi-label" style="margin-top:8px;">Snapshot budget</div></div>`;
   h+='</div>';
+
+  // ── ACTUALS KPIs (Feature 3) ──
+  const hasActuals=job.actuals&&job.actuals.length;
+  if(hasActuals){
+    const actuals=job.actuals||[];
+    const actualCostTotal=actuals.reduce((s,a)=>s+(a.actualCost||0),0);
+    const budgetCostTotal=actuals.reduce((s,a)=>s+(a.budgetCost||0),0);
+    const costVar=budgetCostTotal-actualCostTotal;
+    const costVarPct=budgetCostTotal>0?(costVar/budgetCostTotal*100):0;
+    const pctCompleteAvg=actuals.length?actuals.reduce((s,a)=>s+(a.pctComplete||0),0)/actuals.length:0;
+    h+='<div class="actuals-kpi-row">';
+    h+=`<div class="kpi"><div class="kpi-value">${fmtD(actualCostTotal)}</div><div class="kpi-label">Actual Cost to Date</div></div>`;
+    h+=`<div class="kpi"><div class="kpi-value">${fmtD(budgetCostTotal-actualCostTotal)}</div><div class="kpi-label">Budget Remaining</div></div>`;
+    const varClass=costVar<0?'negative':'positive';
+    h+=`<div class="kpi ${varClass}"><div class="kpi-value">${fmtD(costVar)}</div><div class="kpi-label">Cost Variance (${costVarPct.toFixed(1)}%)</div></div>`;
+    h+=`<div class="kpi"><div class="kpi-value">${pctCompleteAvg.toFixed(0)}%</div><div class="kpi-label">Avg % Complete</div></div>`;
+    h+='</div>';
+  }
 
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">';
   h+='<div class="card"><div class="card-title">Cost Breakdown</div><div class="cost-bars">';
@@ -1409,6 +1518,73 @@ function renderDashboard(){
 // ═══════════════════════════════════════════
 // Ensure value is a Date object (handles strings from Supabase)
 function toDate(v){if(v instanceof Date)return v;if(typeof v==='string'){const d=new Date(v);if(!isNaN(d))return d}return null}
+
+// ═══════════════════════════════════════════
+// FEATURE: BASELINE LOCK
+// ═══════════════════════════════════════════
+function lockBaseline(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  const bids=job.bidItems||[];
+  const totalDirect=bids.reduce((s,b)=>s+b.directTotal,0);
+  const totalOverhead=bids.reduce((s,b)=>s+((b.indirects||0)+(b.addonBond||0)),0);
+  const totalProfit=bids.reduce((s,b)=>s+(b.markup||0),0);
+  const contract=bids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  job.baseline={
+    lockedAt:new Date(),
+    schedule:[...(job.schedule||[])],
+    bidItems:[...bids],
+    sovItems:[...(job.sovItems||[])],
+    totalDirect,totalOverhead,totalProfit,contract
+  };
+  addEditLog('Locked baseline snapshot');
+  saveJob(Store.activeJob);
+  renderDashboard();
+}
+function resetBaseline(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  if(!confirm('Reset baseline snapshot? This cannot be undone.'))return;
+  job.baseline=null;
+  addEditLog('Reset baseline snapshot');
+  saveJob(Store.activeJob);
+  renderDashboard();
+}
+
+// ═══════════════════════════════════════════
+// FEATURE: DEPENDENCY SEQUENCING
+// ═══════════════════════════════════════════
+function recalcDependencies(job){
+  if(!job||!job.schedule.length)return;
+  let changed=true;
+  let iterations=0;
+  while(changed&&iterations<10){
+    changed=false;iterations++;
+    job.schedule.forEach(t=>{
+      if(!t.predecessors)return;
+      const predIds=String(t.predecessors).split(',').map(s=>s.trim()).filter(s=>s);
+      if(!predIds.length)return;
+      const predTasks=predIds.map(id=>job.schedule.find(tk=>String(tk.id)===id)).filter(t=>t);
+      if(!predTasks.length)return;
+      const maxFinish=Math.max(...predTasks.map(pt=>{const f=toDate(pt.finish);return f?f.getTime():0}));
+      if(maxFinish>0){
+        const newStart=new Date(maxFinish);
+        const oldStart=toDate(t.start);
+        if(!oldStart||newStart.getTime()>oldStart.getTime()){
+          t.start=newStart;
+          const dur=t.durationDays||1;
+          t.finish=new Date(newStart.getTime()+dur*86400000);
+          changed=true;
+        }
+      }
+    });
+  }
+  const allDates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
+  if(allDates.length){
+    job.meta.startDate=new Date(Math.min(...allDates));
+    job.meta.endDate=new Date(Math.max(...allDates));
+  }
+}
 
 function renderGantt(tasks,meta){
   const vt=tasks.map(t=>({...t,start:toDate(t.start),finish:toDate(t.finish)})).filter(t=>t.start&&t.finish);
@@ -1489,7 +1665,7 @@ function renderGlobalView(){
   // ─── Product Roadmap ───
   h+='<div class="card"><div class="card-title">Product Roadmap</div>';
   const phases=[
-    {phase:'Phase 1A',status:'live',label:'LIVE',items:['HeavyBid Activities import with phase codes — auto-builds pay items & SOV','Smartsheet schedule import + pay item mapping','SOV / Pay Items builder with OH+P and phase code tracking','Job Dashboard with Overview, Pay Items, Schedule, JCS, Cash Flow sub-tabs','Per-job & company-wide cash flow projections','Period-based payment timing (weekly/monthly/after billing)','Edit log tracking','Global multi-job view with stacked cash flow']},
+    {phase:'Phase 1A',status:'live',label:'LIVE',items:['HeavyBid Activities import with phase codes — auto-builds pay items & SOV','Smartsheet schedule import + pay item mapping','SOV / Pay Items builder with OH+P and phase code tracking','Job Dashboard with Overview, Pay Items, Schedule, JCS, Cash Flow sub-tabs','Per-job & company-wide cash flow projections','Period-based payment timing (weekly/monthly/after billing)','Edit log tracking','Global multi-job view with stacked cash flow','Baseline lock & variance tracking (budget vs current)','Weekly cost loading schedule with cost spread analysis','HeavyJob actuals import & budget vs actual comparison','Change order task tracking with CO numbering','Dependency sequencing with automatic schedule recalculation']},
     {phase:'Phase 1B',status:'active',label:'IN PROGRESS',items:['Inline schedule editing (edit dates, durations, status directly)','Schedule changes cascade to JCS + Cash Flow automatically','Set baseline schedule for variance tracking']},
     {phase:'Phase 2',status:'planned',label:'PLANNED',items:['Built-in schedule builder (create tasks, durations, crews — no Smartsheet needed)','Task predecessor logic with auto-cascade','Pay application generator (% complete → billing → retainage)','Change order tracking and contract value adjustments','Actual cost entry and earned value analysis (EV, CPI, SPI)']},
     {phase:'Phase 3',status:'planned',label:'FUTURE',items:['Drag-to-resize Gantt bars for schedule editing','Resource loading and crew capacity planning','Subcontractor payment tracking (when owner pays flow)','Document management (submittals, RFIs, daily reports)','Multi-user real-time collaboration','Mobile field reporting']}
@@ -1982,10 +2158,10 @@ function renderSchedule(){
   if(m.startDate&&m.endDate){h+='<div class="card"><div class="card-title">Gantt Chart</div>'+renderGantt(job.schedule,m)+'</div>'}
 
   // Editable task table
-  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Master Schedule<button class="btn-green btn-sm" onclick="addScheduleTask()">+ Add Task</button></div>';
+  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Master Schedule<div style="display:flex;gap:8px;"><button class="btn-green btn-sm" onclick="recalcDependencies(Store.jobs[Store.activeJob]);renderSchedule();">⟳ Calc Dependencies</button><button class="btn-green btn-sm" onclick="addScheduleTask()">+ Add Task</button></div></div>';
   h+='<div style="font-size:11px;color:var(--text-light);margin-bottom:8px;">Edit dates, status, and names directly — changes update JCS &amp; Cash Flow automatically.</div>';
   h+='<div class="table-wrap" style="max-height:600px;"><table>';
-  h+='<tr><th>#</th><th style="min-width:200px;">Task</th><th style="min-width:130px;">Start</th><th style="min-width:130px;">Finish</th><th class="num">Days</th><th>Status</th><th>Crew</th><th>Pred.</th><th></th></tr>';
+  h+='<tr><th>#</th><th style="min-width:200px;">Task</th><th style="min-width:130px;">Start</th><th style="min-width:130px;">Finish</th><th class="num">Days</th><th>Status</th><th>Crew</th><th>Pred.</th><th style="width:50px;">CO</th><th></th></tr>';
   const inputSt='font-family:inherit;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;';
 
   tasks.forEach((t,i)=>{
@@ -1996,7 +2172,19 @@ function renderSchedule(){
     const days=sd&&fd?Math.max(Math.ceil((fd-sd)/86400000),0):'—';
     const sc=t.status==='Complete'?'var(--teal)':t.status==='In Progress'?'var(--blue)':'var(--text-light)';
 
-    h+=`<tr>`;
+    // Check predecessor validation (Feature 5)
+    let depWarn=false;
+    if(t.predecessors){
+      const predIds=String(t.predecessors).split(',').map(s=>s.trim()).filter(s=>s);
+      const predTasks=predIds.map(id=>tasks.find(tk=>String(tk.id)===id)).filter(t=>t);
+      predTasks.forEach(pt=>{
+        const ptf=toDate(pt.finish);
+        if(ptf&&sd&&ptf>sd)depWarn=true;
+      });
+    }
+    const rowCls=depWarn?'dep-warn':'';
+
+    h+=`<tr class="${rowCls}">`;
     h+=`<td style="color:var(--text-light);font-size:11px;">${t.id}</td>`;
     h+=`<td><input type="text" value="${esc(t.name)}" onchange="updateScheduleTask(${i},'name',this.value)" style="${inputSt}width:100%;min-width:160px;font-weight:600;"></td>`;
     h+=`<td><input type="date" value="${startVal}" onchange="updateScheduleTask(${i},'start',this.value)" style="${inputSt}width:120px;"></td>`;
@@ -2009,10 +2197,14 @@ function renderSchedule(){
     h+=`</select></td>`;
     h+=`<td><input type="text" value="${esc(t.crew||'')}" onchange="updateScheduleTask(${i},'crew',this.value)" style="${inputSt}width:80px;" placeholder="Crew"></td>`;
     h+=`<td><input type="text" value="${esc(t.predecessors||'')}" onchange="updateScheduleTask(${i},'predecessors',this.value)" style="${inputSt}width:70px;color:var(--text-light);" placeholder="e.g. 3,5"></td>`;
+    h+=`<td style="text-align:center;">${t._changeOrder?`<span class="co-badge">CO#${t._coNumber||'—'}</span>`:'—'}</td>`;
     h+=`<td><button class="del-btn" onclick="removeScheduleTask(${i})" title="Delete task" style="font-size:10px;padding:2px 6px;">&#10005;</button></td>`;
     h+=`</tr>`;
   });
   h+='</table></div></div>';
+
+  // Add "Add Change Order" button
+  h+='<div class="card" style="text-align:center;padding:12px;"><button class="btn-primary" style="background:var(--orange);" onclick="addChangeOrderTask()">＋ Add Change Order Task</button></div>';
   el.innerHTML=h;
 }
 
@@ -2042,6 +2234,11 @@ function updateScheduleTask(idx,field,value){
   if(allDates.length){
     job.meta.startDate=new Date(Math.min(...allDates));
     job.meta.endDate=new Date(Math.max(...allDates));
+  }
+
+  // Recalc dependencies if predecessors field changed or any date changed
+  if(field==='predecessors'||field==='start'||field==='finish'||field==='durationDays'){
+    recalcDependencies(job);
   }
 
   // Log the change
@@ -2081,6 +2278,39 @@ function addScheduleTask(){
   if(allDates.length){job.meta.startDate=new Date(Math.min(...allDates));job.meta.endDate=new Date(Math.max(...allDates))}
 
   addEditLog('Schedule: Added new task #'+nextId);
+  saveJob(Store.activeJob);
+  renderSchedule();
+  updateNavBadges();
+}
+
+// Add a change order task (Feature 4)
+function addChangeOrderTask(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  const coNumber=prompt('Enter Change Order Number (e.g., CO-001):','CO-');
+  if(!coNumber)return;
+  const nextId=job.schedule.length?Math.max(...job.schedule.map(t=>parseInt(t.id)||0))+1:1;
+  const lastTask=job.schedule.length?job.schedule[job.schedule.length-1]:null;
+  const defStart=lastTask&&toDate(lastTask.finish)?toDate(lastTask.finish):new Date();
+  const defFinish=new Date(defStart.getTime()+7*86400000);
+  job.schedule.push({
+    id:String(nextId),
+    name:'Change Order Task',
+    start:defStart,
+    finish:defFinish,
+    durationDays:7,
+    durationStr:'7d',
+    predecessors:'',
+    status:'Not Started',
+    atRisk:'No',
+    crew:'',
+    variance:null,
+    _changeOrder:true,
+    _coNumber:coNumber
+  });
+  const allDates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
+  if(allDates.length){job.meta.startDate=new Date(Math.min(...allDates));job.meta.endDate=new Date(Math.max(...allDates))}
+  addEditLog(`Schedule: Added change order task ${coNumber}`);
   saveJob(Store.activeJob);
   renderSchedule();
   updateNavBadges();
@@ -2240,6 +2470,12 @@ function renderJobCostSchedule(){
     const shortName=a.description||(a.code||'Activity');
     const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
     const pcBadge=a.phaseCode?`<span style="font-size:9px;color:var(--green);font-weight:700;margin-right:3px;">${a.phaseCode}</span>`:'';
+
+    // Baseline comparison (Feature 1) - if baseline exists, show it
+    const baselineActual=job.baseline?.bidItems?.find(bi=>bi.biditem===a.biditem);
+
+    // Actuals matching (Feature 3)
+    const actualData=job.actuals?.find(ac=>ac.code===a.code);
     let r='<tr>';
     r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${pcBadge}${shortName}</td>`;
     r+=`<td>${qty}${units?' '+units:''}</td>`;
@@ -2256,6 +2492,11 @@ function renderJobCostSchedule(){
       r+=`<div class="jcs-gantt-bar" style="left:${barLeftPct}%;width:${barWPct}%;background:${gColor};">${barLabel}</div>`;
     }
     r+='</td>';
+    if(actualData){
+      r+=`<td class="num">${fmtD(actualData.actualCost||0)}</td>`;
+      const variance=(a.directTotal||0)-(actualData.actualCost||0);
+      r+=`<td class="num" style="color:${variance>=0?'var(--green)':'var(--red)'};">${fmtD(variance)}</td>`;
+    }
     r+=`<td style="width:40px;text-align:center;"><button class="edit-btn" onclick="editRow('activity',${actIdx},false)" title="Edit">✎</button></td>`;
     r+='</tr>';
     return r;
@@ -2263,6 +2504,7 @@ function renderJobCostSchedule(){
 
   // Build table
   const ganttWidth=Math.max(500,months.length*80);
+  const hasActuals=job.actuals&&job.actuals.length;
   let h='<div class="jcs-table-wrap"><table class="jcs-table">';
   h+='<tr><th style="min-width:200px;">Task</th><th style="min-width:80px;">QTY</th><th style="min-width:60px;">Rate</th><th style="min-width:50px;">Days</th><th style="min-width:60px;">Hours</th>';
   h+=`<th colspan="${months.length||1}" style="min-width:${ganttWidth}px;padding:0;">`;
@@ -2270,7 +2512,9 @@ function renderJobCostSchedule(){
   months.forEach((mo,mi)=>{
     h+=`<div style="flex:1;text-align:center;padding:10px 4px;border-left:${mi?'1px solid var(--ash)':'none'};font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--green);">${mo.label}</div>`;
   });
-  h+='</div></th><th style="width:40px;"></th></tr>';
+  h+='</div></th>';
+  if(hasActuals){h+='<th style="min-width:90px;color:var(--blue);">Actual</th><th style="min-width:80px;color:var(--blue);">Variance</th>'}
+  h+='<th style="width:40px;"></th></tr>';
 
   // Mapped rows grouped by discipline
   sortedMapped.forEach(g=>{
@@ -2313,6 +2557,46 @@ function renderJobCostSchedule(){
   if(todayPct>=0&&todayPct<=100) h+=`<div class="jcs-today-legend">Today marker</div>`;
   h+=`</div>`;
   h+='</div>';
+
+  // ── WEEKLY COST LOADING (Feature 2) ──
+  h+='<div class="card" style="margin-top:20px;"><div class="card-title">Weekly Cost Loading</div>';
+  // Build weekly buckets
+  const weekBuckets=[];
+  let weekCursor=new Date(projStart);
+  while(weekCursor<=projEnd){
+    const bucketStart=new Date(weekCursor);
+    const bucketEnd=new Date(weekCursor.getTime()+7*86400000);
+    weekBuckets.push({
+      start:bucketStart,
+      end:bucketEnd,
+      label:bucketStart.toLocaleDateString('en-US',{month:'short',day:'numeric'}),
+      labor:0,material:0,equipment:0,subs:0,total:0
+    });
+    weekCursor=new Date(bucketEnd);
+  }
+  // Spread activity costs across weeks
+  mappedActs.forEach(a=>{
+    if(!a._barStart||!a._barEnd||!a.directTotal)return;
+    const direct=a.directTotal||0;
+    const labor=a.labor||0,material=a.totalMaterial||0,equipment=a.totalEquipment||0,subs=a.subs||0;
+    const daysSpan=Math.max((a._barEnd-a._barStart)/86400000,0.1);
+    weekBuckets.forEach(wb=>{
+      const overlap=Math.min(a._barEnd,wb.end)-Math.max(a._barStart,wb.start);
+      if(overlap>0){
+        const ratio=overlap/86400000/daysSpan;
+        wb.labor+=labor*ratio;wb.material+=material*ratio;wb.equipment+=equipment*ratio;wb.subs+=subs*ratio;wb.total+=direct*ratio;
+      }
+    });
+  });
+  let cumCost=0;
+  h+='<div class="table-wrap"><table class="weekly-cost-table"><tr><th>Week Of</th><th class="num">Labor</th><th class="num">Material</th><th class="num">Equipment</th><th class="num">Subs</th><th class="num">Total</th><th class="num">Cumulative</th></tr>';
+  weekBuckets.forEach(wb=>{
+    if(wb.total===0&&wb.labor===0&&wb.material===0&&wb.equipment===0&&wb.subs===0)return;
+    cumCost+=wb.total;
+    h+=`<tr><td>${wb.label}</td><td class="num">${fmtD(wb.labor)}</td><td class="num">${fmtD(wb.material)}</td><td class="num">${fmtD(wb.equipment)}</td><td class="num">${fmtD(wb.subs)}</td><td class="num" style="font-weight:600;">${fmtD(wb.total)}</td><td class="num cumulative">${fmtD(cumCost)}</td></tr>`;
+  });
+  h+='<tr style="background:var(--ash);font-weight:600;"><td>TOTAL</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.labor,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.material,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.equipment,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.subs,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.total,0))+'</td><td class="num">'+fmtD(cumCost)+'</td></tr>';
+  h+='</table></div></div>';
 
   el.innerHTML=h;
 }
