@@ -432,6 +432,7 @@ tr:hover{background:#FAF8F5}
 // DATA STORE
 // ═══════════════════════════════════════════
 const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]}, _pinAuth:{} };
+let _globalSchedByDisc=false;
 
 // ═══════════════════════════════════════════
 // PIN / ACCESS CONTROL
@@ -1225,7 +1226,8 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     // Auto-build bid items + SOV from activities using phase codes
     const hasPhase=sel.some(a=>a.phaseCode);
     if(hasPhase){
-      job.bidItems=buildBidItemsFromActivities(sel);
+      // Pass existing bid items so qty/units/OH from bid item import are preserved
+      job.bidItems=buildBidItemsFromActivities(sel,job.bidItems||[]);
       job.sovItems=buildSOVFromActivities(sel,job.bidItems);
       log('Phase codes detected — auto-built '+job.bidItems.length+' pay items and SOV from activities.');
       addEditLog('Auto-built '+job.bidItems.length+' pay items from phase codes');
@@ -1234,24 +1236,36 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     // If pay items were already auto-built from activities, merge OH/Profit from bid items
     if(job.bidItems.length&&job.activities.length){
       const biMap={};sel.forEach(bi=>{biMap[bi.biditem]=bi});
+      const isUnitPrice=job.meta.billingType==='unit-price';
       job.bidItems.forEach(existing=>{
         const imported=biMap[existing.biditem];
         if(imported){
+          // Pull quantity & units from bid item import (critical for unit price jobs)
+          if(imported.bidQuantity)existing.bidQuantity=imported.bidQuantity;
+          if(imported.takeoffQuantity)existing.takeoffQuantity=imported.takeoffQuantity;
+          if(imported.units)existing.units=imported.units;
           existing.indirects=imported.indirects||0;
           existing.addonBond=imported.addonBond||0;
           existing.markup=imported.markup||0;
           existing.takeoffTotal=existing.directTotal+(existing.indirects||0)+(existing.addonBond||0)+(existing.markup||0);
           existing.bidTotal=imported.bidTotal||existing.takeoffTotal;
-          existing.unitPrice=existing.bidQuantity?existing.takeoffTotal/existing.bidQuantity:existing.takeoffTotal;
+          existing.unitPrice=existing.bidQuantity>0?existing.takeoffTotal/existing.bidQuantity:existing.takeoffTotal;
         }
       });
-      // Also update SOV items with ohPct/profitPct from bid item data
+      // Also update SOV items with ohPct/profitPct and qty/unit from bid item data
       if(job.sovItems){job.sovItems.forEach(si=>{
         const imported=biMap[si.id];
         if(imported){
           const dc=si.activityIds?job.activities.filter(a=>si.activityIds.includes(a.code)).reduce((s,a)=>s+(a.directTotal||0),0):0;
           si.ohPct=dc>0?((imported.indirects||0)+(imported.addonBond||0))/dc:0;
           si.profitPct=dc>0?(imported.markup||0)/dc:0;
+          // Pull quantity & units into SOV (critical for unit price billing)
+          if(imported.bidQuantity)si.contractQty=imported.bidQuantity;
+          if(imported.units)si.unit=imported.units;
+          if(imported.bidQuantity>0){
+            const fullCost=dc+(dc*si.ohPct)+(dc*si.profitPct);
+            si.unitPrice=fullCost/imported.bidQuantity;
+          }
         }
       })}
       log('Merged OH & profit from '+sel.length+' bid items onto existing pay items.');
@@ -1276,23 +1290,36 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
 }
 
 // Build bid items (pay items) from activities by grouping on biditem column
-function buildBidItemsFromActivities(activities){
+// existingBidItems: optional array of previously imported bid items to pull qty/units/OH from
+function buildBidItemsFromActivities(activities,existingBidItems){
+  // Build lookup for existing bid item data (from bid items import) for qty/units/OH
+  const _existBI={};
+  if(existingBidItems&&existingBidItems.length){existingBidItems.forEach(bi=>{_existBI[String(bi.biditem)]=bi})}
   const biMap={};
   activities.forEach(a=>{
     const bi=String(a.biditem);
     if(!bi)return;
     if(!biMap[bi]){
-      biMap[bi]={biditem:bi,description:a.biditemDesc||a.description||'',units:'LS',bidQuantity:1,takeoffQuantity:1,
+      const ref=_existBI[bi];
+      biMap[bi]={biditem:bi,description:a.biditemDesc||a.description||'',
+        units:ref&&ref.units?ref.units:'LS',
+        bidQuantity:ref&&ref.bidQuantity?ref.bidQuantity:1,
+        takeoffQuantity:ref&&ref.takeoffQuantity?ref.takeoffQuantity:1,
         labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,trucking:0,coOH:0,directTotal:0,
-        indirects:0,addonBond:0,markup:0,takeoffTotal:0,balancedTotal:0,unitPrice:0,manHours:0,bidTotal:0,_selected:true};
+        indirects:ref?ref.indirects||0:0,addonBond:ref?ref.addonBond||0:0,markup:ref?ref.markup||0:0,
+        takeoffTotal:0,balancedTotal:0,unitPrice:0,manHours:0,bidTotal:0,_selected:true};
     }
     const b=biMap[bi];
     b.labor+=a.labor||0;b.burden+=a.burden||0;b.permMat+=a.permMat||0;b.constMat+=a.constMat||0;
     b.subs+=a.subs||0;b.eqpOper+=a.eqpOper||0;b.compEqp+=a.compEqp||0;b.outsideEqp+=a.outsideEqp||0;
     b.trucking+=a.trucking||0;b.coOH+=a.coOH||0;b.directTotal+=a.directTotal||0;b.manHours+=a.manHours||0;
   });
-  // Set unit price = direct total (markup/OH can be set in SOV builder)
-  Object.values(biMap).forEach(b=>{b.unitPrice=b.directTotal;b.takeoffTotal=b.directTotal;b.bidTotal=b.directTotal});
+  // Set totals — use imported OH/markup if available, calculate unit price from quantity
+  Object.values(biMap).forEach(b=>{
+    b.takeoffTotal=b.directTotal+(b.indirects||0)+(b.addonBond||0)+(b.markup||0);
+    b.unitPrice=b.bidQuantity>0?b.takeoffTotal/b.bidQuantity:b.takeoffTotal;
+    b.bidTotal=b.takeoffTotal;
+  });
   return Object.values(biMap).sort((a,b)=>parseInt(a.biditem)-parseInt(b.biditem));
 }
 
@@ -2177,13 +2204,19 @@ function renderGlobalView(){
   if(!allMin||!allMax){el.innerHTML='<div class="empty-state"><h2>No Schedule Data</h2></div>';return}
   const td=Math.max((allMax-allMin)/86400000,1);
 
-  let h='<div class="card"><div class="card-title">All Jobs — Timeline by Discipline</div>';
+  const _byDisc=typeof _globalSchedByDisc!=='undefined'&&_globalSchedByDisc;
+  let h='<div class="card"><div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">All Jobs — Timeline';
+  h+=`<div style="display:flex;gap:4px;"><button class="btn-sm" style="font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:${!_byDisc?'var(--olive)':'var(--bg)'};color:${!_byDisc?'var(--white)':'var(--text)'};cursor:pointer;" onclick="_globalSchedByDisc=false;renderGlobalView();">By Job</button><button class="btn-sm" style="font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:${_byDisc?'var(--olive)':'var(--bg)'};color:${_byDisc?'var(--white)':'var(--text)'};cursor:pointer;" onclick="_globalSchedByDisc=true;renderGlobalView();">By Discipline</button></div>`;
+  h+='</div>';
   h+='<div class="legend">';Object.values(DISCIPLINES).forEach(d=>{if(d.name!=='General'||!h.includes(d.name))h+=`<div class="legend-item"><div class="legend-swatch" style="background:${d.color}"></div>${d.name}</div>`});h+='</div>';
 
   let months='';const c=new Date(allMin);c.setDate(1);
   while(c<=allMax){const ms=Math.max(0,(c-allMin)/86400000);const nm=new Date(c);nm.setMonth(nm.getMonth()+1);const me=Math.min(td,(nm-allMin)/86400000);months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;c.setMonth(c.getMonth()+1)}
   h+=`<div style="overflow-x:auto;"><div style="min-width:900px;"><div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;margin-left:200px;">${months}</div>`;
 
+  // Collect discipline data for all jobs
+  const _allJobDiscData={};
+  const _discGlobal={};
   ids.forEach(id=>{
     const j=Store.jobs[id],m=j.meta;
     const dg={};
@@ -2202,26 +2235,86 @@ function renderGlobalView(){
       if(t.start<dg[k].start)dg[k].start=t.start;
       if(t.finish>dg[k].end)dg[k].end=t.finish;
       dg[k].tasks.push(t);
+      // Aggregate for discipline view
+      if(!_discGlobal[k])_discGlobal[k]={name:k,color:disc.color,jobs:{}};
+      if(!_discGlobal[k].jobs[id])_discGlobal[k].jobs[id]={jobName:m.name+' #'+m.number,start:t.start,end:t.finish,cost:0,tasks:[]};
+      const dj=_discGlobal[k].jobs[id];
+      if(t.start<dj.start)dj.start=t.start;
+      if(t.finish>dj.end)dj.end=t.finish;
+      dj.tasks.push(t);
     });
     j.bidItems.forEach(b=>{
       const d=getBidItemDiscipline(b.biditem,j.activities,j);
       if(dg[d.name])dg[d.name].cost+=(b.takeoffTotal||0);
+      if(_discGlobal[d.name]&&_discGlobal[d.name].jobs[id])_discGlobal[d.name].jobs[id].cost+=(b.takeoffTotal||0);
     });
-    const bars=Object.values(dg).sort((a,b)=>a.start-b.start);
-    const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
-    h+=`<div style="display:flex;align-items:flex-start;margin-bottom:2px;border-top:1px solid var(--border);padding-top:6px;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${id}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;">${m.name} #${m.number}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(ct)}</div></div><div style="flex:1;">`;
-    bars.forEach(bar=>{const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);h+=`<div style="display:flex;align-items:center;margin-bottom:1px;"><div style="flex:1;position:relative;height:14px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${bar.name}: ${fmtD(bar.cost)} (${bar.tasks.length} tasks)"></div></div><div style="width:80px;min-width:80px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${bar.name}</div></div>`});
-    h+='</div></div>';
+    _allJobDiscData[id]={bars:Object.values(dg).sort((a,b)=>a.start-b.start),ct:j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0)};
   });
+
+  if(!_byDisc){
+    // ── By Job view (original) ──
+    ids.forEach(id=>{
+      const j=Store.jobs[id],m=j.meta;
+      const bars=_allJobDiscData[id].bars;const ct=_allJobDiscData[id].ct;
+      h+=`<div style="display:flex;align-items:flex-start;margin-bottom:2px;border-top:1px solid var(--border);padding-top:6px;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${id}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;">${m.name} #${m.number}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(ct)}</div></div><div style="flex:1;">`;
+      bars.forEach(bar=>{const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);h+=`<div style="display:flex;align-items:center;margin-bottom:1px;"><div style="flex:1;position:relative;height:14px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${bar.name}: ${fmtD(bar.cost)} (${bar.tasks.length} tasks)"></div></div><div style="width:80px;min-width:80px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${bar.name}</div></div>`});
+      h+='</div></div>';
+    });
+  } else {
+    // ── By Discipline view ──
+    const discOrder=['Earthwork','Erosion','Storm','Sanitary','Water','Paving','Concrete','Demo','General','Other'];
+    const sortedDiscs=Object.values(_discGlobal).sort((a,b)=>{const ai=discOrder.indexOf(a.name),bi=discOrder.indexOf(b.name);return (ai<0?99:ai)-(bi<0?99:bi)});
+    sortedDiscs.forEach(disc=>{
+      const jobBars=Object.entries(disc.jobs).sort((a,b)=>a[1].start-b[1].start);
+      const totalCost=jobBars.reduce((s,jb)=>s+jb[1].cost,0);
+      const totalTasks=jobBars.reduce((s,jb)=>s+jb[1].tasks.length,0);
+      h+=`<div style="border-top:1px solid var(--border);padding-top:6px;margin-bottom:4px;">`;
+      h+=`<div style="display:flex;align-items:center;margin-bottom:4px;"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;"><div style="width:10px;height:10px;border-radius:2px;background:${disc.color};"></div>${disc.name}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(totalCost)} · ${totalTasks} tasks</div></div></div>`;
+      jobBars.forEach(([jid,jb])=>{
+        const l=Math.max(0,(jb.start-allMin)/86400000)/td*100;const w=Math.max(((jb.end-jb.start)/86400000)/td*100,.5);
+        h+=`<div style="display:flex;align-items:center;margin-bottom:1px;cursor:pointer;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${jid}';refreshJobSelectors();switchToSubTab('overview');">`;
+        h+=`<div style="flex:1;position:relative;height:14px;margin-left:200px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${disc.color};border-radius:2px;opacity:.85;" title="${jb.jobName}: ${fmtD(jb.cost)} (${jb.tasks.length} tasks)"></div></div>`;
+        h+=`<div style="width:140px;min-width:140px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${jb.jobName}</div></div>`;
+      });
+      h+=`</div>`;
+    });
+  }
   h+='</div></div></div>';
 
   // ─── Company-Wide Cash Flow ───
   h+=renderGlobalCashFlow(ids);
 
   h+='<div class="card"><div class="card-title">Job Summary</div><div class="table-wrap"><table>';
-  h+='<tr><th>Job</th><th>Client</th><th>Type</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th><th class="num">Items</th><th>Schedule</th></tr>';
+  // Check if any job has actuals
+  const _gHasActuals=ids.some(id=>{const j=Store.jobs[id];return j.actuals&&j.actuals.length>0});
+  h+='<tr><th>Job</th><th>Client</th><th>Type</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th>';
+  if(_gHasActuals) h+='<th class="num" style="color:var(--blue);">Actual Cost</th><th class="num" style="color:var(--blue);">Variance</th><th class="num" style="color:var(--blue);">% Complete</th>';
+  h+='<th class="num">Items</th><th>Schedule</th></tr>';
+  let _gTotDC=0,_gTotOH=0,_gTotPR=0,_gTotCT=0,_gTotActCost=0,_gTotBudCost=0;
   ids.forEach(id=>{const j=Store.jobs[id],m=j.meta;const dc=j.bidItems.reduce((s,b)=>s+b.directTotal,0);const oh=j.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=j.bidItems.reduce((s,b)=>s+(b.markup||0),0);const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const ppC=pp<5?'negative':pp<10?'':'positive';const dt=m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—';
-    h+=`<tr><td><strong>${m.name} #${m.number}</strong></td><td>${m.client||'—'}</td><td>${m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(dc)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(pr)}</td><td class="num"><strong>${fmtD(ct)}</strong></td><td class="num ${ppC}">${fmtPct(pp)}</td><td class="num">${j.bidItems.length}</td><td>${dt}</td></tr>`});
+    // Aggregate actuals for this job
+    const jAct=j.actuals||[];
+    const jActCost=jAct.reduce((s,a)=>s+(a.actualCost||0),0);
+    const jBudCost=jAct.reduce((s,a)=>s+(a.budgetCost||0),0);
+    const jPctComp=jBudCost>0?Math.min(jActCost/jBudCost*100,999):0;
+    const jVar=jBudCost-jActCost;
+    _gTotDC+=dc;_gTotOH+=oh;_gTotPR+=pr;_gTotCT+=ct;_gTotActCost+=jActCost;_gTotBudCost+=jBudCost;
+    h+=`<tr><td><strong>${m.name} #${m.number}</strong></td><td>${m.client||'—'}</td><td>${m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(dc)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(pr)}</td><td class="num"><strong>${fmtD(ct)}</strong></td><td class="num ${ppC}">${fmtPct(pp)}</td>`;
+    if(_gHasActuals){
+      const hasJA=jAct.length>0;
+      h+=`<td class="num">${hasJA?fmtD(jActCost):'—'}</td>`;
+      h+=`<td class="num" style="color:${jVar>=0?'var(--green)':'var(--red)'}">${hasJA?fmtD(jVar):'—'}</td>`;
+      h+=`<td class="num">${hasJA?jPctComp.toFixed(0)+'%':'—'}</td>`;
+    }
+    h+=`<td class="num">${j.bidItems.length}</td><td>${dt}</td></tr>`});
+  // Totals row
+  if(ids.length>1){
+    const _gTotPP=_gTotCT>0?_gTotPR/_gTotCT*100:0;const _gTotPPC=_gTotPP<5?'negative':_gTotPP<10?'':'positive';
+    const _gTotVar=_gTotBudCost-_gTotActCost;const _gTotPct=_gTotBudCost>0?Math.min(_gTotActCost/_gTotBudCost*100,999):0;
+    h+=`<tr style="font-weight:700;border-top:2px solid var(--olive);"><td>Totals</td><td></td><td></td><td class="num">${fmtD(_gTotDC)}</td><td class="num">${fmtD(_gTotOH)}</td><td class="num">${fmtD(_gTotPR)}</td><td class="num">${fmtD(_gTotCT)}</td><td class="num ${_gTotPPC}">${fmtPct(_gTotPP)}</td>`;
+    if(_gHasActuals){h+=`<td class="num">${fmtD(_gTotActCost)}</td><td class="num" style="color:${_gTotVar>=0?'var(--green)':'var(--red)'}">${fmtD(_gTotVar)}</td><td class="num">${_gTotPct.toFixed(0)}%</td>`}
+    h+=`<td class="num">${ids.reduce((s,id)=>s+Store.jobs[id].bidItems.length,0)}</td><td></td></tr>`;
+  }
   h+='</table></div></div>';
 
   // ─── Product Roadmap ───
@@ -2620,6 +2713,19 @@ function renderBidItems(){
   const job=Store.jobs[Store.activeJob];
   const sovItems=job.sovItems||[];
   const acts=job.activities||[];
+
+  // Migration: sync qty/units from bidItems → sovItems if still defaulting to 1 LS
+  if(sovItems.length&&job.bidItems.length){
+    const _biRef={};job.bidItems.forEach(bi=>{_biRef[String(bi.biditem)]=bi});
+    let _synced=false;
+    sovItems.forEach(si=>{
+      const bi=_biRef[String(si.id)];
+      if(!bi)return;
+      if(bi.bidQuantity&&bi.bidQuantity>1&&(si.contractQty===1||!si.contractQty)){si.contractQty=bi.bidQuantity;_synced=true}
+      if(bi.units&&bi.units!=='LS'&&(si.unit==='LS'||!si.unit)){si.unit=bi.units;_synced=true}
+    });
+    if(_synced)saveJob(Store.activeJob);
+  }
 
   // If no SOV items built yet, prompt user
   if(!sovItems.length){
@@ -3728,7 +3834,7 @@ function renderSOVBuilder(){
     // Check if activities have phase codes — if so, auto-build
     const hasPhase=job.activities.some(a=>a.phaseCode);
     if(hasPhase&&job.activities.length){
-      job.bidItems=buildBidItemsFromActivities(job.activities);
+      job.bidItems=buildBidItemsFromActivities(job.activities,job.bidItems||[]);
       job.sovItems=buildSOVFromActivities(job.activities,job.bidItems);
     } else {
       // Legacy: Initialize SOV items from current bid items, preserving OH & profit ratios
@@ -3748,15 +3854,28 @@ function renderSOVBuilder(){
       });
     }
   } else {
-    // Migration: backfill ohPct/profitPct and phaseCodes on existing sovItems
+    // Migration: backfill ohPct/profitPct, phaseCodes, and qty/units on existing sovItems
+    const _biLookup={};job.bidItems.forEach(bi=>{_biLookup[String(bi.biditem)]=bi});
     job.sovItems.forEach(si=>{
+      const bi=_biLookup[String(si.id)];
       if(si.ohPct===undefined||si.ohPct===null){
-        const bi=job.bidItems.find(b=>String(b.biditem)===String(si.id));
         if(bi){
           const dc=bi.directTotal||0;
           si.ohPct=dc>0?((bi.indirects||0)+(bi.addonBond||0))/dc:0;
           si.profitPct=dc>0?(bi.markup||0)/dc:0;
         }else{si.ohPct=0;si.profitPct=0;}
+      }
+      // Sync qty/units from bid items (fixes unit-price jobs that defaulted to 1 LS)
+      if(bi){
+        if(bi.bidQuantity&&bi.bidQuantity>1&&(si.contractQty===1||!si.contractQty)){
+          si.contractQty=bi.bidQuantity;
+        }
+        if(bi.units&&bi.units!=='LS'&&(si.unit==='LS'||!si.unit)){
+          si.unit=bi.units;
+        }
+        if(bi.bidQuantity&&bi.bidQuantity>0){
+          si.unitPrice=si.unitPrice||(bi.unitPrice||0);
+        }
       }
       if(si._autoPrice===undefined)si._autoPrice=true;
       if(!si.phaseCodes){
