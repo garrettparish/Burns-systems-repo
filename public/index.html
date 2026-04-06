@@ -3278,7 +3278,6 @@ function _redistributeProfit(job, changedIdx, newBillingValue){
   const sovItems=job.sovItems;
   const acts=job.activities||[];
   const actMap={};acts.forEach(a=>{actMap[a.code]=a});
-  const meta=job.meta||{};
 
   // Recalc direct costs
   sovItems.forEach(si=>{
@@ -3296,15 +3295,27 @@ function _redistributeProfit(job, changedIdx, newBillingValue){
   si.allocatedProfit=Math.round(newProfit*100)/100;
   si._manualProfit=true;
 
-  // Distribute the negative delta across all OTHER items proportionally
-  const others=sovItems.filter((_,i)=>i!==changedIdx);
-  const otherProfitTotal=others.reduce((s,o)=>s+(o.allocatedProfit||0),0);
+  // Only rob from UNTOUCHED items (not manually adjusted).
+  // Previously adjusted items keep their values.
+  const untouched=sovItems.filter((_,i)=>i!==changedIdx&&!_._manualProfit);
+  const touched=sovItems.filter((_,i)=>i!==changedIdx&&_._manualProfit);
 
-  others.forEach(o=>{
-    const share=otherProfitTotal!==0?(o.allocatedProfit||0)/otherProfitTotal:1/Math.max(others.length,1);
-    o.allocatedProfit=Math.round(((o.allocatedProfit||0)-delta*share)*100)/100;
-    o._manualProfit=true;
-  });
+  if(untouched.length){
+    // Spread delta across untouched items proportionally by their current profit
+    const untouchedTotal=untouched.reduce((s,o)=>s+(o.allocatedProfit||0),0);
+    untouched.forEach(o=>{
+      const share=untouchedTotal!==0?(o.allocatedProfit||0)/untouchedTotal:1/untouched.length;
+      o.allocatedProfit=Math.round(((o.allocatedProfit||0)-delta*share)*100)/100;
+    });
+  } else {
+    // All items have been touched — fall back to spreading across all non-current items
+    const others=sovItems.filter((_,i)=>i!==changedIdx);
+    const otherTotal=others.reduce((s,o)=>s+(o.allocatedProfit||0),0);
+    others.forEach(o=>{
+      const share=otherTotal!==0?(o.allocatedProfit||0)/otherTotal:1/Math.max(others.length,1);
+      o.allocatedProfit=Math.round(((o.allocatedProfit||0)-delta*share)*100)/100;
+    });
+  }
 
   // Clean up
   sovItems.forEach(si=>{delete si._calcDirect});
