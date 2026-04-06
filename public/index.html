@@ -193,6 +193,10 @@ tr:hover{background:#FAF8F5}
 .actuals-kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
 /* Dependency Warning */
 .dep-warn{background:#FFF8F0 !important;border-left:3px solid var(--orange) !important}
+.date-warn{background:#FFE4E1 !important;border-left:3px solid var(--red) !important}
+/* Gantt Bars */
+.jcs-baseline-bar{transition:all .2s}
+.jcs-gantt-bar:hover{opacity:1 !important}
 @media(max-width:768px){.import-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.nav-tab{padding:10px 12px;font-size:11px}.jcs-actions{flex-direction:column}}
 </style>
 </head>
@@ -609,7 +613,7 @@ function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.
 function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
 function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();switchJob();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
-function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[]};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[],sovItems:[],cashFlowConfig:null};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
 
 function switchJob(){
   Store.activeJob=document.getElementById('jobSelect').value||null;
@@ -671,10 +675,10 @@ function handleImportFile(file,type){
       else if(type==='biditems') parsed=parseBidItemsRaw(rows);
       else if(type==='actuals') parsed=parseActualsRaw(rows);
       else parsed=parseScheduleRaw(rows);
-      if(type!=='actuals') parsed.forEach(r=>r._selected=true);
+      parsed.forEach(r=>r._selected=true);
       Store.staging={type,data:parsed};
       log(`${type}: ${parsed.length} records parsed. Review below.`);
-      if(type==='actuals'){confirmActualsStaging();}else{renderStaging();}
+      renderStaging();
     }catch(err){log(`Error parsing ${file.name}: ${err.message}`)}
   };
   reader.readAsArrayBuffer(file);event.target.value='';
@@ -791,20 +795,6 @@ function parseActualsRaw(rows){
   });
 }
 
-function confirmActualsStaging(){
-  const{type,data}=Store.staging;
-  if(type!=='actuals')return;
-  const job=Store.jobs[Store.activeJob];
-  if(!job)return;
-  job.actuals=data;
-  log(`${data.length} actuals records confirmed.`);
-  addEditLog('Imported '+data.length+' actuals records');
-  Store.staging={type:null,data:[]};
-  updateImportZones();
-  saveJob(Store.activeJob);
-  renderActiveSubTab();
-}
-
 // ═══════════════════════════════════════════
 // STAGING REVIEW
 // ═══════════════════════════════════════════
@@ -821,6 +811,9 @@ function renderStaging(){
   }else if(type==='biditems'){
     h+='<tr><th></th><th>#</th><th>Description</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th></th></tr>';
     data.forEach((b,i)=>{if(!b._selected)return;const oh=(b.indirects||0)+(b.addonBond||0);h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${b.biditem}</td><td>${b.description}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(b.takeoffTotal)}</strong></td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+  }else if(type==='actuals'){
+    h+='<tr><th></th><th>Code</th><th>Description</th><th class="num">Budget Cost</th><th class="num">Actual Cost</th><th class="num">Qty Inst</th><th class="num">% Complete</th><th></th></tr>';
+    data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
   }else{
     h+='<tr><th></th><th>#</th><th>Task</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th>Crew</th><th></th></tr>';
     data.forEach((t,i)=>{if(!t._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
@@ -876,6 +869,8 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     const dates=sel.filter(t=>t.start&&t.finish).flatMap(t=>[t.start,t.finish]);
     if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}
     recalcDependencies(job);
+  }else if(type==='actuals'){
+    job.actuals=sel;
   }
   log(`${type}: ${sel.length} records confirmed.`);
   addEditLog('Imported '+sel.length+' '+type+' records');
@@ -961,10 +956,10 @@ function suggestBidItem(taskName, bidItems, activities){
 function autoSuggestAll(){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.taskMap)job.taskMap={};
-  job.schedule.forEach((t,i)=>{
-    if(!job.taskMap[i]){
+  job.schedule.forEach(t=>{
+    if(!job.taskMap[t.id]){
       const suggested=suggestBidItem(t.name,job.bidItems,job.activities);
-      if(suggested)job.taskMap[i]=suggested;
+      if(suggested)job.taskMap[t.id]=suggested;
     }
   });
   renderMapping();
@@ -974,10 +969,10 @@ function autoSuggestAll(){
 
 function clearAllMappings(){const job=Store.jobs[Store.activeJob];if(!job)return;job.taskMap={};renderMapping();log('All mappings cleared.')}
 
-function updateTaskMapping(taskIdx, bidItemId){
+function updateTaskMapping(taskId, bidItemId){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.taskMap)job.taskMap={};
-  if(bidItemId){job.taskMap[taskIdx]=bidItemId}else{delete job.taskMap[taskIdx]}
+  if(bidItemId){job.taskMap[taskId]=bidItemId}else{delete job.taskMap[taskId]}
   renderMapping();
 }
 
@@ -1076,8 +1071,7 @@ function saveNewTask(){
   job.schedule.push(newTask);
   // Auto-map to the bid item
   if(!job.taskMap)job.taskMap={};
-  const newIdx=job.schedule.length-1;
-  job.taskMap[newIdx]=biditem;
+  job.taskMap[newTask.id]=biditem;
   // Update meta dates
   const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
   if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}
@@ -1146,11 +1140,11 @@ function renderMapping(){
   h+='<div class="card" style="margin-top:12px;"><div class="table-wrap"><table class="map-table">';
   h+='<tr><th style="width:30px">#</th><th>Task Name</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th style="min-width:280px;">Pay Item Assignment</th></tr>';
 
-  job.schedule.forEach((t,i)=>{
-    const currentMap=job.taskMap[i]||'';
+  job.schedule.forEach(t=>{
+    const currentMap=job.taskMap[t.id]||'';
     const isMapped=!!currentMap;
     const selClass=isMapped?'mapped':'unmapped';
-    let selHtml=`<select class="${selClass}" onchange="updateTaskMapping(${i},this.value)">`;
+    let selHtml=`<select class="${selClass}" onchange="updateTaskMapping(${t.id},this.value)">`;
     selHtml+='<option value="">— Unassigned —</option>';
     sortedGroups.forEach(g=>{
       selHtml+=`<optgroup label="${g.name}">`;
@@ -1166,7 +1160,7 @@ function renderMapping(){
     });
     selHtml+='</select>';
     const rowBg=isMapped?'':'background:#FFFDF0;';
-    h+=`<tr style="${rowBg}"><td>${i+1}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr||'—'}</td><td>${t.status||'—'}</td><td>${selHtml}</td></tr>`;
+    h+=`<tr style="${rowBg}"><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr||'—'}</td><td>${t.status||'—'}</td><td>${selHtml}</td></tr>`;
   });
 
   h+='</table></div></div>';
@@ -1333,10 +1327,22 @@ function renderDashboard(){
     return{...b,discipline:disc};
   });
 
+  // Separate CO costs from base costs
+  const bidsWithCO=bidSummaries.map(b=>({...b,isCO:b._changeOrder||false}));
+  const baseBids=bidsWithCO.filter(b=>!b.isCO);
+  const coBids=bidsWithCO.filter(b=>b.isCO);
   const totalDirect=bidSummaries.reduce((s,b)=>s+b.directTotal,0);
+  const baseDirect=baseBids.reduce((s,b)=>s+b.directTotal,0);
+  const coDirect=coBids.reduce((s,b)=>s+b.directTotal,0);
   const totalOverhead=bidSummaries.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
+  const baseOverhead=baseBids.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
+  const coOverhead=coBids.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
   const totalProfit=bidSummaries.reduce((s,b)=>s+(b.markup||0),0);
+  const baseProfit=baseBids.reduce((s,b)=>s+(b.markup||0),0);
+  const coProfit=coBids.reduce((s,b)=>s+(b.markup||0),0);
   const contract=bidSummaries.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const baseContract=baseBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const coContract=coBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const totalMH=bidSummaries.reduce((s,b)=>s+b.manHours,0);
 
   // Cost breakdown: prefer activities (HeavyBid activities have detailed cost columns; bid items often don't)
@@ -1509,6 +1515,24 @@ function renderDashboard(){
     h+='</table></div></div>';
   }
 
+  // Change Orders Summary
+  if(coBids.length||coContract>0){
+    h+='<div class="card" style="border-color:var(--orange);"><div class="card-title" style="color:var(--orange);border-bottom-color:var(--orange);">Change Orders</div>';
+    h+='<div class="cost-bars" style="margin-bottom:12px;">';
+    h+=`<div class="cost-bar-row"><div class="cost-bar-label">Original Contract</div><div class="cost-bar-fill" style="width:100%;background:var(--green);"></div><div class="cost-bar-value">${fmtD(baseContract)}</div></div>`;
+    if(coContract>0){
+      const coWidth=coContract/(baseContract+coContract||1)*100;
+      h+=`<div class="cost-bar-row"><div class="cost-bar-label">Change Orders</div><div class="cost-bar-fill" style="width:${coWidth}%;background:var(--orange);"></div><div class="cost-bar-value">${fmtD(coContract)}</div></div>`;
+      h+=`<div class="cost-bar-row"><div class="cost-bar-label">Revised Contract</div><div class="cost-bar-fill" style="width:100%;background:var(--blue);"></div><div class="cost-bar-value"><strong>${fmtD(contract)}</strong></div></div>`;
+    }
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">';
+    h+=`<div><div style="color:var(--text-light);">CO Count</div><div style="font-size:18px;font-weight:600;color:var(--orange);">${coBids.length}</div></div>`;
+    h+=`<div><div style="color:var(--text-light);">CO Value</div><div style="font-size:18px;font-weight:600;color:var(--orange);">${fmtD(coContract)}</div></div>`;
+    h+='</div>';
+    h+='</div>';
+  }
+
   if(sched.length){h+='<div class="card"><div class="card-title">Schedule Overview</div>'+renderGantt(sched,m)+'</div>'}
   el.innerHTML=h;
 }
@@ -1556,6 +1580,35 @@ function resetBaseline(){
 // ═══════════════════════════════════════════
 function recalcDependencies(job){
   if(!job||!job.schedule.length)return;
+
+  // Detect circular dependencies
+  function detectCircular(taskId,visited,recStack){
+    visited.add(taskId);
+    recStack.add(taskId);
+    const task=job.schedule.find(t=>String(t.id)===taskId);
+    if(!task||!task.predecessors)return false;
+    const predIds=String(task.predecessors).split(',').map(s=>s.trim()).filter(s=>s);
+    for(const predId of predIds){
+      if(!visited.has(predId)){
+        if(detectCircular(predId,visited,recStack))return true;
+      } else if(recStack.has(predId)){
+        return true; // found cycle
+      }
+    }
+    recStack.delete(taskId);
+    return false;
+  }
+
+  const visited=new Set(),recStack=new Set();
+  for(const task of job.schedule){
+    if(!visited.has(String(task.id))){
+      if(detectCircular(String(task.id),visited,recStack)){
+        log('Warning: Circular dependency detected. Check predecessor links.');
+        return; // skip recalculation if circular
+      }
+    }
+  }
+
   let changed=true;
   let iterations=0;
   while(changed&&iterations<10){
@@ -1628,10 +1681,9 @@ function renderGlobalView(){
     const hasMappings=Object.keys(tm).length>0;
     const validTasks=j.schedule.map(t=>({...t,start:toDate(t.start),finish:toDate(t.finish)})).filter(t=>t.start&&t.finish);
     validTasks.forEach((t)=>{
-      const origIdx=j.schedule.indexOf(t);
       let disc;
-      if(hasMappings&&tm[origIdx]){
-        disc=getBidItemDiscipline(tm[origIdx],j.activities,j);
+      if(hasMappings&&tm[t.id]){
+        disc=getBidItemDiscipline(tm[t.id],j.activities,j);
       }else{
         disc=getTaskDiscipline(t.name);
       }
@@ -1647,7 +1699,7 @@ function renderGlobalView(){
     });
     const bars=Object.values(dg).sort((a,b)=>a.start-b.start);
     const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
-    h+=`<div style="display:flex;align-items:flex-start;margin-bottom:2px;border-top:1px solid var(--border);padding-top:6px;"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;">${m.name} #${m.number}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(ct)}</div></div><div style="flex:1;">`;
+    h+=`<div style="display:flex;align-items:flex-start;margin-bottom:2px;border-top:1px solid var(--border);padding-top:6px;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${id}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;">${m.name} #${m.number}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(ct)}</div></div><div style="flex:1;">`;
     bars.forEach(bar=>{const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);h+=`<div style="display:flex;align-items:center;margin-bottom:1px;"><div style="flex:1;position:relative;height:14px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${bar.name}: ${fmtD(bar.cost)} (${bar.tasks.length} tasks)"></div></div><div style="width:80px;min-width:80px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${bar.name}</div></div>`});
     h+='</div></div>';
   });
@@ -2172,7 +2224,10 @@ function renderSchedule(){
     const days=sd&&fd?Math.max(Math.ceil((fd-sd)/86400000),0):'—';
     const sc=t.status==='Complete'?'var(--teal)':t.status==='In Progress'?'var(--blue)':'var(--text-light)';
 
-    // Check predecessor validation (Feature 5)
+    // Check date validation: finish < start
+    let dateWarn=false;
+    if(sd&&fd&&fd<sd)dateWarn=true;
+    // Check predecessor validation
     let depWarn=false;
     if(t.predecessors){
       const predIds=String(t.predecessors).split(',').map(s=>s.trim()).filter(s=>s);
@@ -2182,9 +2237,10 @@ function renderSchedule(){
         if(ptf&&sd&&ptf>sd)depWarn=true;
       });
     }
-    const rowCls=depWarn?'dep-warn':'';
+    const rowBg=dateWarn?'background:#FFE4E1;':depWarn?'background:#FFF8F0;':'';
+    const rowCls=dateWarn?'date-warn':depWarn?'dep-warn':'';
 
-    h+=`<tr class="${rowCls}">`;
+    h+=`<tr class="${rowCls}" style="${rowBg}">`;
     h+=`<td style="color:var(--text-light);font-size:11px;">${t.id}</td>`;
     h+=`<td><input type="text" value="${esc(t.name)}" onchange="updateScheduleTask(${i},'name',this.value)" style="${inputSt}width:100%;min-width:160px;font-weight:600;"></td>`;
     h+=`<td><input type="date" value="${startVal}" onchange="updateScheduleTask(${i},'start',this.value)" style="${inputSt}width:120px;"></td>`;
@@ -2221,9 +2277,19 @@ function updateScheduleTask(idx,field,value){
     t[field]=value?new Date(value+'T00:00:00'):null;
     const s=toDate(t.start),f=toDate(t.finish);
     if(s&&f){
-      const d=Math.max(Math.ceil((f-s)/86400000),0);
-      t.durationDays=d;
-      t.durationStr=d+'d';
+      // Validate finish >= start
+      if(f<s){
+        log(`Warning: Finish date is before start date for task "${t.name}". Auto-fixing.`);
+        const durationDays=t.durationDays||1;
+        t.finish=new Date(s.getTime()+durationDays*86400000);
+        const d=Math.max(Math.ceil((t.finish-s)/86400000),1);
+        t.durationDays=d;
+        t.durationStr=d+'d';
+      } else {
+        const d=Math.max(Math.ceil((f-s)/86400000),0);
+        t.durationDays=d;
+        t.durationStr=d+'d';
+      }
     }
   }else{
     t[field]=value;
@@ -2325,17 +2391,11 @@ function removeScheduleTask(idx){
   if(!confirm(`Delete task "${t.name}"? This cannot be undone.`))return;
 
   const name=t.name;
+  const taskId=t.id;
   job.schedule.splice(idx,1);
 
-  // Clean up taskMap entries that referenced this index
-  const newMap={};
-  Object.entries(job.taskMap||{}).forEach(([si,bi])=>{
-    const oldIdx=parseInt(si);
-    if(oldIdx===idx)return; // remove mapping for deleted task
-    const newIdx=oldIdx>idx?oldIdx-1:oldIdx; // shift down indices after deleted
-    newMap[String(newIdx)]=bi;
-  });
-  job.taskMap=newMap;
+  // Clean up taskMap entries for the deleted task
+  if(job.taskMap){delete job.taskMap[taskId]}
 
   // Update meta dates
   const allDates=job.schedule.map(tk=>toDate(tk.start)).concat(job.schedule.map(tk=>toDate(tk.finish))).filter(d=>d);
@@ -2361,8 +2421,8 @@ function renderJobCostSchedule(){
 
   // Build reverse map: bidItem → {earliest start, latest finish} from schedule via taskMap
   const biDates={};
-  Object.entries(tm).forEach(([si,bi])=>{
-    const t=sched[parseInt(si)];
+  Object.entries(tm).forEach(([taskId,bi])=>{
+    const t=sched.find(task=>task.id===parseInt(taskId));
     if(!t)return;
     const s=toDate(t.start),f=toDate(t.finish);
     if(!biDates[bi])biDates[bi]={start:null,finish:null};
@@ -2471,10 +2531,33 @@ function renderJobCostSchedule(){
     const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
     const pcBadge=a.phaseCode?`<span style="font-size:9px;color:var(--green);font-weight:700;margin-right:3px;">${a.phaseCode}</span>`:'';
 
-    // Baseline comparison (Feature 1) - if baseline exists, show it
-    const baselineActual=job.baseline?.bidItems?.find(bi=>bi.biditem===a.biditem);
+    // Baseline comparison - if baseline exists, show baseline cost
+    let baselineCost=0;
+    if(job.baseline?.bidItems){
+      const baseBidItem=job.baseline.bidItems.find(bi=>bi.biditem===a.biditem);
+      if(baseBidItem){
+        const biacts=job.baseline.activities||job.activities;
+        const baselineActForBid=biacts.filter(act=>act.biditem===a.biditem);
+        const baseCostForCode=baselineActForBid.filter(act=>act.code===a.code).reduce((s,act)=>s+(act.directTotal||0),0);
+        baselineCost=baseCostForCode||baseBidItem.directTotal||0;
+      }
+    }
+    // Baseline schedule dates from baseline bid items
+    let baselineStart=null,baselineEnd=null;
+    if(job.baseline?.bidItems){
+      const baseBidItem=job.baseline.bidItems.find(bi=>bi.biditem===a.biditem);
+      if(baseBidItem&&job.baseline.schedule){
+        job.baseline.schedule.forEach(st=>{
+          if(st.id&&job.baseline.taskMap&&job.baseline.taskMap[st.id]===a.biditem){
+            const s=toDate(st.start),f=toDate(st.finish);
+            if(s&&(!baselineStart||s<baselineStart))baselineStart=s;
+            if(f&&(!baselineEnd||f>baselineEnd))baselineEnd=f;
+          }
+        });
+      }
+    }
 
-    // Actuals matching (Feature 3)
+    // Actuals matching
     const actualData=job.actuals?.find(ac=>ac.code===a.code);
     let r='<tr>';
     r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${pcBadge}${shortName}</td>`;
@@ -2485,6 +2568,14 @@ function renderJobCostSchedule(){
     r+=`<td colspan="${months.length||1}" class="jcs-gantt-cell" style="min-width:${ganttWidth}px;">`;
     months.forEach((mo,mi)=>{if(mi>0)r+=`<div style="position:absolute;left:${(mi/months.length)*100}%;top:0;bottom:0;width:1px;background:var(--ash);"></div>`});
     if(todayPct>=0&&todayPct<=100)r+=`<div class="jcs-today-line" style="left:${todayPct}%;"></div>`;
+    // Baseline bar (if exists) - shown as thin outline
+    if(baselineStart&&baselineEnd&&totalMs>0){
+      const baselineLeftPct=Math.max(0,(baselineStart.getTime()-projStart.getTime())/totalMs*100);
+      const baselineRightPct=Math.min(100,(baselineEnd.getTime()-projStart.getTime())/totalMs*100);
+      const baselineWPct=Math.max(baselineRightPct-baselineLeftPct,0.4);
+      r+=`<div class="jcs-gantt-bar jcs-baseline-bar" style="left:${baselineLeftPct}%;width:${baselineWPct}%;background:transparent;border:2px solid ${gColor};opacity:.5;"></div>`;
+    }
+    // Current bar (filled)
     if(a._barStart&&a._barEnd&&totalMs>0){
       const barLeftPct=Math.max(0,(a._barStart.getTime()-projStart.getTime())/totalMs*100);
       const barRightPct=Math.min(100,(a._barEnd.getTime()-projStart.getTime())/totalMs*100);
@@ -2492,9 +2583,17 @@ function renderJobCostSchedule(){
       r+=`<div class="jcs-gantt-bar" style="left:${barLeftPct}%;width:${barWPct}%;background:${gColor};">${barLabel}</div>`;
     }
     r+='</td>';
+    const hasBaseline=job.baseline&&job.baseline.lockedAt;
+    if(hasBaseline){
+      const baselineVar=baselineCost-(a.directTotal||0);
+      r+=`<td class="num" style="color:${baselineVar>=0?'var(--green)':'var(--red)'};">${fmtD(baselineCost)}</td>`;
+    }
     if(actualData){
-      r+=`<td class="num">${fmtD(actualData.actualCost||0)}</td>`;
-      const variance=(a.directTotal||0)-(actualData.actualCost||0);
+      const budget=a.directTotal||0;
+      const actual=actualData.actualCost||0;
+      const variance=budget-actual;
+      r+=`<td class="num">${fmtD(budget)}</td>`;
+      r+=`<td class="num">${fmtD(actual)}</td>`;
       r+=`<td class="num" style="color:${variance>=0?'var(--green)':'var(--red)'};">${fmtD(variance)}</td>`;
     }
     r+=`<td style="width:40px;text-align:center;"><button class="edit-btn" onclick="editRow('activity',${actIdx},false)" title="Edit">✎</button></td>`;
@@ -2513,7 +2612,9 @@ function renderJobCostSchedule(){
     h+=`<div style="flex:1;text-align:center;padding:10px 4px;border-left:${mi?'1px solid var(--ash)':'none'};font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--green);">${mo.label}</div>`;
   });
   h+='</div></th>';
-  if(hasActuals){h+='<th style="min-width:90px;color:var(--blue);">Actual</th><th style="min-width:80px;color:var(--blue);">Variance</th>'}
+  const hasBaseline=job.baseline&&job.baseline.lockedAt;
+  if(hasBaseline){h+='<th style="min-width:80px;color:var(--green);">Base $</th>'}
+  if(hasActuals){h+='<th style="min-width:90px;color:var(--blue);">Budget $</th><th style="min-width:90px;color:var(--blue);">Actual $</th><th style="min-width:80px;color:var(--blue);">Variance</th>'}
   h+='<th style="width:40px;"></th></tr>';
 
   // Mapped rows grouped by discipline
@@ -2560,43 +2661,48 @@ function renderJobCostSchedule(){
 
   // ── WEEKLY COST LOADING (Feature 2) ──
   h+='<div class="card" style="margin-top:20px;"><div class="card-title">Weekly Cost Loading</div>';
-  // Build weekly buckets
-  const weekBuckets=[];
-  let weekCursor=new Date(projStart);
-  while(weekCursor<=projEnd){
-    const bucketStart=new Date(weekCursor);
-    const bucketEnd=new Date(weekCursor.getTime()+7*86400000);
-    weekBuckets.push({
-      start:bucketStart,
-      end:bucketEnd,
-      label:bucketStart.toLocaleDateString('en-US',{month:'short',day:'numeric'}),
-      labor:0,material:0,equipment:0,subs:0,total:0
+  if(!mappedActs.length){
+    h+='<div style="padding:16px;color:var(--text-light);text-align:center;font-style:italic;">No mapped activities with cost and schedule dates. Map schedule tasks to pay items first.</div>';
+  } else {
+    // Build weekly buckets
+    const weekBuckets=[];
+    let weekCursor=new Date(projStart);
+    while(weekCursor<=projEnd){
+      const bucketStart=new Date(weekCursor);
+      const bucketEnd=new Date(weekCursor.getTime()+7*86400000);
+      weekBuckets.push({
+        start:bucketStart,
+        end:bucketEnd,
+        label:bucketStart.toLocaleDateString('en-US',{month:'short',day:'numeric'}),
+        labor:0,material:0,equipment:0,subs:0,total:0
+      });
+      weekCursor=new Date(bucketEnd);
+    }
+    // Spread activity costs across weeks
+    mappedActs.forEach(a=>{
+      if(!a._barStart||!a._barEnd||!a.directTotal)return;
+      const direct=a.directTotal||0;
+      const labor=a.labor||0,material=a.totalMaterial||0,equipment=a.totalEquipment||0,subs=a.subs||0;
+      const daysSpan=Math.max((a._barEnd-a._barStart)/86400000,0.1);
+      weekBuckets.forEach(wb=>{
+        const overlap=Math.min(a._barEnd,wb.end)-Math.max(a._barStart,wb.start);
+        if(overlap>0){
+          const ratio=overlap/86400000/daysSpan;
+          wb.labor+=labor*ratio;wb.material+=material*ratio;wb.equipment+=equipment*ratio;wb.subs+=subs*ratio;wb.total+=direct*ratio;
+        }
+      });
     });
-    weekCursor=new Date(bucketEnd);
-  }
-  // Spread activity costs across weeks
-  mappedActs.forEach(a=>{
-    if(!a._barStart||!a._barEnd||!a.directTotal)return;
-    const direct=a.directTotal||0;
-    const labor=a.labor||0,material=a.totalMaterial||0,equipment=a.totalEquipment||0,subs=a.subs||0;
-    const daysSpan=Math.max((a._barEnd-a._barStart)/86400000,0.1);
+    let cumCost=0;
+    h+='<div class="table-wrap"><table class="weekly-cost-table"><tr><th>Week Of</th><th class="num">Labor</th><th class="num">Material</th><th class="num">Equipment</th><th class="num">Subs</th><th class="num">Total</th><th class="num">Cumulative</th></tr>';
     weekBuckets.forEach(wb=>{
-      const overlap=Math.min(a._barEnd,wb.end)-Math.max(a._barStart,wb.start);
-      if(overlap>0){
-        const ratio=overlap/86400000/daysSpan;
-        wb.labor+=labor*ratio;wb.material+=material*ratio;wb.equipment+=equipment*ratio;wb.subs+=subs*ratio;wb.total+=direct*ratio;
-      }
+      if(wb.total===0&&wb.labor===0&&wb.material===0&&wb.equipment===0&&wb.subs===0)return;
+      cumCost+=wb.total;
+      h+=`<tr><td>${wb.label}</td><td class="num">${fmtD(wb.labor)}</td><td class="num">${fmtD(wb.material)}</td><td class="num">${fmtD(wb.equipment)}</td><td class="num">${fmtD(wb.subs)}</td><td class="num" style="font-weight:600;">${fmtD(wb.total)}</td><td class="num cumulative">${fmtD(cumCost)}</td></tr>`;
     });
-  });
-  let cumCost=0;
-  h+='<div class="table-wrap"><table class="weekly-cost-table"><tr><th>Week Of</th><th class="num">Labor</th><th class="num">Material</th><th class="num">Equipment</th><th class="num">Subs</th><th class="num">Total</th><th class="num">Cumulative</th></tr>';
-  weekBuckets.forEach(wb=>{
-    if(wb.total===0&&wb.labor===0&&wb.material===0&&wb.equipment===0&&wb.subs===0)return;
-    cumCost+=wb.total;
-    h+=`<tr><td>${wb.label}</td><td class="num">${fmtD(wb.labor)}</td><td class="num">${fmtD(wb.material)}</td><td class="num">${fmtD(wb.equipment)}</td><td class="num">${fmtD(wb.subs)}</td><td class="num" style="font-weight:600;">${fmtD(wb.total)}</td><td class="num cumulative">${fmtD(cumCost)}</td></tr>`;
-  });
-  h+='<tr style="background:var(--ash);font-weight:600;"><td>TOTAL</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.labor,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.material,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.equipment,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.subs,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.total,0))+'</td><td class="num">'+fmtD(cumCost)+'</td></tr>';
-  h+='</table></div></div>';
+    h+='<tr style="background:var(--ash);font-weight:600;"><td>TOTAL</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.labor,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.material,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.equipment,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.subs,0))+'</td><td class="num">'+fmtD(weekBuckets.reduce((s,w)=>s+w.total,0))+'</td><td class="num">'+fmtD(cumCost)+'</td></tr>';
+    h+='</table></div>';
+  }
+  h+='</div>';
 
   el.innerHTML=h;
 }
@@ -3240,8 +3346,8 @@ function renderCashFlowProjection(){
 
   // Build activity → date range from schedule via taskMap (same logic as JCS)
   const biDates={};
-  Object.entries(tm).forEach(([si,bi])=>{
-    const t=sched[parseInt(si)];if(!t)return;
+  Object.entries(tm).forEach(([taskId,bi])=>{
+    const t=sched.find(task=>task.id===parseInt(taskId));if(!t)return;
     const s=toDate(t.start),f=toDate(t.finish);
     if(!biDates[bi])biDates[bi]={start:null,finish:null};
     if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
