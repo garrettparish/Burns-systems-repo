@@ -2078,21 +2078,22 @@ function calcSOVItem(si, activities, jobMeta){
   const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
   const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
   const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
-  // OH: allocated proportionally from job-level totalOH based on direct cost share
   const oh=si.allocatedOH||0;
-  // Profit: allocated from top-down profit pool (can be front-loaded)
   const profit=si.allocatedProfit||0;
   const total=dc+oh+profit;
   const qty=si.contractQty||1;
-  const unitPrice=si._overrideValue!=null?si._overrideValue/qty:Math.round(total/qty*100)/100;
-  const sv=si._overrideValue!=null?si._overrideValue:total;
+  const unitPrice=Math.round(total/qty*100)/100;
+  const sv=total;
   return {acts,dc,labor,mat,subs,eqp,oh,profit,total,unitPrice,sv};
 }
 
 // ═══════════════════════════════════════════
 // MARGIN ENGINE — Top-down profit allocation
 // Contract Amount - Direct Costs - OH = Profit Pool
-// Distributes OH proportionally by direct cost, then allocates profit
+// Distributes OH proportionally by direct cost, then allocates profit.
+// On first run (no manual adjustments yet), distributes profit proportionally.
+// After slider/manual adjustments, only the adjusted item changes — the delta
+// is spread across all OTHER items proportionally by their current share.
 // ═══════════════════════════════════════════
 function runMarginEngine(job){
   const meta=job.meta||{};
@@ -2122,28 +2123,16 @@ function runMarginEngine(job){
   meta._profitPool=profitPool;
   meta._totalDirect=totalDirect;
 
-  // Step 4: Allocate profit — if items have manual overrides (_overrideValue), respect those
-  // Otherwise distribute proportionally by direct cost (default suggestion)
-  const lockedItems=sovItems.filter(si=>si._overrideValue!=null);
-  const unlockedItems=sovItems.filter(si=>si._overrideValue==null);
-
-  // Locked items consume a known portion of the contract
-  let lockedTotal=0;
-  lockedItems.forEach(si=>{
-    si.allocatedProfit=(si._overrideValue||0)-si._calcDirect-(si.allocatedOH||0);
-    lockedTotal+=si._overrideValue||0;
-  });
-
-  // Remaining contract value goes to unlocked items, distributed by direct cost share
-  const remainingContract=contractAmount-lockedTotal;
-  const unlockedDirect=unlockedItems.reduce((s,si)=>s+si._calcDirect,0);
-  const unlockedOH=unlockedItems.reduce((s,si)=>s+(si.allocatedOH||0),0);
-  const remainingProfit=remainingContract-unlockedDirect-unlockedOH;
-
-  unlockedItems.forEach(si=>{
-    const share=unlockedDirect>0?si._calcDirect/unlockedDirect:1/Math.max(unlockedItems.length,1);
-    si.allocatedProfit=Math.round(remainingProfit*share*100)/100;
-  });
+  // Step 4: If no items have been manually adjusted yet, distribute proportionally
+  const hasManualProfit=sovItems.some(si=>si._manualProfit);
+  if(!hasManualProfit){
+    sovItems.forEach(si=>{
+      const share=totalDirect>0?si._calcDirect/totalDirect:1/sovItems.length;
+      si.allocatedProfit=Math.round(profitPool*share*100)/100;
+    });
+  }
+  // If manual adjustments exist, allocatedProfit is already set per-item by the handlers.
+  // The handlers ensure the total always sums to the profit pool.
 
   // Clean up temp field
   sovItems.forEach(si=>{delete si._calcDirect});
@@ -3043,15 +3032,14 @@ function renderSOVBuilder(){
       const c=calcSOVItem(si,job.activities,meta);
       const itemMargin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
       const marginCls=itemMargin<5?'color:var(--red);':itemMargin<15?'':'color:var(--green);';
-      // Slider range: the billing value for this item, from cost floor to 2x proportional
+      // Slider range: allow sliding from 0 to a generous upper bound
       const costFloor=c.dc+(c.oh||0);
-      const maxVal=contractAmount>0?Math.min(contractAmount,costFloor*3):costFloor*3;
+      const maxVal=contractAmount>0?Math.min(contractAmount,Math.max(costFloor*3,c.sv*2)):costFloor*3;
       const sliderVal=c.sv;
-      const isLocked=si._overrideValue!=null;
 
       h+=`<div class="fl-row">`;
       h+=`<span style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(si.description)}">${si.clientItemNo||si.id} — ${si.description||''}</span>`;
-      h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(sliderVal)}" ${isLocked?'disabled style="opacity:.4;"':''} oninput="handleFrontLoadSlider(${idx},parseFloat(this.value))">`;
+      h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(sliderVal)}" oninput="handleFrontLoadSlider(${idx},parseFloat(this.value))">`;
       h+=`<input type="number" class="fl-override" value="${Math.round(c.sv)}" step="100" onchange="handleFrontLoadOverride(${idx},parseFloat(this.value))" title="Enter exact billing value">`;
       h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;${c.profit<0?'color:var(--red);':''}">${fmtD(c.profit)}</span>`;
       h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;font-weight:600;${marginCls}">${itemMargin.toFixed(1)}%</span>`;
@@ -3197,7 +3185,7 @@ function addNewSOVItem(){
   job.sovItems.push({
     id:newId,clientItemNo:'',description:'',contractQty:1,unit:'LS',unitPrice:0,
     retainagePct:5,pctCompleteMethod:'cost',activityIds:[],phaseCodes:[],
-    allocatedOH:0,allocatedProfit:0,_original:false,_overrideValue:null
+    allocatedOH:0,allocatedProfit:0,_original:false
   });
   _sovExpandedBIs[job.sovItems.length-1]=true;
   renderSOVBuilder();
@@ -3205,22 +3193,58 @@ function addNewSOVItem(){
 
 // ═══════════════════════════════════════════
 // FRONT-LOAD HANDLERS
+// When you adjust one item's billing value, the delta in profit is
+// spread proportionally across all OTHER items so the total always
+// equals the contract amount. Every slider stays live and adjustable.
 // ═══════════════════════════════════════════
+function _redistributeProfit(job, changedIdx, newBillingValue){
+  const sovItems=job.sovItems;
+  const acts=job.activities||[];
+  const actMap={};acts.forEach(a=>{actMap[a.code]=a});
+  const meta=job.meta||{};
+
+  // Recalc direct costs
+  sovItems.forEach(si=>{
+    const itemActs=(si.activityIds||[]).map(id=>actMap[id]).filter(Boolean);
+    si._calcDirect=itemActs.reduce((s,a)=>s+(a.directTotal||0),0);
+  });
+
+  // The changed item's new profit
+  const si=sovItems[changedIdx];
+  const newProfit=newBillingValue-si._calcDirect-(si.allocatedOH||0);
+  const oldProfit=si.allocatedProfit||0;
+  const delta=newProfit-oldProfit;
+
+  // Set the changed item
+  si.allocatedProfit=Math.round(newProfit*100)/100;
+  si._manualProfit=true;
+
+  // Distribute the negative delta across all OTHER items proportionally
+  const others=sovItems.filter((_,i)=>i!==changedIdx);
+  const otherProfitTotal=others.reduce((s,o)=>s+(o.allocatedProfit||0),0);
+
+  others.forEach(o=>{
+    const share=otherProfitTotal!==0?(o.allocatedProfit||0)/otherProfitTotal:1/Math.max(others.length,1);
+    o.allocatedProfit=Math.round(((o.allocatedProfit||0)-delta*share)*100)/100;
+    o._manualProfit=true;
+  });
+
+  // Clean up
+  sovItems.forEach(si=>{delete si._calcDirect});
+}
+
 function handleFrontLoadSlider(idx, newBillingValue){
   const job=Store.jobs[Store.activeJob];
   if(!job||!job.sovItems[idx])return;
-  const si=job.sovItems[idx];
-  // Set override value — margin engine will redistribute remaining to other items
-  si._overrideValue=Math.round(newBillingValue*100)/100;
+  _redistributeProfit(job, idx, newBillingValue);
   renderSOVBuilder();
 }
 
 function handleFrontLoadOverride(idx, newBillingValue){
   const job=Store.jobs[Store.activeJob];
   if(!job||!job.sovItems[idx])return;
-  const si=job.sovItems[idx];
-  if(isNaN(newBillingValue)||newBillingValue<0) return;
-  si._overrideValue=Math.round(newBillingValue*100)/100;
+  if(isNaN(newBillingValue)) return;
+  _redistributeProfit(job, idx, newBillingValue);
   renderSOVBuilder();
 }
 
@@ -3229,7 +3253,9 @@ function resetFrontLoad(){
   if(!job||!job.sovItems)return;
   if(!confirm('Reset all front-loading? Profit will be redistributed proportionally by direct cost.'))return;
   job.sovItems.forEach(si=>{
+    delete si._manualProfit;
     delete si._overrideValue;
+    si.allocatedProfit=0;
   });
   runMarginEngine(job);
   renderSOVBuilder();
