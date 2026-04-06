@@ -17,21 +17,30 @@ echo "📋 Changes detected:"
 git status --short
 echo ""
 
+# Check for unpushed commits
+UNPUSHED=$(git log origin/main..HEAD --oneline 2>/dev/null)
+
 # Check if there are changes to commit
 if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
-    echo "✅ Nothing new to deploy — you're up to date!"
-    echo ""
-    echo "Press any key to close..."
-    read -n 1
-    exit 0
+    if [ -z "$UNPUSHED" ]; then
+        echo "✅ Nothing new to deploy — you're up to date!"
+        echo ""
+        echo "Press any key to close..."
+        read -n 1
+        exit 0
+    else
+        echo "📦 No new changes, but found unpushed commits:"
+        echo "$UNPUSHED"
+        echo ""
+    fi
+else
+    # Stage all changes
+    git add -A
+
+    # Commit with timestamp
+    TIMESTAMP=$(date "+%Y-%m-%d %H:%M")
+    git commit -m "Deploy: $TIMESTAMP"
 fi
-
-# Stage all changes
-git add -A
-
-# Commit with timestamp
-TIMESTAMP=$(date "+%Y-%m-%d %H:%M")
-git commit -m "Deploy: $TIMESTAMP"
 
 # Push to GitHub (triggers Netlify auto-deploy)
 echo ""

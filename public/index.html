@@ -938,19 +938,48 @@ function parseScheduleRaw(rows){
 }
 
 function parseActualsRaw(rows){
-  return rows.filter(r=>r['Activity Code']||r['Code']).map(r=>{
-    const code=String(r['Activity Code']||r['Code']||'');
-    const budgetHours=col(r,['Budget Hours','Budgeted Hours','BudgetHours']);
-    const budgetCost=col(r,['Budget Cost','Budgeted Cost','BudgetCost','Budget']);
-    const actualHours=col(r,['Actual Hours','ActualHours','Actual Hrs']);
-    const actualCost=col(r,['Actual Cost','ActualCost','Actual']);
-    const qtyInstalled=col(r,['Qty Installed','Quantity Installed','QtyInstalled']);
+  return rows.filter(r=>r['Activity Code']||r['Code']||r['Cost Code']).map(r=>{
+    const code=String(r['Activity Code']||r['Code']||r['Cost Code']||'');
+    const budgetHours=col(r,['Budget Hours','Budgeted Hours','BudgetHours','Budgeted Labor Hours']);
+    const actualHours=col(r,['Actual Hours','ActualHours','Actual Hrs','Actual Labor Hours']);
+    const budgetCost=col(r,['Budget Cost','Budgeted Cost','BudgetCost','Budget','Budgeted All Cost']);
+    const actualCost=col(r,['Actual Cost','ActualCost','Actual','Actual All Cost']);
+    const qtyInstalled=col(r,['Qty Installed','Quantity Installed','QtyInstalled','Actual Quantity']);
     const qtyRemaining=col(r,['Qty Remaining','Quantity Remaining','QtyRemaining']);
+    const budgetQty=col(r,['Budget Quantity','Budgeted Quantity','BudgetQty']);
     const pctComplete=col(r,['% Complete','Percent Complete','PctComplete','\u0025 Complete']);
+    // HeavyJob Cost Code Summary — detailed cost breakdowns
+    const budgetLabor=col(r,['Budgeted Labor Cost']);
+    const actualLabor=col(r,['Actual Labor Cost']);
+    const budgetEquip=col(r,['Budgeted Equipment Cost']);
+    const actualEquip=col(r,['Actual Equipment Cost']);
+    const budgetMat=col(r,['Budgeted Material Cost']);
+    const actualMat=col(r,['Actual Material Cost']);
+    const budgetSub=col(r,['Budgeted Subcontract Cost']);
+    const actualSub=col(r,['Actual Subcontract Cost']);
+    const budgetEquipHrs=col(r,['Budgeted Equipment Hours']);
+    const actualEquipHrs=col(r,['Actual Equipment Hours']);
+    // Variance fields (pre-calculated by HeavyJob)
+    const laborCostVar=col(r,['Labor Cost Variance']);
+    const equipCostVar=col(r,['Equipment Cost Variance']);
+    const matCostVar=col(r,['Material Cost Variance']);
+    const subCostVar=col(r,['Subcontract Cost Variance']);
+    const allCostVar=col(r,['All Cost Variance']);
+    const unit=colStr(r,['Unit','Units']);
+    // Compute qtyRemaining if not provided
+    const calcRemaining=qtyRemaining||(budgetQty>0?Math.max(0,budgetQty-qtyInstalled):0);
     return{
       code,
       description:colStr(r,['Description','Desc']),
-      budgetHours,budgetCost,actualHours,actualCost,qtyInstalled,qtyRemaining,pctComplete
+      unit,budgetQty,
+      budgetHours,actualHours,budgetCost,actualCost,
+      qtyInstalled,qtyRemaining:calcRemaining,pctComplete,
+      // Detailed breakdowns
+      budgetLabor,actualLabor,budgetEquip,actualEquip,
+      budgetMat,actualMat,budgetSub,actualSub,
+      budgetEquipHrs,actualEquipHrs,
+      // Pre-calc variances
+      laborCostVar,equipCostVar,matCostVar,subCostVar,allCostVar
     };
   });
 }
@@ -972,8 +1001,14 @@ function renderStaging(){
     h+='<tr><th></th><th>#</th><th>Description</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th></th></tr>';
     data.forEach((b,i)=>{if(!b._selected)return;const oh=(b.indirects||0)+(b.addonBond||0);h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${b.biditem}</td><td>${b.description}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(b.takeoffTotal)}</strong></td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
   }else if(type==='actuals'){
-    h+='<tr><th></th><th>Code</th><th>Description</th><th class="num">Budget Cost</th><th class="num">Actual Cost</th><th class="num">Qty Inst</th><th class="num">% Complete</th><th></th></tr>';
-    data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+    const hasBreakdown=data.some(a=>a.budgetLabor||a.actualLabor);
+    if(hasBreakdown){
+      h+='<tr><th></th><th>Code</th><th>Description</th><th class="num">Budget</th><th class="num">Actual</th><th class="num">Variance</th><th class="num">Qty</th><th class="num">% Comp</th><th class="num">Act Labor</th><th class="num">Act Equip</th><th class="num">Act Mat</th><th class="num">Act Sub</th><th></th></tr>';
+      data.forEach((a,i)=>{if(!a._selected)return;const variance=a.budgetCost-a.actualCost;const vCls=variance<0?'color:var(--red)':'color:var(--green)';h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num" style="${vCls}">${fmtD(variance)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td class="num">${fmtD(a.actualLabor)}</td><td class="num">${fmtD(a.actualEquip)}</td><td class="num">${fmtD(a.actualMat)}</td><td class="num">${fmtD(a.actualSub)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+    } else {
+      h+='<tr><th></th><th>Code</th><th>Description</th><th class="num">Budget Cost</th><th class="num">Actual Cost</th><th class="num">Qty Inst</th><th class="num">% Complete</th><th></th></tr>';
+      data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+    }
   }else{
     h+='<tr><th></th><th>#</th><th>Task</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th>Crew</th><th></th></tr>';
     data.forEach((t,i)=>{if(!t._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
@@ -1641,6 +1676,38 @@ function renderDashboard(){
     h+=`<div class="kpi ${varClass}"><div class="kpi-value">${fmtD(costVar)}</div><div class="kpi-label">Cost Variance (${costVarPct.toFixed(1)}%)</div></div>`;
     h+=`<div class="kpi"><div class="kpi-value">${pctCompleteAvg.toFixed(0)}%</div><div class="kpi-label">Avg % Complete</div></div>`;
     h+='</div>';
+    // Detailed cost breakdown from HeavyJob (if available)
+    const hasBreakdown=actuals.some(a=>a.actualLabor||a.actualEquip||a.actualMat||a.actualSub);
+    if(hasBreakdown){
+      const aLab=actuals.reduce((s,a)=>s+(a.actualLabor||0),0);
+      const bLab=actuals.reduce((s,a)=>s+(a.budgetLabor||0),0);
+      const aEqp=actuals.reduce((s,a)=>s+(a.actualEquip||0),0);
+      const bEqp=actuals.reduce((s,a)=>s+(a.budgetEquip||0),0);
+      const aMat=actuals.reduce((s,a)=>s+(a.actualMat||0),0);
+      const bMat=actuals.reduce((s,a)=>s+(a.budgetMat||0),0);
+      const aSub=actuals.reduce((s,a)=>s+(a.actualSub||0),0);
+      const bSub=actuals.reduce((s,a)=>s+(a.budgetSub||0),0);
+      const aHrs=actuals.reduce((s,a)=>s+(a.actualHours||0),0);
+      const bHrs=actuals.reduce((s,a)=>s+(a.budgetHours||0),0);
+      const cats=[
+        {l:'Labor',b:bLab,a:aLab,c:'var(--green)'},
+        {l:'Equipment',b:bEqp,a:aEqp,c:'var(--blue)'},
+        {l:'Material',b:bMat,a:aMat,c:'var(--orange)'},
+        {l:'Subcontract',b:bSub,a:aSub,c:'var(--red)'}
+      ].filter(c=>c.b>0||c.a>0);
+      h+='<div class="card" style="margin-bottom:16px;"><div class="card-title">Actuals — Budget vs Actual by Category</div>';
+      h+='<table><tr><th>Category</th><th class="num">Budget</th><th class="num">Actual</th><th class="num">Variance</th><th class="num">% Used</th></tr>';
+      cats.forEach(c=>{
+        const v=c.b-c.a;const pct=c.b>0?(c.a/c.b*100):0;
+        const vCls=v<0?'color:var(--red)':'color:var(--green)';
+        const pCls=pct>100?'color:var(--red)':pct>90?'color:var(--orange)':'';
+        h+=`<tr><td><span class="disc-dot" style="background:${c.c}"></span>${c.l}</td><td class="num">${fmtD(c.b)}</td><td class="num">${fmtD(c.a)}</td><td class="num" style="${vCls}">${fmtD(v)}</td><td class="num" style="${pCls}">${pct.toFixed(1)}%</td></tr>`;
+      });
+      // Hours row
+      const hrsVar=bHrs-aHrs;const hrsPct=bHrs>0?(aHrs/bHrs*100):0;
+      h+=`<tr style="border-top:2px solid var(--border);font-weight:600;"><td>Labor Hours</td><td class="num">${fmt(bHrs)}</td><td class="num">${fmt(aHrs)}</td><td class="num" style="${hrsVar<0?'color:var(--red)':'color:var(--green)'};">${fmt(hrsVar)}</td><td class="num" style="${hrsPct>100?'color:var(--red)':''}">${hrsPct.toFixed(1)}%</td></tr>`;
+      h+='</table></div>';
+    }
   }
 
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">';
