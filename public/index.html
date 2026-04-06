@@ -2650,9 +2650,11 @@ function renderBidItems(){
 
     if(_flOpen){
       // Action buttons
-      h+=`<div style="display:flex;gap:8px;margin-bottom:10px;">`;
+      h+=`<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">`;
       h+=`<button class="btn-primary btn-sm" style="background:var(--green);" onclick="autoOptimizeFrontLoad()">Optimize for Cash Flow</button>`;
       h+=`<button class="btn-secondary btn-sm" onclick="resetFrontLoad()">Reset to Default</button>`;
+      h+=`<div style="flex:1;"></div>`;
+      h+=`<button class="btn-primary btn-sm" style="background:var(--blue);font-weight:700;padding:6px 16px;" onclick="saveFrontLoad()">💾 Save &amp; Apply to Cash Flow</button>`;
       h+=`</div>`;
 
       // Slider rows
@@ -2941,7 +2943,7 @@ function renderSchedule(){
   const _tm=job.taskMap||{};
   if(_actuals.length&&_acts.length&&Object.keys(_tm).length){
     // Build actuals lookup by cost code
-    const actualsMap={};_actuals.forEach(a=>{actualsMap[a.code]=a});
+    const actualsMap={};_actuals.forEach(a=>{const k=String(a.code||'').trim();if(k)actualsMap[k]=a});
     // Build activity→bid item lookup
     const actByBi={};_acts.forEach(a=>{const bi=String(a.biditem);if(!actByBi[bi])actByBi[bi]=[];actByBi[bi].push(a)});
     // Reverse taskMap: bidItem → [taskIds]
@@ -2976,7 +2978,7 @@ function renderSchedule(){
       let totalBudget=0,weightedPct=0,totalActualCost=0,totalBudgetCost=0;
       let hasActualData=false;
       biActs.forEach(a=>{
-        const ac=actualsMap[a.code]||actualsMap[a.phaseCode];
+        const ac=actualsMap[String(a.code||'').trim()]||actualsMap[String(a.phaseCode||'').trim()];
         if(ac){
           hasActualData=true;
           const bCost=ac.budgetCost||0;
@@ -2987,7 +2989,8 @@ function renderSchedule(){
         }
       });
       const actualPct=totalBudget>0?weightedPct/totalBudget:0;
-      if(!hasActualData&&schedPct<5) return; // Not started and no actuals — skip
+      const _showAllSvA=window._showAllScheduleVsActuals===true;
+      if(!_showAllSvA&&!hasActualData&&schedPct<5) return; // Not started and no actuals — skip in filtered view
 
       // Budget cost for this bid item (from activities)
       const biBudgetDirect=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
@@ -3018,12 +3021,14 @@ function renderSchedule(){
       const onTrack=compRows.filter(r=>r.status==='on-track').length;
       const ahead=compRows.filter(r=>r.status==='ahead').length;
 
+      const _showAll=window._showAllScheduleVsActuals===true;
       h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Schedule vs Actuals';
-      h+='<div style="display:flex;gap:8px;font-size:11px;font-weight:400;">';
+      h+='<div style="display:flex;gap:8px;font-size:11px;font-weight:400;align-items:center;">';
       if(behind)h+=`<span style="color:var(--red);font-weight:600;">${behind} Behind</span>`;
       if(watch)h+=`<span style="color:var(--orange);font-weight:600;">${watch} Watch</span>`;
       if(onTrack)h+=`<span style="color:var(--green);">${onTrack} On Track</span>`;
       if(ahead)h+=`<span style="color:var(--teal);">${ahead} Ahead</span>`;
+      h+=`<button class="btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;background:${_showAll?'var(--blue)':'var(--bg)'};color:${_showAll?'#fff':'var(--text-light)'};border:1px solid ${_showAll?'var(--blue)':'var(--border)'};" onclick="window._showAllScheduleVsActuals=!window._showAllScheduleVsActuals;renderSchedule();">${_showAll?'Flagged Only':'Show All'}</button>`;
       h+='</div></div>';
       h+='<div style="font-size:11px;color:var(--text-light);margin-bottom:12px;">Compares where the schedule says you should be vs where HeavyJob says you actually are.</div>';
 
@@ -3330,6 +3335,16 @@ function renderJobCostSchedule(){
   });
   sortedMapped.forEach(g=>g.activities.sort((a,b)=>(a._barStart||Infinity)-(b._barStart||Infinity)));
 
+  // Build normalized actuals lookup map (handles type mismatches from Supabase round-trip)
+  const _actualsMap={};
+  if(job.actuals&&job.actuals.length){
+    job.actuals.forEach(ac=>{
+      const key=String(ac.code||'').trim();
+      if(key) _actualsMap[key]=ac;
+    });
+  }
+  const _hasActuals=Object.keys(_actualsMap).length>0;
+
   // Helper: render a JCS activity row
   function jcsRow(a,gColor,ganttWidth,months,totalMs,projStart,todayPct,actIdx){
     const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
@@ -3367,8 +3382,11 @@ function renderJobCostSchedule(){
       }
     }
 
-    // Actuals matching
-    const actualData=job.actuals?.find(ac=>ac.code===a.code||ac.code===a.phaseCode||(a.phaseCode&&ac.code===String(a.phaseCode)));
+    // Actuals matching — use normalized lookup map
+    const _normCode=String(a.code||'').trim();
+    const _normPhase=String(a.phaseCode||'').trim();
+    const _normParent=String(a.parentPhase||'').trim();
+    const actualData=_actualsMap[_normCode]||_actualsMap[_normPhase]||(_normParent?_actualsMap[_normParent]:null);
     let r='<tr>';
     r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${pcBadge}${shortName}</td>`;
     r+=`<td>${qty}${units?' '+units:''}</td>`;
@@ -3398,7 +3416,7 @@ function renderJobCostSchedule(){
       const baselineVar=baselineCost-(a.directTotal||0);
       r+=`<td class="num" style="color:${baselineVar>=0?'var(--green)':'var(--red)'};">${fmtD(baselineCost)}</td>`;
     }
-    if(job.actuals&&job.actuals.length){
+    if(_hasActuals){
       if(actualData){
         const budget=a.directTotal||0;
         const actual=actualData.actualCost||0;
@@ -3454,7 +3472,7 @@ function renderJobCostSchedule(){
 
   // Build table
   const ganttWidth=Math.max(500,months.length*80);
-  const hasActuals=job.actuals&&job.actuals.length;
+  const hasActuals=_hasActuals;
 
   // JCS KPI panel
   let h='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
@@ -3969,6 +3987,32 @@ function toggleProfitLock(idx){
     log(`Locked pay item ${si.clientItemNo||si.id} — billing value frozen.`);
   }
   renderBidItems();
+}
+
+// ═══════════════════════════════════════════
+// SAVE FRONT-LOAD — Persist profit distribution and push to Cash Flow
+// ═══════════════════════════════════════════
+async function saveFrontLoad(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  // Sync the margin engine allocations into SOV billing values
+  const meta=job.meta||{};
+  const ohPct=meta.overheadPct||0;
+  const actMap={};(job.activities||[]).forEach(a=>{actMap[a.code]=a});
+  job.sovItems.forEach(si=>{
+    const acts=(si.activityIds||[]).map(id=>actMap[id]).filter(Boolean);
+    const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
+    const oh=dc*(si.ohPct||ohPct/100||0);
+    const profit=si.allocatedProfit||0;
+    si._billingValue=dc+oh+profit;
+  });
+  await saveJob(Store.activeJob);
+  log('✓ Profit distribution saved — Cash Flow projection updated.');
+  addEditLog('Saved profit distribution / front-load settings');
+  // Re-render affected tabs
+  renderBidItems();
+  if(typeof renderCashFlowProjection==='function') renderCashFlowProjection();
+  if(typeof renderDashboard==='function') renderDashboard();
 }
 
 // ═══════════════════════════════════════════
@@ -4639,13 +4683,29 @@ function renderCashFlowProjection(){
     addCost('trucking','truckingTiming','truckingLagPeriods',a.trucking||0);
   });
 
-  // Revenue: monthly billing based on cost incurred that month (cost-based % complete)
+  // Revenue: per-SOV billing values (reflects front-load / profit distribution)
+  const sovItems=job.sovItems||[];
   const bidContractCF=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const totalContract=job.meta.contractAmount||bidContractCF;
   const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
   const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
   const retPct=cf.retainagePct/100;
   const ownerLagMonths=cf.ownerPayTerms||1;
+
+  // Build per-activity billing value from SOV front-loading
+  const _actBillingMap={};
+  const _cfActMap={};acts.forEach(a=>{_cfActMap[a.code]=a});
+  sovItems.forEach(si=>{
+    const siActs=(si.activityIds||[]).map(id=>_cfActMap[id]).filter(Boolean);
+    const dc=siActs.reduce((s,a)=>s+(a.directTotal||0),0);
+    const oh=dc*(si.ohPct||0);
+    const profit=si.allocatedProfit||0;
+    const billingValue=si._billingValue||(dc+oh+profit);
+    siActs.forEach(a=>{
+      const share=dc>0?(a.directTotal||0)/dc:(1/Math.max(siActs.length,1));
+      _actBillingMap[a.code]=billingValue*share;
+    });
+  });
 
   // Mob payment: first billing cycle + owner lag
   if(cf.mobPct>0){
@@ -4654,13 +4714,16 @@ function renderCashFlowProjection(){
     if(mobMi>=0)revBuckets[mobMi]+=mobAmt;
   }
 
-  // Monthly billings: costs incurred in month → billed end of month → owner pays N months later
-  costBuckets.forEach((cb,i)=>{
-    if(cb.total<=0)return;
-    const earnedRev=cb.total*costToRevRatio;
-    const billed=earnedRev*(1-retPct);
-    const payMi=Math.min(i+ownerLagMonths,months.length-1);
-    revBuckets[payMi]+=billed;
+  // Revenue per activity: use SOV billing values when available, fallback to cost ratio
+  acts.forEach(a=>{
+    if(!a._cfStart||!a._cfEnd)return;
+    const billing=_actBillingMap[a.code]||((a.directTotal||0)*costToRevRatio);
+    const mid=new Date((a._cfStart.getTime()+a._cfEnd.getTime())/2);
+    const incurredMi=monthIdx(mid);
+    if(incurredMi<0)return;
+    const billed=billing*(1-retPct);
+    const payMi=Math.min(incurredMi+ownerLagMonths,months.length-1);
+    if(payMi>=0)revBuckets[payMi]+=billed;
   });
 
   // Retainage release at end
