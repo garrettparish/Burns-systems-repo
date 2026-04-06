@@ -1539,7 +1539,7 @@ function renderDashboard(){
   const contract=m.contractAmount||bidContract; // Prefer entered contract amount
   const baseContract=baseBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const coContract=coBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
-  const totalMH=bidSummaries.reduce((s,b)=>s+(b.manHours||0),0);
+  const totalMH=acts.length?acts.reduce((s,a)=>s+(a.manHours||0),0):bidSummaries.reduce((s,b)=>s+(b.manHours||0),0);
   // Use job-level OH if set, otherwise fallback to bid items
   const displayOH=m.totalOH||totalOverhead;
   const displayProfit=contract-totalDirect-displayOH;
@@ -2735,6 +2735,140 @@ function renderSchedule(){
     h+=`</tr>`;
   });
   h+='</table></div></div>';
+
+  // ── SCHEDULE vs ACTUALS COMPARISON ──
+  const _actuals=job.actuals||[];
+  const _acts=job.activities||[];
+  const _tm=job.taskMap||{};
+  if(_actuals.length&&_acts.length&&Object.keys(_tm).length){
+    // Build actuals lookup by cost code
+    const actualsMap={};_actuals.forEach(a=>{actualsMap[a.code]=a});
+    // Build activity→bid item lookup
+    const actByBi={};_acts.forEach(a=>{const bi=String(a.biditem);if(!actByBi[bi])actByBi[bi]=[];actByBi[bi].push(a)});
+    // Reverse taskMap: bidItem → [taskIds]
+    const biToTasks={};
+    Object.entries(_tm).forEach(([taskId,bi])=>{if(!biToTasks[bi])biToTasks[bi]=[];biToTasks[bi].push(parseInt(taskId))});
+
+    const _today=new Date();
+    const compRows=[];
+
+    // For each bid item that has both schedule tasks and activities
+    Object.entries(biToTasks).forEach(([bi,taskIds])=>{
+      const biActs=actByBi[bi];
+      if(!biActs||!biActs.length) return;
+
+      // Get schedule date range for this bid item
+      let biStart=null,biEnd=null,biName='';
+      taskIds.forEach(tid=>{
+        const t=tasks.find(tk=>tk.id===tid);if(!t)return;
+        if(!biName)biName=t.name;
+        const s=toDate(t.start),f=toDate(t.finish);
+        if(s&&(!biStart||s<biStart))biStart=s;
+        if(f&&(!biEnd||f>biEnd))biEnd=f;
+      });
+      if(!biStart||!biEnd) return;
+
+      // Scheduled % complete (time-based)
+      const biSpan=Math.max(biEnd.getTime()-biStart.getTime(),86400000);
+      const elapsed=Math.max(0,_today.getTime()-biStart.getTime());
+      const schedPct=Math.min(100,elapsed/biSpan*100);
+
+      // Actual % complete from HeavyJob — weighted average by budget cost
+      let totalBudget=0,weightedPct=0,totalActualCost=0,totalBudgetCost=0;
+      let hasActualData=false;
+      biActs.forEach(a=>{
+        const ac=actualsMap[a.code];
+        if(ac){
+          hasActualData=true;
+          const bCost=ac.budgetCost||0;
+          totalBudget+=bCost;
+          weightedPct+=bCost*(ac.pctComplete||0);
+          totalActualCost+=ac.actualCost||0;
+          totalBudgetCost+=bCost;
+        }
+      });
+      const actualPct=totalBudget>0?weightedPct/totalBudget:0;
+      if(!hasActualData&&schedPct<5) return; // Not started and no actuals — skip
+
+      // Budget cost for this bid item (from activities)
+      const biBudgetDirect=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
+      const schedCostToDate=biBudgetDirect*(schedPct/100);
+      const costVar=schedCostToDate-totalActualCost;
+
+      // Determine status
+      const delta=actualPct-schedPct;
+      let status='on-track',statusLabel='On Track',statusColor='var(--green)';
+      if(schedPct>5){ // Only flag if we're past the start
+        if(delta<-20){status='behind';statusLabel='Behind';statusColor='var(--red)'}
+        else if(delta<-5){status='watch';statusLabel='Watch';statusColor='var(--orange)'}
+        else if(delta>10){status='ahead';statusLabel='Ahead';statusColor='var(--teal)'}
+      }
+      if(schedPct<=0){statusLabel='Not Started';statusColor='var(--text-light)'}
+
+      compRows.push({bi,name:biName,schedPct,actualPct,delta,status,statusLabel,statusColor,
+        biBudgetDirect,schedCostToDate,totalActualCost,costVar,biStart,biEnd});
+    });
+
+    if(compRows.length){
+      // Sort: behind first, then watch, on-track, ahead
+      const order={behind:0,watch:1,'on-track':2,ahead:3};
+      compRows.sort((a,b)=>(order[a.status]||2)-(order[b.status]||2));
+
+      const behind=compRows.filter(r=>r.status==='behind').length;
+      const watch=compRows.filter(r=>r.status==='watch').length;
+      const onTrack=compRows.filter(r=>r.status==='on-track').length;
+      const ahead=compRows.filter(r=>r.status==='ahead').length;
+
+      h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Schedule vs Actuals';
+      h+='<div style="display:flex;gap:8px;font-size:11px;font-weight:400;">';
+      if(behind)h+=`<span style="color:var(--red);font-weight:600;">${behind} Behind</span>`;
+      if(watch)h+=`<span style="color:var(--orange);font-weight:600;">${watch} Watch</span>`;
+      if(onTrack)h+=`<span style="color:var(--green);">${onTrack} On Track</span>`;
+      if(ahead)h+=`<span style="color:var(--teal);">${ahead} Ahead</span>`;
+      h+='</div></div>';
+      h+='<div style="font-size:11px;color:var(--text-light);margin-bottom:12px;">Compares where the schedule says you should be vs where HeavyJob says you actually are.</div>';
+
+      compRows.forEach(r=>{
+        const schedW=Math.max(r.schedPct,0.5);
+        const actW=Math.max(Math.min(r.actualPct,100),0);
+        h+=`<div style="padding:10px 12px;border-bottom:1px solid var(--border);${r.status==='behind'?'background:#FFF5F5;':''}">`;
+        h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">`;
+        h+=`<div style="font-weight:600;font-size:13px;">${esc(r.name)}</div>`;
+        h+=`<div style="display:flex;align-items:center;gap:10px;">`;
+        h+=`<span style="font-size:11px;color:var(--text-light);">${fmtDate(r.biStart)} — ${fmtDate(r.biEnd)}</span>`;
+        h+=`<span style="font-family:Oswald;font-size:12px;font-weight:600;color:${r.statusColor};background:${r.status==='behind'?'#FFE4E1':r.status==='watch'?'#FFF8F0':r.status==='ahead'?'#E8F8F5':'var(--bg)'};padding:2px 8px;border-radius:4px;">${r.statusLabel}</span>`;
+        h+=`</div></div>`;
+        // Dual bar
+        h+=`<div style="display:flex;gap:16px;align-items:center;">`;
+        h+=`<div style="flex:1;">`;
+        h+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">`;
+        h+=`<span style="font-size:10px;color:var(--text-light);width:60px;">Scheduled</span>`;
+        h+=`<div style="flex:1;height:14px;background:var(--ash);border-radius:3px;overflow:hidden;position:relative;">`;
+        h+=`<div style="height:100%;width:${schedW}%;background:var(--blue);border-radius:3px;transition:width .3s;"></div>`;
+        h+=`</div>`;
+        h+=`<span style="font-family:Oswald;font-size:12px;font-weight:600;width:42px;text-align:right;color:var(--blue);">${r.schedPct.toFixed(0)}%</span>`;
+        h+=`</div>`;
+        h+=`<div style="display:flex;align-items:center;gap:6px;">`;
+        h+=`<span style="font-size:10px;color:var(--text-light);width:60px;">Actual</span>`;
+        h+=`<div style="flex:1;height:14px;background:var(--ash);border-radius:3px;overflow:hidden;position:relative;">`;
+        h+=`<div style="height:100%;width:${actW}%;background:${r.statusColor};border-radius:3px;transition:width .3s;"></div>`;
+        h+=`</div>`;
+        h+=`<span style="font-family:Oswald;font-size:12px;font-weight:600;width:42px;text-align:right;color:${r.statusColor};">${r.actualPct.toFixed(0)}%</span>`;
+        h+=`</div>`;
+        h+=`</div>`;
+        // Cost line
+        h+=`<div style="display:flex;gap:16px;font-size:11px;color:var(--text-light);margin-top:4px;">`;
+        h+=`<span>Budget: ${fmtD(r.biBudgetDirect)}</span>`;
+        h+=`<span>Sched Cost: <strong style="color:var(--blue);">${fmtD(r.schedCostToDate)}</strong></span>`;
+        h+=`<span>Actual Cost: <strong>${fmtD(r.totalActualCost)}</strong></span>`;
+        const cvCls=r.costVar>=0?'color:var(--green)':'color:var(--red)';
+        h+=`<span>Variance: <strong style="${cvCls}">${fmtD(r.costVar)}</strong></span>`;
+        h+=`</div>`;
+        h+=`</div>`;
+      });
+      h+='</div>';
+    }
+  }
 
   // Add "Add Change Order" button
   h+='<div class="card" style="text-align:center;padding:12px;"><button class="btn-primary" style="background:var(--orange);" onclick="addChangeOrderTask()">＋ Add Change Order Task</button></div>';
