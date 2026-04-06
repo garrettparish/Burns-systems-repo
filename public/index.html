@@ -1359,15 +1359,17 @@ function autoSuggestAll(){
   renderMapping();
   const mapped=Object.keys(job.taskMap).length;
   log(`Auto-suggest: ${mapped} of ${job.schedule.length} tasks mapped to pay items.`);
+  saveJob(Store.activeJob);
 }
 
-function clearAllMappings(){const job=Store.jobs[Store.activeJob];if(!job)return;job.taskMap={};renderMapping();log('All mappings cleared.')}
+function clearAllMappings(){const job=Store.jobs[Store.activeJob];if(!job)return;job.taskMap={};renderMapping();log('All mappings cleared.');saveJob(Store.activeJob)}
 
 function updateTaskMapping(taskId, bidItemId){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.taskMap)job.taskMap={};
   if(bidItemId){job.taskMap[taskId]=bidItemId}else{delete job.taskMap[taskId]}
   renderMapping();
+  saveJob(Store.activeJob);
 }
 
 function showMapping(){
@@ -2262,7 +2264,7 @@ function renderGlobalCashFlow(jobIds){
     // Activity date assignment (same logic as per-job)
     const biDates={};
     Object.entries(tm).forEach(([si,bi])=>{
-      const t=job.schedule[parseInt(si)];if(!t)return;
+      const t=job.schedule.find(task=>String(task.id)===String(si));if(!t)return;
       const s=toDate(t.start),f=toDate(t.finish);
       if(!biDates[bi])biDates[bi]={start:null,finish:null};
       if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
@@ -2948,7 +2950,7 @@ function renderSchedule(){
     const actByBi={};_acts.forEach(a=>{const bi=String(a.biditem);if(!actByBi[bi])actByBi[bi]=[];actByBi[bi].push(a)});
     // Reverse taskMap: bidItem → [taskIds]
     const biToTasks={};
-    Object.entries(_tm).forEach(([taskId,bi])=>{if(!biToTasks[bi])biToTasks[bi]=[];biToTasks[bi].push(parseInt(taskId))});
+    Object.entries(_tm).forEach(([taskId,bi])=>{if(!biToTasks[bi])biToTasks[bi]=[];biToTasks[bi].push(taskId)});
 
     const _today=new Date();
     const compRows=[];
@@ -2961,7 +2963,7 @@ function renderSchedule(){
       // Get schedule date range for this bid item
       let biStart=null,biEnd=null,biName='';
       taskIds.forEach(tid=>{
-        const t=tasks.find(tk=>tk.id===tid);if(!t)return;
+        const t=tasks.find(tk=>String(tk.id)===String(tid));if(!t)return;
         if(!biName)biName=t.name;
         const s=toDate(t.start),f=toDate(t.finish);
         if(s&&(!biStart||s<biStart))biStart=s;
@@ -3000,15 +3002,48 @@ function renderSchedule(){
       // Determine status
       const delta=actualPct-schedPct;
       let status='on-track',statusLabel='On Track',statusColor='var(--green)';
-      if(schedPct>5){ // Only flag if we're past the start
+      if(actualPct>0&&schedPct<=5){
+        // Work done before schedule says it starts — that's ahead
+        status='ahead';statusLabel='Ahead';statusColor='var(--teal)';
+      } else if(schedPct>5){
         if(delta<-20){status='behind';statusLabel='Behind';statusColor='var(--red)'}
         else if(delta<-5){status='watch';statusLabel='Watch';statusColor='var(--orange)'}
         else if(delta>10){status='ahead';statusLabel='Ahead';statusColor='var(--teal)'}
       }
-      if(schedPct<=0){statusLabel='Not Started';statusColor='var(--text-light)'}
+      if(!hasActualData&&schedPct<=0){statusLabel='Not Started';statusColor='var(--text-light)'}
 
       compRows.push({bi,name:biName,schedPct,actualPct,delta,status,statusLabel,statusColor,
         biBudgetDirect,schedCostToDate,totalActualCost,costVar,biStart,biEnd});
+    });
+
+    // Also include bid items NOT in taskMap but that DO have actuals data (unscheduled but tracked in HeavyJob)
+    const mappedBis=new Set(Object.keys(biToTasks));
+    Object.entries(actByBi).forEach(([bi,biActs])=>{
+      if(mappedBis.has(bi)) return; // already handled
+      let totalBudget=0,weightedPct=0,totalActualCost=0,totalBudgetCost=0;
+      let hasActualData=false;
+      biActs.forEach(a=>{
+        const ac=actualsMap[String(a.code||'').trim()]||actualsMap[String(a.phaseCode||'').trim()];
+        if(ac){
+          hasActualData=true;
+          const bCost=ac.budgetCost||0;
+          totalBudget+=bCost;
+          weightedPct+=bCost*(ac.pctComplete||0);
+          totalActualCost+=ac.actualCost||0;
+          totalBudgetCost+=bCost;
+        }
+      });
+      if(!hasActualData) return;
+      const actualPct=totalBudget>0?weightedPct/totalBudget:0;
+      const biBudgetDirect=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
+      // Find name from SOV items or bid items
+      const sovItem=(job.sovItems||[]).find(si=>String(si.id)===bi);
+      const bidItem=(job.bidItems||[]).find(b=>String(b.biditem)===bi);
+      const biName=sovItem?.description||bidItem?.description||biActs[0]?.biditemDesc||`Bid Item ${bi}`;
+      compRows.push({bi,name:biName+'  ⚠ No Schedule',schedPct:0,actualPct,delta:actualPct,
+        status:actualPct>0?'ahead':'on-track',statusLabel:actualPct>0?'Ahead (No Sched)':'No Schedule',
+        statusColor:actualPct>0?'var(--teal)':'var(--text-light)',
+        biBudgetDirect,schedCostToDate:0,totalActualCost,costVar:-totalActualCost,biStart:null,biEnd:null});
     });
 
     if(compRows.length){
@@ -3039,7 +3074,7 @@ function renderSchedule(){
         h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">`;
         h+=`<div style="font-weight:600;font-size:13px;">${esc(r.name)}</div>`;
         h+=`<div style="display:flex;align-items:center;gap:10px;">`;
-        h+=`<span style="font-size:11px;color:var(--text-light);">${fmtDate(r.biStart)} — ${fmtDate(r.biEnd)}</span>`;
+        h+=`<span style="font-size:11px;color:var(--text-light);">${r.biStart?fmtDate(r.biStart)+' — '+fmtDate(r.biEnd):'No schedule dates'}</span>`;
         h+=`<span style="font-family:Oswald;font-size:12px;font-weight:600;color:${r.statusColor};background:${r.status==='behind'?'#FFE4E1':r.status==='watch'?'#FFF8F0':r.status==='ahead'?'#E8F8F5':'var(--bg)'};padding:2px 8px;border-radius:4px;">${r.statusLabel}</span>`;
         h+=`</div></div>`;
         // Dual bar
@@ -3529,6 +3564,22 @@ function renderJobCostSchedule(){
       h+=`<td>${days}</td>`;
       h+=`<td>${hrs}</td>`;
       h+=`<td colspan="${months.length||1}" style="padding:8px 12px;font-size:12px;color:var(--text-light);font-style:italic;">Bid Item ${bi} — not mapped to schedule</td>`;
+      if(hasBaseline){h+=`<td class="num">—</td>`}
+      if(hasActuals){
+        const _normC=String(a.code||'').trim();
+        const _normP=String(a.phaseCode||'').trim();
+        const _umAc=_actualsMap[_normC]||_actualsMap[_normP];
+        if(_umAc){
+          const _umBudget=a.directTotal||0;
+          const _umActual=_umAc.actualCost||0;
+          const _umVar=_umBudget-_umActual;
+          h+=`<td class="num">${fmtD(_umBudget)}</td>`;
+          h+=`<td class="num">${fmtD(_umActual)}</td>`;
+          h+=`<td class="num" style="color:${_umVar>=0?'var(--green)':'var(--red)'};">${fmtD(_umVar)}</td>`;
+        } else {
+          h+=`<td class="num">${fmtD(a.directTotal||0)}</td><td class="num" style="color:var(--text-light);">—</td><td class="num" style="color:var(--text-light);">—</td>`;
+        }
+      }
       h+=`<td style="width:40px;text-align:center;"><button class="edit-btn" onclick="editRow('activity',${actIdx},false)" title="Edit">✎</button></td>`;
       h+='</tr>';
     });
@@ -4035,7 +4086,7 @@ function _calcQuickCashFlow(job){
   // Build bid item date ranges from taskMap
   const biDates={};
   Object.entries(tm).forEach(([taskId,bi])=>{
-    const t=sched.find(task=>task.id===parseInt(taskId));if(!t)return;
+    const t=sched.find(task=>String(task.id)===String(taskId));if(!t)return;
     const s=toDate(t.start),f=toDate(t.finish);
     if(!biDates[bi])biDates[bi]={start:null,finish:null};
     if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
@@ -4171,7 +4222,7 @@ function autoOptimizeFrontLoad(){
   // Items earlier in the schedule get more profit (front-load)
   const biDates={};
   Object.entries(tm).forEach(([taskId,bi])=>{
-    const t=sched.find(task=>task.id===parseInt(taskId));if(!t)return;
+    const t=sched.find(task=>String(task.id)===String(taskId));if(!t)return;
     const s=toDate(t.start),f=toDate(t.finish);
     if(!biDates[bi])biDates[bi]={start:null,finish:null};
     if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
@@ -4571,7 +4622,7 @@ function renderCashFlowProjection(){
   // Build activity → date range from schedule via taskMap (same logic as JCS)
   const biDates={};
   Object.entries(tm).forEach(([taskId,bi])=>{
-    const t=sched.find(task=>task.id===parseInt(taskId));if(!t)return;
+    const t=sched.find(task=>String(task.id)===String(taskId));if(!t)return;
     const s=toDate(t.start),f=toDate(t.finish);
     if(!biDates[bi])biDates[bi]={start:null,finish:null};
     if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
