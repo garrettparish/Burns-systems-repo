@@ -2350,7 +2350,31 @@ function renderGlobalCashFlow(jobIds){
     const retPct=(cf.retainagePct||5)/100;
     const ownerLag=cf.ownerPayTerms||1;
     if(cf.mobPct>0){const mobAmt=jf.totalContract*(cf.mobPct/100)*(1-retPct);const mi=Math.min(ownerLag,months.length-1);jRev[mi]+=mobAmt;globalRev[mi]+=mobAmt}
-    jCost.forEach((c,i)=>{if(c<=0)return;const rev=c*costToRevRatio*(1-retPct);const pi=Math.min(i+ownerLag,months.length-1);jRev[pi]+=rev;globalRev[pi]+=rev});
+    // Per-SOV billing values (reflects front-loading) — same logic as per-job cash flow
+    const _gActBillingMap={};
+    const _gActMap={};acts.forEach(a=>{_gActMap[a.code]=a});
+    const _gJob=Store.jobs[jf.id];
+    const _gSov=_gJob?.sovItems||[];
+    _gSov.forEach(si=>{
+      const siActs=(si.activityIds||[]).map(id=>_gActMap[id]).filter(Boolean);
+      const dc=siActs.reduce((s,a)=>s+(a.directTotal||0),0);
+      const oh=dc*(si.ohPct||0);
+      const profit=si.allocatedProfit||0;
+      const billingValue=si._billingValue||(dc+oh+profit);
+      siActs.forEach(a=>{
+        const share=dc>0?(a.directTotal||0)/dc:(1/Math.max(siActs.length,1));
+        _gActBillingMap[a.code]=billingValue*share;
+      });
+    });
+    acts.forEach(a=>{
+      if(!a._gcfStart||!a._gcfEnd)return;
+      const billing=_gActBillingMap[a.code]||((a.directTotal||0)*costToRevRatio);
+      const mid=new Date((a._gcfStart.getTime()+a._gcfEnd.getTime())/2);
+      const incMi=mIdx(mid);if(incMi<0)return;
+      const billed=billing*(1-retPct);
+      const pi=Math.min(incMi+ownerLag,months.length-1);
+      if(pi>=0){jRev[pi]+=billed;globalRev[pi]+=billed}
+    });
     const totalRet=jf.totalContract*retPct;if(months.length>1){jRev[months.length-1]+=totalRet;globalRev[months.length-1]+=totalRet}
 
     jobCostByMonth[jf.id]=jCost;
@@ -2608,10 +2632,35 @@ function renderBidItems(){
   // Run margin engine to allocate OH + profit from contract amount
   runMarginEngine(job);
 
+  // Build actuals lookup map for pay items
+  const _biActualsMap={};
+  if(job.actuals&&job.actuals.length){
+    job.actuals.forEach(ac=>{const k=String(ac.code||'').trim();if(k)_biActualsMap[k]=ac});
+  }
+  const _biHasActuals=Object.keys(_biActualsMap).length>0;
+
   // Build computed data for each SOV item
   const items=sovItems.map((si,i)=>{
     const c=calcSOVItem(si,acts,job.meta);
-    return{...si,idx:i,c};
+    // Aggregate actuals for this pay item's activities
+    let actActualCost=0,actBudgetCost=0,actWeightedPct=0,actTotalBudget=0,actHasData=false;
+    if(_biHasActuals){
+      (si.activityIds||[]).forEach(actId=>{
+        const a=acts.find(x=>x.code===actId);
+        if(!a)return;
+        const ac=_biActualsMap[String(a.code||'').trim()]||_biActualsMap[String(a.phaseCode||'').trim()];
+        if(ac){
+          actHasData=true;
+          actActualCost+=ac.actualCost||0;
+          actBudgetCost+=ac.budgetCost||0;
+          const bCost=ac.budgetCost||0;
+          actTotalBudget+=bCost;
+          actWeightedPct+=bCost*(ac.pctComplete||0);
+        }
+      });
+    }
+    const actPctComplete=actTotalBudget>0?actWeightedPct/actTotalBudget:0;
+    return{...si,idx:i,c,_actActualCost:actActualCost,_actBudgetCost:actBudgetCost,_actPctComplete:actPctComplete,_actHasData:actHasData};
   });
 
   // Filter bar
@@ -2748,7 +2797,9 @@ function renderBidItems(){
 
   // ── Pay Items Table ──
   h+='<div class="card"><div class="table-wrap"><table>';
-  h+='<tr><th>#</th><th>Item No.</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th><th class="num">Ret. %</th><th class="num">Phases</th><th class="num">Activities</th><th></th></tr>';
+  h+='<tr><th>#</th><th>Item No.</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th>';
+  if(_biHasActuals){h+='<th class="num" style="color:var(--blue);">Actual Cost</th><th class="num" style="color:var(--blue);">Variance</th><th class="num" style="color:var(--blue);">% Comp</th>'}
+  h+='<th class="num">Phases</th><th class="num">Activities</th><th></th></tr>';
 
   filtered.forEach(it=>{
     const c=it.c;
@@ -2769,7 +2820,16 @@ function renderBidItems(){
     h+=`<td class="num">${fmtD(c.dc)}</td>`;
     h+=`<td class="num">${fmtD(c.oh+c.profit)}</td>`;
     h+=`<td class="num ${marginCls}">${fmtPct(margin)}</td>`;
-    h+=`<td class="num">${((it.retainagePct||5)).toFixed(0)}%</td>`;
+    if(_biHasActuals){
+      if(it._actHasData){
+        const _v=c.dc-it._actActualCost;
+        h+=`<td class="num">${fmtD(it._actActualCost)}</td>`;
+        h+=`<td class="num" style="color:${_v>=0?'var(--green)':'var(--red)'};">${fmtD(_v)}</td>`;
+        h+=`<td class="num" style="font-weight:600;">${it._actPctComplete.toFixed(0)}%</td>`;
+      } else {
+        h+=`<td class="num" style="color:var(--text-light);">—</td><td class="num" style="color:var(--text-light);">—</td><td class="num" style="color:var(--text-light);">—</td>`;
+      }
+    }
     h+=`<td class="num">${phaseCount||'—'}</td>`;
     h+=`<td class="num">${c.acts.length}</td>`;
     h+=`<td><button class="drill-btn" onclick="toggleDrill('${escJS(it.id)}')">${isOpen?'Close':'Drill'}</button></td>`;
@@ -2778,7 +2838,7 @@ function renderBidItems(){
     // Drill-down: phase codes → activities in this pay item
     if(isOpen){
       if(c.acts.length){
-        h+=`<tr><td colspan="14" style="padding:0 12px 12px 12px;background:#F0F7FD;"><div class="drill-panel">`;
+        h+=`<tr><td colspan="${_biHasActuals?16:13}" style="padding:0 12px 12px 12px;background:#F0F7FD;"><div class="drill-panel">`;
         // Group activities by phase code
         const phaseGroups={};
         c.acts.forEach(a=>{
@@ -2827,7 +2887,7 @@ function renderBidItems(){
         h+=`<tr style="background:#E8F5E9;font-weight:600;"><td colspan="6" style="text-align:right;">Scheduled Value</td><td colspan="4"></td><td class="num">${fmtD(c.sv)}</td></tr>`;
         h+='</table></div></td></tr>';
       }else{
-        h+=`<tr><td colspan="14" style="padding:12px;background:#F0F7FD;color:var(--text-light);font-style:italic;">No activities assigned to this pay item. <a href="#" onclick="switchSubTab('setup');return false;" style="color:var(--orange);">Edit in SOV Builder</a></td></tr>`;
+        h+=`<tr><td colspan="${_biHasActuals?16:13}" style="padding:12px;background:#F0F7FD;color:var(--text-light);font-style:italic;">No activities assigned to this pay item. <a href="#" onclick="switchSubTab('setup');return false;" style="color:var(--orange);">Edit in SOV Builder</a></td></tr>`;
       }
     }
   });
@@ -2835,7 +2895,11 @@ function renderBidItems(){
   // Totals row
   const fMargin=totalSV>0?((totalSV-totalDC)/totalSV*100):0;
   const totalPhases=filtered.reduce((s,it)=>s+(it.phaseCodes||[]).length,0);
-  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalSV)}</td><td class="num">${fmtD(totalDC)}</td><td class="num">${fmtD(totalOH+totalProfit)}</td><td class="num">${fmtPct(fMargin)}</td><td></td><td class="num">${totalPhases}</td><td class="num">${filtered.reduce((s,it)=>s+it.c.acts.length,0)}</td><td></td></tr>`;
+  const totalActualCost=filtered.reduce((s,it)=>s+it._actActualCost,0);
+  const totalVariance=totalDC-totalActualCost;
+  h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalSV)}</td><td class="num">${fmtD(totalDC)}</td><td class="num">${fmtD(totalOH+totalProfit)}</td><td class="num">${fmtPct(fMargin)}</td>`;
+  if(_biHasActuals){h+=`<td class="num">${fmtD(totalActualCost)}</td><td class="num" style="color:${totalVariance>=0?'var(--green)':'var(--red)'};">${fmtD(totalVariance)}</td><td></td>`}
+  h+=`<td class="num">${totalPhases}</td><td class="num">${filtered.reduce((s,it)=>s+it.c.acts.length,0)}</td><td></td></tr>`;
   h+='</table></div></div>';
 
   // ── Unbilled Activities Warning ──
@@ -2991,8 +3055,8 @@ function renderSchedule(){
         }
       });
       const actualPct=totalBudget>0?weightedPct/totalBudget:0;
-      const _showAllSvA=window._showAllScheduleVsActuals===true;
-      if(!_showAllSvA&&!hasActualData&&schedPct<5) return; // Not started and no actuals — skip in filtered view
+      const _showFlaggedOnly=window._showFlaggedOnlySvA===true;
+      if(_showFlaggedOnly&&!hasActualData&&schedPct<5) return; // Filtered view — hide items with no actuals and not started
 
       // Budget cost for this bid item (from activities)
       const biBudgetDirect=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
@@ -3056,14 +3120,14 @@ function renderSchedule(){
       const onTrack=compRows.filter(r=>r.status==='on-track').length;
       const ahead=compRows.filter(r=>r.status==='ahead').length;
 
-      const _showAll=window._showAllScheduleVsActuals===true;
+      const _flaggedOnly=window._showFlaggedOnlySvA===true;
       h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Schedule vs Actuals';
       h+='<div style="display:flex;gap:8px;font-size:11px;font-weight:400;align-items:center;">';
       if(behind)h+=`<span style="color:var(--red);font-weight:600;">${behind} Behind</span>`;
       if(watch)h+=`<span style="color:var(--orange);font-weight:600;">${watch} Watch</span>`;
       if(onTrack)h+=`<span style="color:var(--green);">${onTrack} On Track</span>`;
       if(ahead)h+=`<span style="color:var(--teal);">${ahead} Ahead</span>`;
-      h+=`<button class="btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;background:${_showAll?'var(--blue)':'var(--bg)'};color:${_showAll?'#fff':'var(--text-light)'};border:1px solid ${_showAll?'var(--blue)':'var(--border)'};" onclick="window._showAllScheduleVsActuals=!window._showAllScheduleVsActuals;renderSchedule();">${_showAll?'Flagged Only':'Show All'}</button>`;
+      h+=`<button class="btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;background:${_flaggedOnly?'var(--blue)':'var(--bg)'};color:${_flaggedOnly?'#fff':'var(--text-light)'};border:1px solid ${_flaggedOnly?'var(--blue)':'var(--border)'};" onclick="window._showFlaggedOnlySvA=!window._showFlaggedOnlySvA;renderSchedule();">${_flaggedOnly?'Show All':'Flagged Only'}</button>`;
       h+='</div></div>';
       h+='<div style="font-size:11px;color:var(--text-light);margin-bottom:12px;">Compares where the schedule says you should be vs where HeavyJob says you actually are.</div>';
 
