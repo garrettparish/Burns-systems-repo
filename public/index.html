@@ -1539,7 +1539,7 @@ function renderDashboard(){
   const contract=m.contractAmount||bidContract; // Prefer entered contract amount
   const baseContract=baseBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const coContract=coBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
-  const totalMH=bidSummaries.reduce((s,b)=>s+b.manHours,0);
+  const totalMH=bidSummaries.reduce((s,b)=>s+(b.manHours||0),0);
   // Use job-level OH if set, otherwise fallback to bid items
   const displayOH=m.totalOH||totalOverhead;
   const displayProfit=contract-totalDirect-displayOH;
@@ -1689,23 +1689,76 @@ function renderDashboard(){
       const bSub=actuals.reduce((s,a)=>s+(a.budgetSub||0),0);
       const aHrs=actuals.reduce((s,a)=>s+(a.actualHours||0),0);
       const bHrs=actuals.reduce((s,a)=>s+(a.budgetHours||0),0);
+      // Calculate "Scheduled to Date" — what the cost schedule says we should have spent by now
+      let schedLabor=0,schedEquip=0,schedMat=0,schedSub=0,schedHrs=0;
+      const hasSched=job.schedule&&job.schedule.length&&Object.keys(job.taskMap||{}).length;
+      if(hasSched){
+        const _sched=job.schedule,_tm=job.taskMap;
+        const _biDates={};
+        Object.entries(_tm).forEach(([taskId,bi])=>{
+          const t=_sched.find(task=>task.id===parseInt(taskId));if(!t)return;
+          const s=toDate(t.start),f=toDate(t.finish);
+          if(!_biDates[bi])_biDates[bi]={start:null,finish:null};
+          if(s&&(!_biDates[bi].start||s<_biDates[bi].start))_biDates[bi].start=s;
+          if(f&&(!_biDates[bi].finish||f>_biDates[bi].finish))_biDates[bi].finish=f;
+        });
+        const _biActGroups={};
+        acts.forEach(a=>{const bi=String(a.biditem);if(!_biActGroups[bi])_biActGroups[bi]=[];_biActGroups[bi].push(a)});
+        const _today=new Date().getTime();
+        Object.entries(_biActGroups).forEach(([bi,biActs])=>{
+          const dates=_biDates[bi];
+          if(!dates||!dates.start||!dates.finish) return;
+          const biStart=dates.start.getTime(),biSpan=Math.max(dates.finish.getTime()-biStart,86400000);
+          const totalDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+          let cursor=0;
+          biActs.forEach(a=>{
+            const days=a.calculatedDays||1;
+            const aStart=biStart+(cursor/totalDays)*biSpan;
+            const aEnd=biStart+((cursor+days)/totalDays)*biSpan;
+            cursor+=days;
+            if(aStart>_today) return; // not started yet per schedule
+            const pctDone=Math.min(1,(_today-aStart)/Math.max(aEnd-aStart,1));
+            schedLabor+=(a.labor||0)*pctDone;
+            schedEquip+=((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))*pctDone;
+            schedMat+=((a.permMat||0)+(a.constMat||0))*pctDone;
+            schedSub+=(a.subs||0)*pctDone;
+            schedHrs+=(a.manHours||0)*pctDone;
+          });
+        });
+      }
+
       const cats=[
-        {l:'Labor',b:bLab,a:aLab,c:'var(--green)'},
-        {l:'Equipment',b:bEqp,a:aEqp,c:'var(--blue)'},
-        {l:'Material',b:bMat,a:aMat,c:'var(--orange)'},
-        {l:'Subcontract',b:bSub,a:aSub,c:'var(--red)'}
-      ].filter(c=>c.b>0||c.a>0);
+        {l:'Labor',b:bLab,a:aLab,s:schedLabor,c:'var(--green)'},
+        {l:'Equipment',b:bEqp,a:aEqp,s:schedEquip,c:'var(--blue)'},
+        {l:'Material',b:bMat,a:aMat,s:schedMat,c:'var(--orange)'},
+        {l:'Subcontract',b:bSub,a:aSub,s:schedSub,c:'var(--red)'}
+      ].filter(c=>c.b>0||c.a>0||c.s>0);
+      const showSched=hasSched&&(schedLabor+schedEquip+schedMat+schedSub)>0;
       h+='<div class="card" style="margin-bottom:16px;"><div class="card-title">Actuals — Budget vs Actual by Category</div>';
-      h+='<table><tr><th>Category</th><th class="num">Budget</th><th class="num">Actual</th><th class="num">Variance</th><th class="num">% Used</th></tr>';
+      h+='<table><tr><th>Category</th><th class="num">Budget</th>';
+      if(showSched) h+='<th class="num">Scheduled</th>';
+      h+='<th class="num">Actual</th><th class="num">Variance</th>';
+      if(showSched) h+='<th class="num">Sched vs Actual</th>';
+      h+='<th class="num">% Used</th></tr>';
       cats.forEach(c=>{
         const v=c.b-c.a;const pct=c.b>0?(c.a/c.b*100):0;
         const vCls=v<0?'color:var(--red)':'color:var(--green)';
         const pCls=pct>100?'color:var(--red)':pct>90?'color:var(--orange)':'';
-        h+=`<tr><td><span class="disc-dot" style="background:${c.c}"></span>${c.l}</td><td class="num">${fmtD(c.b)}</td><td class="num">${fmtD(c.a)}</td><td class="num" style="${vCls}">${fmtD(v)}</td><td class="num" style="${pCls}">${pct.toFixed(1)}%</td></tr>`;
+        const schedVar=c.s-c.a;const svCls=schedVar<0?'color:var(--red)':'color:var(--green)';
+        h+=`<tr><td><span class="disc-dot" style="background:${c.c}"></span>${c.l}</td><td class="num">${fmtD(c.b)}</td>`;
+        if(showSched) h+=`<td class="num" style="color:var(--blue);">${fmtD(c.s)}</td>`;
+        h+=`<td class="num">${fmtD(c.a)}</td><td class="num" style="${vCls}">${fmtD(v)}</td>`;
+        if(showSched) h+=`<td class="num" style="${svCls}">${fmtD(schedVar)}</td>`;
+        h+=`<td class="num" style="${pCls}">${pct.toFixed(1)}%</td></tr>`;
       });
       // Hours row
       const hrsVar=bHrs-aHrs;const hrsPct=bHrs>0?(aHrs/bHrs*100):0;
-      h+=`<tr style="border-top:2px solid var(--border);font-weight:600;"><td>Labor Hours</td><td class="num">${fmt(bHrs)}</td><td class="num">${fmt(aHrs)}</td><td class="num" style="${hrsVar<0?'color:var(--red)':'color:var(--green)'};">${fmt(hrsVar)}</td><td class="num" style="${hrsPct>100?'color:var(--red)':''}">${hrsPct.toFixed(1)}%</td></tr>`;
+      const schedHrsVar=schedHrs-aHrs;
+      h+=`<tr style="border-top:2px solid var(--border);font-weight:600;"><td>Labor Hours</td><td class="num">${fmt(bHrs)}</td>`;
+      if(showSched) h+=`<td class="num" style="color:var(--blue);">${fmt(Math.round(schedHrs))}</td>`;
+      h+=`<td class="num">${fmt(aHrs)}</td><td class="num" style="${hrsVar<0?'color:var(--red)':'color:var(--green)'};">${fmt(hrsVar)}</td>`;
+      if(showSched) h+=`<td class="num" style="${schedHrsVar<0?'color:var(--red)':'color:var(--green)'};">${fmt(Math.round(schedHrsVar))}</td>`;
+      h+=`<td class="num" style="${hrsPct>100?'color:var(--red)':''}">${hrsPct.toFixed(1)}%</td></tr>`;
       h+='</table></div>';
     }
   }
@@ -3012,13 +3065,20 @@ function renderJobCostSchedule(){
       const baselineVar=baselineCost-(a.directTotal||0);
       r+=`<td class="num" style="color:${baselineVar>=0?'var(--green)':'var(--red)'};">${fmtD(baselineCost)}</td>`;
     }
-    if(actualData){
-      const budget=a.directTotal||0;
-      const actual=actualData.actualCost||0;
-      const variance=budget-actual;
-      r+=`<td class="num">${fmtD(budget)}</td>`;
-      r+=`<td class="num">${fmtD(actual)}</td>`;
-      r+=`<td class="num" style="color:${variance>=0?'var(--green)':'var(--red)'};">${fmtD(variance)}</td>`;
+    if(job.actuals&&job.actuals.length){
+      if(actualData){
+        const budget=a.directTotal||0;
+        const actual=actualData.actualCost||0;
+        const variance=budget-actual;
+        r+=`<td class="num">${fmtD(budget)}</td>`;
+        r+=`<td class="num">${fmtD(actual)}</td>`;
+        r+=`<td class="num" style="color:${variance>=0?'var(--green)':'var(--red)'};">${fmtD(variance)}</td>`;
+      } else {
+        // No actuals match for this code — still render empty cells so columns align
+        r+=`<td class="num">${fmtD(a.directTotal||0)}</td>`;
+        r+=`<td class="num" style="color:var(--text-light);">—</td>`;
+        r+=`<td class="num" style="color:var(--text-light);">—</td>`;
+      }
     }
     r+=`<td style="width:40px;text-align:center;"><button class="edit-btn" onclick="editRow('activity',${actIdx},false)" title="Edit">✎</button></td>`;
     r+='</tr>';
@@ -3090,7 +3150,8 @@ function renderJobCostSchedule(){
 
   // Mapped rows grouped by discipline
   sortedMapped.forEach(g=>{
-    h+=`<tr class="jcs-disc-row"><td colspan="${7}" style="background:${g.color};border-left:4px solid ${g.color};">${g.name.toUpperCase()}</td></tr>`;
+    const jcsColSpan=7+(hasBaseline?1:0)+(hasActuals?3:0);
+    h+=`<tr class="jcs-disc-row"><td colspan="${jcsColSpan}" style="background:${g.color};border-left:4px solid ${g.color};">${g.name.toUpperCase()}</td></tr>`;
     g.activities.forEach(a=>{
       const actIdx=acts.indexOf(a);
       h+=jcsRow(a,g.color,ganttWidth,months,totalMs,projStart,todayPct,actIdx);
@@ -3099,7 +3160,8 @@ function renderJobCostSchedule(){
 
   // Unmapped section at bottom
   if(unmappedActs.length){
-    h+=`<tr class="jcs-disc-row"><td colspan="${7}" style="background:var(--orange);border-left:4px solid var(--orange);">NEEDS SCHEDULE DATES (${unmappedActs.length}) <button class="btn-sm" style="background:var(--white);color:var(--orange);border:1px solid var(--orange);margin-left:12px;font-size:11px;cursor:pointer;padding:2px 10px;border-radius:4px;" onclick="switchSubTab('setup');setTimeout(()=>{const b=document.getElementById('mapScheduleBtn');if(b)b.click()},300);">Go to Schedule Mapping →</button></td></tr>`;
+    const unmColSpan=7+(hasBaseline?1:0)+(hasActuals?3:0);
+    h+=`<tr class="jcs-disc-row"><td colspan="${unmColSpan}" style="background:var(--orange);border-left:4px solid var(--orange);">NEEDS SCHEDULE DATES (${unmappedActs.length}) <button class="btn-sm" style="background:var(--white);color:var(--orange);border:1px solid var(--orange);margin-left:12px;font-size:11px;cursor:pointer;padding:2px 10px;border-radius:4px;" onclick="switchSubTab('setup');setTimeout(()=>{const b=document.getElementById('mapScheduleBtn');if(b)b.click()},300);">Go to Schedule Mapping →</button></td></tr>`;
     unmappedActs.forEach(a=>{
       const actIdx=acts.indexOf(a);
       const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
