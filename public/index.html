@@ -151,6 +151,21 @@ tr:hover{background:#FAF8F5}
 .sov-billing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:10px}
 .sov-billing-grid label{font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);display:block;margin-bottom:2px}
 .sov-billing-grid input,.sov-billing-grid select{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:inherit}
+/* Front-Load Sliders */
+.fl-row{display:grid;grid-template-columns:180px 1fr 100px 100px 100px;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px}
+.fl-row:hover{background:#FAFAF8}
+.fl-header{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);background:var(--ash);border-radius:6px 6px 0 0;border-bottom:2px solid var(--border)}
+.fl-slider{-webkit-appearance:none;width:100%;height:6px;border-radius:3px;background:var(--ash);outline:none;cursor:pointer}
+.fl-slider::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--orange);cursor:grab;box-shadow:0 1px 4px rgba(0,0,0,.2)}
+.fl-slider::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--orange);cursor:grab;border:none}
+.fl-override{width:90px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;font-family:inherit;text-align:right}
+.fl-override:focus{border-color:var(--orange);outline:none;box-shadow:0 0 0 2px rgba(242,103,34,.15)}
+.fl-lock-btn{font-size:10px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;background:var(--card);cursor:pointer;font-family:Oswald,sans-serif}
+.fl-lock-btn.locked{background:var(--orange);color:var(--white);border-color:var(--orange)}
+.fl-summary{background:linear-gradient(135deg,#F4F7F4,#FFFFFF);border:1px solid var(--green);border-radius:8px;padding:14px 18px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.fl-summary .fl-kpi{text-align:center}
+.fl-summary .fl-kpi-label{font-family:Oswald,sans-serif;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light)}
+.fl-summary .fl-kpi-value{font-family:Oswald,sans-serif;font-size:18px;font-weight:600}
 /* Job Cost Schedule */
 .jcs-header{background:var(--green);border-radius:8px;padding:20px 24px;margin-bottom:16px;color:var(--white)}
 .jcs-title-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
@@ -327,6 +342,9 @@ tr:hover{background:#FAF8F5}
     <label>Client</label><input type="text" id="newJobClient" placeholder="e.g. Mississippi Power">
     <label>Billing Type</label>
     <select id="newJobBilling"><option value="unit-price">Unit Price (DOT / Public)</option><option value="progress">Progress / % Complete (Private)</option></select>
+    <label>Total Contract Amount ($)</label><input type="number" id="newJobContract" placeholder="e.g. 2500000" step="0.01" min="0">
+    <label>Total Overhead ($)</label><input type="number" id="newJobOH" placeholder="e.g. 350000" step="0.01" min="0">
+    <p style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">Enter the executed contract value and total overhead. Profit will be calculated as Contract − (Direct Costs + OH) and distributed across pay items.</p>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeNewJobModal()">Cancel</button>
       <button id="jobDeleteBtn" style="display:none;background:#C0392B;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:600;" onclick="confirmDeleteJob()">Delete Job</button>
@@ -449,6 +467,22 @@ async function loadJobs(){
   }
   data.forEach(row => {
     const job = reviveDates(row.data);
+    // Migrate taskMap from index-based to task.id-based
+    if(job.taskMap&&job.schedule&&job.schedule.length){
+      const oldKeys=Object.keys(job.taskMap);
+      const needsMigration=oldKeys.length&&oldKeys.every(k=>{
+        const idx=parseInt(k);return!isNaN(idx)&&idx<job.schedule.length&&!job.schedule.some(t=>String(t.id)===k);
+      });
+      if(needsMigration){
+        const newMap={};
+        oldKeys.forEach(k=>{
+          const idx=parseInt(k);
+          if(job.schedule[idx]){newMap[job.schedule[idx].id]=job.taskMap[k]}
+        });
+        job.taskMap=newMap;
+        console.log('Migrated taskMap from indices to task IDs',newMap);
+      }
+    }
     Store.jobs[row.id] = job;
   });
   const ids = Object.keys(Store.jobs);
@@ -608,12 +642,12 @@ updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // JOB MANAGEMENT
 // ═══════════════════════════════════════════
 let _editingJobId=null;
-function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('jobDeleteBtn').style.display='none';document.getElementById('newJobModal').classList.add('show')}
-function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('jobDeleteBtn').style.display='inline-block';document.getElementById('newJobModal').classList.add('show')}
-function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
+function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobContract').value='';document.getElementById('newJobOH').value='';document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('jobDeleteBtn').style.display='none';document.getElementById('newJobModal').classList.add('show')}
+function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobContract').value=m.contractAmount||'';document.getElementById('newJobOH').value=m.totalOH||'';document.getElementById('jobDeleteBtn').style.display='inline-block';document.getElementById('newJobModal').classList.add('show')}
+function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;m.contractAmount=parseFloat(document.getElementById('newJobContract').value)||0;m.totalOH=parseFloat(document.getElementById('newJobOH').value)||0;closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
 function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();switchJob();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
-function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[],sovItems:[],cashFlowConfig:null};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,contractAmount:parseFloat(document.getElementById('newJobContract').value)||0,totalOH:parseFloat(document.getElementById('newJobOH').value)||0,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[],sovItems:[],cashFlowConfig:null};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
 
 function switchJob(){
   Store.activeJob=document.getElementById('jobSelect').value||null;
@@ -1340,10 +1374,14 @@ function renderDashboard(){
   const totalProfit=bidSummaries.reduce((s,b)=>s+(b.markup||0),0);
   const baseProfit=baseBids.reduce((s,b)=>s+(b.markup||0),0);
   const coProfit=coBids.reduce((s,b)=>s+(b.markup||0),0);
-  const contract=bidSummaries.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const bidContract=bidSummaries.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const contract=m.contractAmount||bidContract; // Prefer entered contract amount
   const baseContract=baseBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const coContract=coBids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const totalMH=bidSummaries.reduce((s,b)=>s+b.manHours,0);
+  // Use job-level OH if set, otherwise fallback to bid items
+  const displayOH=m.totalOH||totalOverhead;
+  const displayProfit=contract-totalDirect-displayOH;
 
   // Cost breakdown: prefer activities (HeavyBid activities have detailed cost columns; bid items often don't)
   const costSrc=acts.length?acts:bids;
@@ -1448,11 +1486,13 @@ function renderDashboard(){
   }
 
   // ── KPIs ──
+  const dispProfitPct=contract>0?(displayProfit/contract*100):0;
+  const dispOHPct=contract>0?(displayOH/contract*100):0;
   h+='<div class="kpi-row">';
-  h+=`<div class="kpi"><div class="kpi-value">${fmtD(contract)}</div><div class="kpi-label">Contract Total</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${fmtD(contract)}</div><div class="kpi-label">Contract${m.contractAmount?' (Entered)':' (Estimated)'}</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${fmtD(totalDirect)}</div><div class="kpi-label">Direct Cost</div></div>`;
-  h+=`<div class="kpi"><div class="kpi-value">${fmtD(totalOverhead)}</div><div class="kpi-label">Overhead · ${overheadPct.toFixed(1)}%</div></div>`;
-  h+=`<div class="kpi ${profitPct<5?'danger':profitPct<10?'warn':'good'}"><div class="kpi-value">${fmtD(totalProfit)}</div><div class="kpi-label">Profit · ${profitPct.toFixed(1)}%</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${fmtD(displayOH)}</div><div class="kpi-label">Overhead · ${dispOHPct.toFixed(1)}%</div></div>`;
+  h+=`<div class="kpi ${dispProfitPct<5?'danger':dispProfitPct<10?'warn':'good'}"><div class="kpi-value">${fmtD(displayProfit)}</div><div class="kpi-label">Profit · ${dispProfitPct.toFixed(1)}%</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${fmt(totalMH)}</div><div class="kpi-label">Total Man Hours</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${bids.length}</div><div class="kpi-label">Pay Items</div></div>`;
   if(schedDur) h+=`<div class="kpi"><div class="kpi-value">${schedDur}d</div><div class="kpi-label">Schedule Duration</div></div>`;
@@ -1491,8 +1531,9 @@ function renderDashboard(){
     h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Pay Items (SOV)<button class="edit-btn" onclick="switchSubTab(\'biditems\')">View All &rarr;</button></div><div class="table-wrap"><table>';
     h+='<tr><th>#</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th></tr>';
     let tSV=0,tDC2=0,tOHP=0;
+    runMarginEngine(job);
     sovItems.forEach((si,i)=>{
-      const c=calcSOVItem(si,acts);
+      const c=calcSOVItem(si,acts,job.meta);
       const margin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
       const mCls=margin<5?'negative':margin<10?'':'positive';
       tSV+=c.sv;tDC2+=c.dc;tOHP+=c.oh+c.profit;
@@ -1580,19 +1621,28 @@ function resetBaseline(){
 // ═══════════════════════════════════════════
 function recalcDependencies(job){
   if(!job||!job.schedule.length)return;
+  // Parse predecessor string: "3", "3SS", "8FS+2d", "3,8SS" → [{id, type}]
+  function parsePreds(predStr){
+    if(!predStr)return[];
+    return String(predStr).split(/[,;]/).map(s=>s.trim()).filter(s=>s).map(raw=>{
+      const m=raw.match(/^(\d+)\s*(SS|FF|SF|FS)?/i);
+      if(!m)return null;
+      return{id:m[1],type:(m[2]||'FS').toUpperCase()};
+    }).filter(p=>p);
+  }
 
   // Detect circular dependencies
   function detectCircular(taskId,visited,recStack){
     visited.add(taskId);
     recStack.add(taskId);
     const task=job.schedule.find(t=>String(t.id)===taskId);
-    if(!task||!task.predecessors)return false;
-    const predIds=String(task.predecessors).split(',').map(s=>s.trim()).filter(s=>s);
-    for(const predId of predIds){
-      if(!visited.has(predId)){
-        if(detectCircular(predId,visited,recStack))return true;
-      } else if(recStack.has(predId)){
-        return true; // found cycle
+    if(!task)return false;
+    const preds=parsePreds(task.predecessors);
+    for(const pred of preds){
+      if(!visited.has(pred.id)){
+        if(detectCircular(pred.id,visited,recStack))return true;
+      } else if(recStack.has(pred.id)){
+        return true;
       }
     }
     recStack.delete(taskId);
@@ -1604,7 +1654,7 @@ function recalcDependencies(job){
     if(!visited.has(String(task.id))){
       if(detectCircular(String(task.id),visited,recStack)){
         log('Warning: Circular dependency detected. Check predecessor links.');
-        return; // skip recalculation if circular
+        return;
       }
     }
   }
@@ -1614,14 +1664,27 @@ function recalcDependencies(job){
   while(changed&&iterations<10){
     changed=false;iterations++;
     job.schedule.forEach(t=>{
-      if(!t.predecessors)return;
-      const predIds=String(t.predecessors).split(',').map(s=>s.trim()).filter(s=>s);
-      if(!predIds.length)return;
-      const predTasks=predIds.map(id=>job.schedule.find(tk=>String(tk.id)===id)).filter(t=>t);
+      const preds=parsePreds(t.predecessors);
+      if(!preds.length)return;
+      const predTasks=preds.map(p=>{
+        const pt=job.schedule.find(tk=>String(tk.id)===p.id);
+        return pt?{task:pt,type:p.type}:null;
+      }).filter(p=>p);
       if(!predTasks.length)return;
-      const maxFinish=Math.max(...predTasks.map(pt=>{const f=toDate(pt.finish);return f?f.getTime():0}));
-      if(maxFinish>0){
-        const newStart=new Date(maxFinish);
+      // Calculate constraint date based on relationship type
+      let constraintDate=0;
+      predTasks.forEach(({task:pt,type})=>{
+        const ps=toDate(pt.start),pf=toDate(pt.finish);
+        let d=0;
+        if(type==='FS'&&pf) d=pf.getTime();       // Finish-to-Start (default)
+        else if(type==='SS'&&ps) d=ps.getTime();    // Start-to-Start
+        else if(type==='FF'&&pf) d=pf.getTime()-(t.durationDays||1)*86400000; // Finish-to-Finish
+        else if(type==='SF'&&ps) d=ps.getTime()-(t.durationDays||1)*86400000; // Start-to-Finish
+        else if(pf) d=pf.getTime();                 // fallback to FS
+        if(d>constraintDate) constraintDate=d;
+      });
+      if(constraintDate>0){
+        const newStart=new Date(constraintDate);
         const oldStart=toDate(t.start);
         if(!oldStart||newStart.getTime()>oldStart.getTime()){
           t.start=newStart;
@@ -1787,7 +1850,8 @@ function renderGlobalCashFlow(jobIds){
     if(!globalStart||jStart<globalStart)globalStart=jStart;
     if(!globalEnd||jEndExt>globalEnd)globalEnd=jEndExt;
 
-    const totalContract=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+    const bidContract=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+    const totalContract=job.meta.contractAmount||bidContract;
     const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
     const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
 
@@ -1828,7 +1892,8 @@ function renderGlobalCashFlow(jobIds){
 
     acts.forEach(a=>{
       const addC=(tKey,lKey,amt)=>{if(!amt)return;const mi=pmIdx(a._gcfStart,a._gcfEnd,cf[tKey]||'monthly',cf[lKey]||1);if(mi>=0){jCost[mi]+=amt;globalCost[mi]+=amt}};
-      addC('laborTiming','laborLagPeriods',(a.labor||0)+(a.burden||0));
+      addC('laborTiming','laborLagPeriods',a.labor||0);
+      addC('burdenTiming','burdenLagPeriods',a.burden||0);
       addC('eqpTiming','eqpLagPeriods',(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0));
       addC('matTiming','matLagPeriods',(a.permMat||0)+(a.constMat||0));
       addC('subsTiming','subsLagPeriods',a.subs||0);
@@ -2002,8 +2067,10 @@ function renderGlobalCashFlow(jobIds){
 
 // ═══════════════════════════════════════════
 // SOV CALC (standalone — used by Pay Items view + SOV Builder)
+// Uses top-down margin model: Contract Amount → Direct Costs + OH (job-level) + Profit Pool
+// Each SOV item gets profit from its allocatedProfit field (set by margin engine)
 // ═══════════════════════════════════════════
-function calcSOVItem(si, activities){
+function calcSOVItem(si, activities, jobMeta){
   const actMap={};activities.forEach(a=>{actMap[a.code]=a});
   const acts=(si.activityIds||[]).map(id=>actMap[id]).filter(Boolean);
   const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
@@ -2011,13 +2078,75 @@ function calcSOVItem(si, activities){
   const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
   const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
   const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
-  const oh=dc*(si.ohPct||0);
-  const profit=dc*(si.profitPct||0);
+  // OH: allocated proportionally from job-level totalOH based on direct cost share
+  const oh=si.allocatedOH||0;
+  // Profit: allocated from top-down profit pool (can be front-loaded)
+  const profit=si.allocatedProfit||0;
   const total=dc+oh+profit;
   const qty=si.contractQty||1;
-  const unitPrice=si._autoPrice?Math.round(total/qty*100)/100:si.unitPrice;
-  const sv=qty*unitPrice;
+  const unitPrice=si._overrideValue!=null?si._overrideValue/qty:Math.round(total/qty*100)/100;
+  const sv=si._overrideValue!=null?si._overrideValue:total;
   return {acts,dc,labor,mat,subs,eqp,oh,profit,total,unitPrice,sv};
+}
+
+// ═══════════════════════════════════════════
+// MARGIN ENGINE — Top-down profit allocation
+// Contract Amount - Direct Costs - OH = Profit Pool
+// Distributes OH proportionally by direct cost, then allocates profit
+// ═══════════════════════════════════════════
+function runMarginEngine(job){
+  const meta=job.meta||{};
+  const contractAmount=meta.contractAmount||0;
+  const totalOH=meta.totalOH||0;
+  const sovItems=job.sovItems||[];
+  const acts=job.activities||[];
+  if(!sovItems.length||!contractAmount) return;
+
+  // Step 1: Calculate total direct cost across all SOV items
+  const actMap={};acts.forEach(a=>{actMap[a.code]=a});
+  let totalDirect=0;
+  sovItems.forEach(si=>{
+    const itemActs=(si.activityIds||[]).map(id=>actMap[id]).filter(Boolean);
+    si._calcDirect=itemActs.reduce((s,a)=>s+(a.directTotal||0),0);
+    totalDirect+=si._calcDirect;
+  });
+
+  // Step 2: Distribute OH proportionally by direct cost
+  sovItems.forEach(si=>{
+    const share=totalDirect>0?si._calcDirect/totalDirect:1/sovItems.length;
+    si.allocatedOH=Math.round(totalOH*share*100)/100;
+  });
+
+  // Step 3: Calculate profit pool
+  const profitPool=contractAmount-totalDirect-totalOH;
+  meta._profitPool=profitPool;
+  meta._totalDirect=totalDirect;
+
+  // Step 4: Allocate profit — if items have manual overrides (_overrideValue), respect those
+  // Otherwise distribute proportionally by direct cost (default suggestion)
+  const lockedItems=sovItems.filter(si=>si._overrideValue!=null);
+  const unlockedItems=sovItems.filter(si=>si._overrideValue==null);
+
+  // Locked items consume a known portion of the contract
+  let lockedTotal=0;
+  lockedItems.forEach(si=>{
+    si.allocatedProfit=(si._overrideValue||0)-si._calcDirect-(si.allocatedOH||0);
+    lockedTotal+=si._overrideValue||0;
+  });
+
+  // Remaining contract value goes to unlocked items, distributed by direct cost share
+  const remainingContract=contractAmount-lockedTotal;
+  const unlockedDirect=unlockedItems.reduce((s,si)=>s+si._calcDirect,0);
+  const unlockedOH=unlockedItems.reduce((s,si)=>s+(si.allocatedOH||0),0);
+  const remainingProfit=remainingContract-unlockedDirect-unlockedOH;
+
+  unlockedItems.forEach(si=>{
+    const share=unlockedDirect>0?si._calcDirect/unlockedDirect:1/Math.max(unlockedItems.length,1);
+    si.allocatedProfit=Math.round(remainingProfit*share*100)/100;
+  });
+
+  // Clean up temp field
+  sovItems.forEach(si=>{delete si._calcDirect});
 }
 
 // ═══════════════════════════════════════════
@@ -2040,9 +2169,12 @@ function renderBidItems(){
     fEl.innerHTML='';return;
   }
 
+  // Run margin engine to allocate OH + profit from contract amount
+  runMarginEngine(job);
+
   // Build computed data for each SOV item
   const items=sovItems.map((si,i)=>{
-    const c=calcSOVItem(si,acts);
+    const c=calcSOVItem(si,acts,job.meta);
     return{...si,idx:i,c};
   });
 
@@ -2601,10 +2733,57 @@ function renderJobCostSchedule(){
     return r;
   }
 
+  // ── JCS KPIs: Estimated to-date + Projected next month ──
+  const jcsToday=new Date();
+  const jcsContract=job.meta.contractAmount||job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const jcsOH=job.meta.totalOH||job.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
+
+  // Estimated cost to-date: sum of direct costs for activities with start date <= today
+  let estCostToDate=0,estHoursToDate=0,estCostNextMonth=0,estHoursNextMonth=0;
+  const nextMonthStart=new Date(jcsToday.getFullYear(),jcsToday.getMonth()+1,1);
+  const nextMonthEnd=new Date(jcsToday.getFullYear(),jcsToday.getMonth()+2,1);
+  mappedActs.forEach(a=>{
+    if(a._barStart&&a._barEnd){
+      // If activity has started (any portion before today)
+      const actStart=a._barStart.getTime(),actEnd=a._barEnd.getTime();
+      const actSpan=Math.max(actEnd-actStart,1);
+      const todayMs=jcsToday.getTime();
+      if(actStart<=todayMs){
+        const pctDone=Math.min(1,(todayMs-actStart)/actSpan);
+        estCostToDate+=(a.directTotal||0)*pctDone;
+        estHoursToDate+=(a.manHours||0)*pctDone;
+      }
+      // Projected next month: portion of activity that falls in next month
+      const overlapStart=Math.max(actStart,nextMonthStart.getTime());
+      const overlapEnd=Math.min(actEnd,nextMonthEnd.getTime());
+      if(overlapEnd>overlapStart){
+        const pctInMonth=(overlapEnd-overlapStart)/actSpan;
+        estCostNextMonth+=(a.directTotal||0)*pctInMonth;
+        estHoursNextMonth+=(a.manHours||0)*pctInMonth;
+      }
+    }
+  });
+  const estPctComplete=grandCost>0?(estCostToDate/grandCost*100):0;
+  const estRevToDate=estCostToDate*(jcsContract/(grandCost||1));
+  const projNextMonthRev=estCostNextMonth*(jcsContract/(grandCost||1));
+
   // Build table
   const ganttWidth=Math.max(500,months.length*80);
   const hasActuals=job.actuals&&job.actuals.length;
-  let h='<div class="jcs-table-wrap"><table class="jcs-table">';
+
+  // JCS KPI panel
+  let h='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Contract</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--green);">${fmtD(jcsContract)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Est. Cost to Date</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--red);">${fmtD(estCostToDate)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Est. Revenue to Date</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--green);">${fmtD(estRevToDate)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Est. % Complete</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--blue);">${estPctComplete.toFixed(1)}%</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Proj. Next Month Cost</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--orange);">${fmtD(estCostNextMonth)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Proj. Next Month Rev</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--teal);">${fmtD(projNextMonthRev)}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Proj. Next Month Hours</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:var(--text);">${fmt(Math.round(estHoursNextMonth))}</div></div>`;
+  h+=`<div style="text-align:center;padding:12px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Budget Remaining</div><div style="font-family:Oswald;font-size:18px;font-weight:600;color:${(grandCost-estCostToDate)>0?'var(--green)':'var(--red)'};">${fmtD(grandCost-estCostToDate)}</div></div>`;
+  h+='</div>';
+
+  h+='<div class="jcs-table-wrap"><table class="jcs-table">';
   h+='<tr><th style="min-width:200px;">Task</th><th style="min-width:80px;">QTY</th><th style="min-width:60px;">Rate</th><th style="min-width:50px;">Days</th><th style="min-width:60px;">Hours</th>';
   h+=`<th colspan="${months.length||1}" style="min-width:${ganttWidth}px;padding:0;">`;
   h+='<div style="display:flex;width:100%;">';
@@ -2628,7 +2807,7 @@ function renderJobCostSchedule(){
 
   // Unmapped section at bottom
   if(unmappedActs.length){
-    h+=`<tr class="jcs-disc-row"><td colspan="${7}" style="background:var(--orange);border-left:4px solid var(--orange);">NEEDS SCHEDULE DATES (${unmappedActs.length})</td></tr>`;
+    h+=`<tr class="jcs-disc-row"><td colspan="${7}" style="background:var(--orange);border-left:4px solid var(--orange);">NEEDS SCHEDULE DATES (${unmappedActs.length}) <button class="btn-sm" style="background:var(--white);color:var(--orange);border:1px solid var(--orange);margin-left:12px;font-size:11px;cursor:pointer;padding:2px 10px;border-radius:4px;" onclick="switchSubTab('setup');setTimeout(()=>{const b=document.getElementById('mapScheduleBtn');if(b)b.click()},300);">Go to Schedule Mapping →</button></td></tr>`;
     unmappedActs.forEach(a=>{
       const actIdx=acts.indexOf(a);
       const days=a.calculatedDays||Math.ceil((a.crewHours||0)/10)||1;
@@ -2773,47 +2952,60 @@ function renderSOVBuilder(){
     });
   }
 
+  // Run margin engine for top-down profit allocation
+  runMarginEngine(job);
+
   const sovItems=job.sovItems;
-  // Compute rollup costs for each SOV item
   const actMap={};
   job.activities.forEach(a=>{actMap[a.code]=a});
+  const meta=job.meta||{};
+  const contractAmount=meta.contractAmount||0;
+  const totalOHJob=meta.totalOH||0;
+  const profitPool=meta._profitPool||0;
+  const totalDirectJob=meta._totalDirect||0;
 
   let h='<div style="margin-top:16px;">';
   h+='<div class="sov-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">';
   h+='<div><h3 style="font-family:Oswald;font-size:16px;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin:0;">Schedule of Values / Pay Items</h3>';
-  h+='<p style="font-size:12px;color:var(--text-light);margin:4px 0 0;">Create pay items, reassign activities, and set up billing fields. Costs auto-rollup from assigned activities.</p></div>';
+  h+='<p style="font-size:12px;color:var(--text-light);margin:4px 0 0;">Map activities to pay items, then distribute profit across the SOV. Use sliders to front-load for cash flow.</p></div>';
   h+='<div style="display:flex;gap:8px;">';
   h+='<button class="btn-primary btn-sm" style="background:var(--orange);" onclick="addNewSOVItem()">+ New Pay Item</button>';
+  h+='<button class="btn-secondary btn-sm" onclick="resetFrontLoad()">Reset to Default</button>';
   h+='<button class="btn-green btn-sm" onclick="saveSOVItems()">Save SOV</button>';
   h+='</div></div>';
 
-  // Summary row
-  // Helper: compute full cost breakdown for an SOV item
-  function sovCalc(si){
-    const acts=si.activityIds.map(id=>actMap[id]).filter(Boolean);
-    const dc=acts.reduce((s,a)=>s+(a.directTotal||0),0);
-    const labor=acts.reduce((s,a)=>s+(a.labor||0),0);
-    const mat=acts.reduce((s,a)=>s+(a.permMat||0)+(a.constMat||0),0);
-    const subs=acts.reduce((s,a)=>s+(a.subs||0),0);
-    const eqp=acts.reduce((s,a)=>s+(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0),0);
-    const oh=dc*(si.ohPct||0);
-    const profit=dc*(si.profitPct||0);
-    const total=dc+oh+profit;
-    const qty=si.contractQty||1;
-    const unitPrice=si._autoPrice?Math.round(total/qty*100)/100:si.unitPrice;
-    const sv=qty*unitPrice;
-    return {acts,dc,labor,mat,subs,eqp,oh,profit,total,unitPrice,sv};
-  }
-
-  let totalScheduledValue=0, totalDirectCost=0, totalOH=0, totalProfit=0, totalFullCost=0;
+  // Compute totals for display
+  let totalScheduledValue=0, totalDirectCost=0, totalOH=0, totalProfit=0;
   sovItems.forEach(si=>{
-    const c=sovCalc(si);
+    const c=calcSOVItem(si,job.activities,meta);
     totalDirectCost+=c.dc;
     totalOH+=c.oh;
     totalProfit+=c.profit;
-    totalFullCost+=c.total;
     totalScheduledValue+=c.sv;
   });
+
+  // Contract amount warning if not set
+  if(!contractAmount){
+    h+=`<div style="background:#FFF8F0;border:2px solid var(--orange);border-radius:8px;padding:14px 16px;margin-bottom:12px;">`;
+    h+=`<div style="font-family:Oswald;font-size:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--orange);">Contract Amount Not Set</div>`;
+    h+=`<div style="font-size:12px;color:var(--text-light);margin-top:4px;">Set the Total Contract Amount and Overhead in <a href="#" onclick="showEditJobModal();return false;" style="color:var(--orange);font-weight:600;">Job Settings</a> to enable margin distribution and front-loading.</div>`;
+    h+=`</div>`;
+  }
+
+  // ── MARGIN SUMMARY PANEL ──
+  const profitPct=contractAmount>0?(profitPool/contractAmount*100):0;
+  const marginHealthy=profitPool>=0;
+  h+=`<div class="fl-summary">`;
+  h+=`<div class="fl-kpi"><div class="fl-kpi-label">Contract</div><div class="fl-kpi-value" style="color:var(--green);">${fmtD(contractAmount)}</div></div>`;
+  h+=`<div class="fl-kpi"><div class="fl-kpi-label">Direct Costs</div><div class="fl-kpi-value" style="color:var(--red);">${fmtD(totalDirectCost)}</div></div>`;
+  h+=`<div class="fl-kpi"><div class="fl-kpi-label">Overhead</div><div class="fl-kpi-value" style="color:var(--blue);">${fmtD(totalOHJob)}</div></div>`;
+  h+=`<div class="fl-kpi"><div class="fl-kpi-label">Profit Pool</div><div class="fl-kpi-value" style="color:${marginHealthy?'var(--green)':'var(--red)'};">${fmtD(profitPool)} <span style="font-size:12px;font-weight:400;">(${profitPct.toFixed(1)}%)</span></div></div>`;
+  h+=`<div class="fl-kpi"><div class="fl-kpi-label">Allocated</div><div class="fl-kpi-value" style="color:var(--text);">${fmtD(totalScheduledValue)}</div></div>`;
+  const allocDiff=contractAmount-totalScheduledValue;
+  if(Math.abs(allocDiff)>1){
+    h+=`<div class="fl-kpi"><div class="fl-kpi-label">Unallocated</div><div class="fl-kpi-value" style="color:var(--red);">${fmtD(allocDiff)}</div></div>`;
+  }
+  h+=`</div>`;
 
   // Unassigned activities — show at top as warning
   const allAssignedSet=new Set();
@@ -2824,7 +3016,7 @@ function renderSOVBuilder(){
   if(unassignedActs.length){
     h+=`<div style="background:#FFF0F0;border:2px solid var(--red);border-radius:8px;padding:14px 16px;margin-bottom:12px;">`;
     h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">`;
-    h+=`<div style="font-family:Oswald;font-size:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--red);">⚠ ${unassignedActs.length} Activities Not In Any Pay Item — ${fmtD(unassignedCost)} Unbilled</div>`;
+    h+=`<div style="font-family:Oswald;font-size:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--red);">Warning: ${unassignedActs.length} Activities Not In Any Pay Item — ${fmtD(unassignedCost)} Unbilled</div>`;
     h+=`</div>`;
     h+=`<div style="font-size:12px;color:var(--text-light);margin-bottom:8px;">These activities are not assigned to a pay item. Their costs won't be billed. Move them into a pay item or create a new one.</div>`;
     h+=`<div style="max-height:160px;overflow-y:auto;">`;
@@ -2838,89 +3030,85 @@ function renderSOVBuilder(){
     h+=`</div></div>`;
   }
 
-  // Coverage summary bar
-  const totalCostPlusUnassigned=totalFullCost+unassignedCost;
-  const coveragePct=totalCostPlusUnassigned>0?Math.round(totalScheduledValue/totalCostPlusUnassigned*100):0;
-  const coverageGap=totalScheduledValue-totalCostPlusUnassigned;
-  const gapNeg=coverageGap<-1;
-  const coverageColor=gapNeg?'var(--red)':'var(--green)';
-  h+=`<div style="background:var(--card);border:1px solid ${gapNeg?'var(--red)':'var(--border)'};border-radius:8px;padding:12px 16px;margin-bottom:12px;">`;
-  h+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">`;
-  h+=`<div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;">`;
-  h+=`<span>${sovItems.length} Pay Items</span>`;
-  h+=`<span style="margin-left:16px;">Direct: ${fmtD(totalDirectCost)}</span>`;
-  h+=`<span style="margin-left:16px;">OH: ${fmtD(totalOH)}</span>`;
-  h+=`<span style="margin-left:16px;">Profit: ${fmtD(totalProfit)}</span>`;
-  if(unassignedActs.length) h+=`<span style="margin-left:16px;color:var(--red);">Unbilled: ${fmtD(unassignedCost)}</span>`;
-  h+=`</div>`;
-  h+=`<div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;">`;
-  h+=`<span style="color:${coverageColor};font-weight:600;">Scheduled Value: ${fmtD(totalScheduledValue)}</span>`;
-  h+=` <span style="color:${gapNeg?'var(--red)':'var(--green)'};font-size:12px;">(${coverageGap>=0?'+':''}${fmtD(coverageGap)} ${coveragePct}% coverage)</span>`;
-  h+=`</div></div>`;
-  // Progress bar
-  const barPct=Math.min(coveragePct,120);
-  h+=`<div style="margin-top:8px;height:8px;background:var(--ash);border-radius:4px;overflow:hidden;position:relative;">`;
-  h+=`<div style="height:100%;width:${Math.min(barPct,100)}%;background:${gapNeg?'var(--red)':'var(--green)'};border-radius:4px;transition:width .3s;"></div>`;
-  h+=`<div style="position:absolute;left:${Math.min(100*(totalCostPlusUnassigned>0?totalFullCost/totalCostPlusUnassigned*100:100)/barPct*100/100,100)}%;top:0;bottom:0;width:2px;background:var(--midnight);opacity:.5;" title="Assigned cost line"></div>`;
-  h+=`</div>`;
-  h+=`</div>`;
+  // ── FRONT-LOAD TABLE ── (sliders + override inputs)
+  if(contractAmount>0&&sovItems.length){
+    h+=`<div class="card" style="margin-bottom:16px;">`;
+    h+=`<div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">`;
+    h+=`<span>Profit Distribution — Front-Load Tool</span>`;
+    h+=`<span style="font-size:11px;color:var(--text-light);">Slide to redistribute profit across pay items. Total always equals contract amount.</span>`;
+    h+=`</div>`;
+    h+=`<div class="fl-row fl-header"><span>Pay Item</span><span>Profit Slider</span><span style="text-align:right;">Billing Value ($)</span><span style="text-align:right;">Profit ($)</span><span style="text-align:right;">Margin %</span></div>`;
 
-  // Render each SOV item as a card
+    sovItems.forEach((si,idx)=>{
+      const c=calcSOVItem(si,job.activities,meta);
+      const itemMargin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
+      const marginCls=itemMargin<5?'color:var(--red);':itemMargin<15?'':'color:var(--green);';
+      // Slider range: the billing value for this item, from cost floor to 2x proportional
+      const costFloor=c.dc+(c.oh||0);
+      const maxVal=contractAmount>0?Math.min(contractAmount,costFloor*3):costFloor*3;
+      const sliderVal=c.sv;
+      const isLocked=si._overrideValue!=null;
+
+      h+=`<div class="fl-row">`;
+      h+=`<span style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(si.description)}">${si.clientItemNo||si.id} — ${si.description||''}</span>`;
+      h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(sliderVal)}" ${isLocked?'disabled style="opacity:.4;"':''} oninput="handleFrontLoadSlider(${idx},parseFloat(this.value))">`;
+      h+=`<input type="number" class="fl-override" value="${Math.round(c.sv)}" step="100" onchange="handleFrontLoadOverride(${idx},parseFloat(this.value))" title="Enter exact billing value">`;
+      h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;${c.profit<0?'color:var(--red);':''}">${fmtD(c.profit)}</span>`;
+      h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;font-weight:600;${marginCls}">${itemMargin.toFixed(1)}%</span>`;
+      h+=`</div>`;
+    });
+    h+=`</div>`;
+  }
+
+  // ── RENDER EACH SOV ITEM AS A CARD ──
   sovItems.forEach((si,idx)=>{
-    const c=sovCalc(si);
+    const c=calcSOVItem(si,job.activities,meta);
     const isOpen=_sovExpandedBIs[idx];
-    // Flag: scheduled value vs full cost mismatch
-    const itemGap=c.sv-c.total;
-    const itemFlag=c.dc>0&&c.sv<c.total-1;
     const noActsFlag=c.acts.length===0;
+    const itemMargin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
 
-    h+=`<div class="sov-bi-card" ${itemFlag?'style="border-color:var(--red);"':''}>`;
+    h+=`<div class="sov-bi-card">`;
     h+=`<div class="sov-bi-header ${isOpen?'open':''}" onclick="toggleSOVCard(${idx})">`;
     h+=`<div class="sov-bi-title">`;
-    if(itemFlag) h+=`<span style="color:var(--red);font-size:16px;line-height:1;" title="Value doesn't cover costs">⚠</span> `;
     if(noActsFlag) h+=`<span style="color:var(--orange);font-size:14px;line-height:1;" title="No activities assigned">○</span> `;
     h+=`<span style="color:var(--orange);">${si.clientItemNo||si.id}</span> — ${si.description||'(untitled)'}</div>`;
     h+=`<div class="sov-bi-meta">`;
     h+=`<span>${c.acts.length} activities</span>`;
     h+=`<span>Direct: ${fmtD(c.dc)}</span>`;
-    h+=`<span>OH+P: ${fmtD(c.oh+c.profit)}</span>`;
-    h+=`<span style="font-weight:600;${itemFlag?'color:var(--red);':''}">Value: ${fmtD(c.sv)}</span>`;
-    if(itemFlag) h+=`<span style="color:var(--red);font-size:11px;">(${fmtD(itemGap)})</span>`;
+    h+=`<span>OH: ${fmtD(c.oh)}</span>`;
+    h+=`<span>Profit: ${fmtD(c.profit)}</span>`;
+    h+=`<span style="font-weight:600;">Value: ${fmtD(c.sv)}</span>`;
     h+=`<span>${si.contractQty} ${si.unit}</span>`;
     h+=`</div></div>`;
 
     if(isOpen){
       h+='<div class="sov-bi-body">';
 
-      // Billing fields grid
+      // Billing fields grid — simplified (no more ohPct/profitPct inputs)
       h+='<div class="sov-billing-grid">';
       h+=`<div><label>Client Item #</label><input type="text" value="${esc(si.clientItemNo)}" onchange="updateSOVField(${idx},'clientItemNo',this.value)"></div>`;
       h+=`<div><label>Description</label><input type="text" value="${esc(si.description)}" onchange="updateSOVField(${idx},'description',this.value)"></div>`;
       h+=`<div><label>Contract Qty</label><input type="number" value="${si.contractQty}" onchange="updateSOVField(${idx},'contractQty',parseFloat(this.value)||0);renderSOVBuilder()"></div>`;
       h+=`<div><label>Unit</label><input type="text" value="${esc(si.unit)}" onchange="updateSOVField(${idx},'unit',this.value)"></div>`;
-      h+=`<div><label>Unit Price (auto)</label><input type="number" step="0.01" value="${c.unitPrice}" ${si._autoPrice?'disabled style="background:#f0f7f0;font-weight:600;"':''} onchange="updateSOVField(${idx},'unitPrice',parseFloat(this.value)||0);updateSOVField(${idx},'_autoPrice',false)"></div>`;
-      h+=`<div><label>Scheduled Value</label><input type="text" value="${fmtD(c.sv)}" disabled style="background:#f5f5f5;font-weight:600;"></div>`;
-      h+=`<div><label>OH % of Direct</label><input type="number" step="0.1" min="0" value="${Math.round((si.ohPct||0)*1000)/10}" onchange="updateSOVField(${idx},'ohPct',parseFloat(this.value)/100||0);renderSOVBuilder()"> </div>`;
-      h+=`<div><label>Profit % of Direct</label><input type="number" step="0.1" min="0" value="${Math.round((si.profitPct||0)*1000)/10}" onchange="updateSOVField(${idx},'profitPct',parseFloat(this.value)/100||0);renderSOVBuilder()"></div>`;
+      h+=`<div><label>Unit Price</label><input type="number" step="0.01" value="${c.unitPrice.toFixed(2)}" disabled style="background:#f5f5f5;font-weight:600;"></div>`;
+      h+=`<div><label>Billing Value</label><input type="text" value="${fmtD(c.sv)}" disabled style="background:#f0f7f0;font-weight:600;"></div>`;
       h+=`<div><label>Retainage %</label><input type="number" step="0.5" min="0" max="100" value="${si.retainagePct}" onchange="updateSOVField(${idx},'retainagePct',parseFloat(this.value)||0)"></div>`;
       h+=`<div><label>% Complete Method</label><select onchange="updateSOVField(${idx},'pctCompleteMethod',this.value)"><option value="cost" ${si.pctCompleteMethod==='cost'?'selected':''}>Cost-Based</option><option value="qty" ${si.pctCompleteMethod==='qty'?'selected':''}>Qty-Based</option></select></div>`;
-      if(si._autoPrice){
-        h+=`<div><label>&nbsp;</label><button class="btn-secondary btn-sm" style="font-size:10px;padding:4px 8px;margin-top:2px;" onclick="updateSOVField(${idx},'_autoPrice',false);renderSOVBuilder()">Override Price</button></div>`;
-      }else{
-        h+=`<div><label>&nbsp;</label><button class="btn-secondary btn-sm" style="font-size:10px;padding:4px 8px;margin-top:2px;color:var(--green);border-color:var(--green);" onclick="updateSOVField(${idx},'_autoPrice',true);renderSOVBuilder()">Auto Price</button></div>`;
-      }
       h+='</div>';
 
-      // Cost rollup summary
+      // Cost rollup summary — now shows allocated OH and profit from margin engine
+      const ohPctOfDirect=c.dc>0?((c.oh/c.dc)*100):0;
+      const profitPctOfDirect=c.dc>0?((c.profit/c.dc)*100):0;
       h+=`<div style="margin-top:10px;padding:8px 12px;background:var(--ash);border-radius:6px;font-size:12px;display:flex;gap:16px;flex-wrap:wrap;">`;
       h+=`<span><strong>Direct:</strong> ${fmtD(c.dc)}</span>`;
       h+=`<span>Labor: ${fmtD(c.labor)}</span>`;
       h+=`<span>Material: ${fmtD(c.mat)}</span>`;
       h+=`<span>Subs: ${fmtD(c.subs)}</span>`;
       h+=`<span>Equipment: ${fmtD(c.eqp)}</span>`;
-      h+=`<span style="color:var(--blue);"><strong>OH:</strong> ${fmtD(c.oh)} (${Math.round((si.ohPct||0)*1000)/10}%)</span>`;
-      h+=`<span style="color:var(--green);"><strong>Profit:</strong> ${fmtD(c.profit)} (${Math.round((si.profitPct||0)*1000)/10}%)</span>`;
-      h+=`<span style="font-weight:700;">Total: ${fmtD(c.total)}</span>`;
+      h+=`<span style="color:var(--blue);"><strong>OH:</strong> ${fmtD(c.oh)} (${ohPctOfDirect.toFixed(1)}% of direct)</span>`;
+      h+=`<span style="color:var(--green);"><strong>Profit:</strong> ${fmtD(c.profit)} (${profitPctOfDirect.toFixed(1)}% of direct)</span>`;
+      h+=`<span style="font-weight:700;">Billing Value: ${fmtD(c.sv)}</span>`;
+      h+=`<span style="font-weight:600;${itemMargin<5?'color:var(--red);':itemMargin>=15?'color:var(--green);':''}">Margin: ${itemMargin.toFixed(1)}%</span>`;
       h+=`</div>`;
 
       // Activities list
@@ -3002,35 +3190,50 @@ function updateSOVField(idx,field,value){
 function addNewSOVItem(){
   const job=Store.jobs[Store.activeJob];
   if(!job||!job.sovItems)return;
-  // Generate next available ID
   const existingIds=job.sovItems.map(s=>s.id);
   let newId='PAY-'+(job.sovItems.length+1);
   let c=job.sovItems.length+1;
   while(existingIds.includes(newId)){c++;newId='PAY-'+c}
-  // Default OH/profit ratios from job average
-  const totalDC=job.activities.reduce((s,a)=>s+(a.directTotal||0),0);
-  const totalOH=job.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
-  const totalPr=job.bidItems.reduce((s,b)=>s+(b.markup||0),0);
-  const avgOH=totalDC>0?totalOH/totalDC:0;
-  const avgPr=totalDC>0?totalPr/totalDC:0;
   job.sovItems.push({
-    id:newId,
-    clientItemNo:'',
-    description:'',
-    contractQty:1,
-    unit:'LS',
-    unitPrice:0,
-    retainagePct:5,
-    pctCompleteMethod:'cost',
-    activityIds:[],
-    phaseCodes:[],
-    ohPct:avgOH,
-    profitPct:avgPr,
-    _original:false,
-    _autoPrice:true
+    id:newId,clientItemNo:'',description:'',contractQty:1,unit:'LS',unitPrice:0,
+    retainagePct:5,pctCompleteMethod:'cost',activityIds:[],phaseCodes:[],
+    allocatedOH:0,allocatedProfit:0,_original:false,_overrideValue:null
   });
   _sovExpandedBIs[job.sovItems.length-1]=true;
   renderSOVBuilder();
+}
+
+// ═══════════════════════════════════════════
+// FRONT-LOAD HANDLERS
+// ═══════════════════════════════════════════
+function handleFrontLoadSlider(idx, newBillingValue){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems[idx])return;
+  const si=job.sovItems[idx];
+  // Set override value — margin engine will redistribute remaining to other items
+  si._overrideValue=Math.round(newBillingValue*100)/100;
+  renderSOVBuilder();
+}
+
+function handleFrontLoadOverride(idx, newBillingValue){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems[idx])return;
+  const si=job.sovItems[idx];
+  if(isNaN(newBillingValue)||newBillingValue<0) return;
+  si._overrideValue=Math.round(newBillingValue*100)/100;
+  renderSOVBuilder();
+}
+
+function resetFrontLoad(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems)return;
+  if(!confirm('Reset all front-loading? Profit will be redistributed proportionally by direct cost.'))return;
+  job.sovItems.forEach(si=>{
+    delete si._overrideValue;
+  });
+  runMarginEngine(job);
+  renderSOVBuilder();
+  log('Front-load reset — profit distributed proportionally.');
 }
 
 function removeSOVItem(idx){
@@ -3460,7 +3663,8 @@ function renderCashFlowProjection(){
   });
 
   // Revenue: monthly billing based on cost incurred that month (cost-based % complete)
-  const totalContract=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const bidContractCF=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const totalContract=job.meta.contractAmount||bidContractCF;
   const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
   const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
   const retPct=cf.retainagePct/100;
