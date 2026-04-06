@@ -2189,6 +2189,111 @@ function renderBidItems(){
 
   fEl.innerHTML=`<span style="font-size:12px;color:var(--text-light);margin-right:4px;">Showing ${filtered.length} of ${sovItems.length} pay items</span>`;
 
+  // ── FRONT-LOAD TOOL (collapsible) ──
+  const contractAmount=job.meta.contractAmount||0;
+  const profitPool=job.meta._profitPool||0;
+  if(contractAmount>0&&sovItems.length){
+    const _flOpen=window._frontLoadOpen!==false; // default open
+    h+=`<div class="card" style="margin-bottom:16px;">`;
+    h+=`<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:0 0 8px 0;" onclick="window._frontLoadOpen=!window._frontLoadOpen;renderBidItems();">`;
+    h+=`<div class="card-title" style="margin:0;">Profit Distribution — Front-Load Tool</div>`;
+    h+=`<div style="display:flex;align-items:center;gap:12px;">`;
+    h+=`<span style="font-size:11px;color:var(--text-light);">Total always equals contract amount</span>`;
+    h+=`<span style="font-size:16px;color:var(--text-light);transition:transform .2s;${_flOpen?'transform:rotate(180deg);':''}">&darr;</span>`;
+    h+=`</div></div>`;
+
+    if(_flOpen){
+      // Action buttons
+      h+=`<div style="display:flex;gap:8px;margin-bottom:10px;">`;
+      h+=`<button class="btn-primary btn-sm" style="background:var(--green);" onclick="autoOptimizeFrontLoad()">Optimize for Cash Flow</button>`;
+      h+=`<button class="btn-secondary btn-sm" onclick="resetFrontLoad()">Reset to Default</button>`;
+      h+=`</div>`;
+
+      // Slider rows
+      h+=`<div class="fl-row fl-header"><span>Pay Item</span><span>Profit Slider</span><span style="text-align:right;">Billing Value ($)</span><span style="text-align:right;">Profit ($)</span><span style="text-align:right;">Margin %</span></div>`;
+      items.forEach((it,i)=>{
+        const c=it.c;
+        const itemMargin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
+        const marginCls=itemMargin<5?'color:var(--red);':itemMargin<15?'':'color:var(--green);';
+        const costFloor=c.dc+(c.oh||0);
+        const maxVal=contractAmount>0?Math.min(contractAmount,Math.max(costFloor*3,c.sv*2)):costFloor*3;
+
+        h+=`<div class="fl-row">`;
+        h+=`<span style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(it.description)}">${it.clientItemNo||it.id} — ${it.description||''}</span>`;
+        h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(c.sv)}" oninput="handleFrontLoadSlider(${it.idx},parseFloat(this.value))">`;
+        h+=`<input type="number" class="fl-override" value="${Math.round(c.sv)}" step="100" onchange="handleFrontLoadOverride(${it.idx},parseFloat(this.value))" title="Enter exact billing value">`;
+        h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;${c.profit<0?'color:var(--red);':''}">${fmtD(c.profit)}</span>`;
+        h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;font-weight:600;${marginCls}">${itemMargin.toFixed(1)}%</span>`;
+        h+=`</div>`;
+      });
+
+      // Cash flow preview
+      const cfPreview=_calcQuickCashFlow(job);
+      if(cfPreview&&cfPreview.months.length>1){
+        const cfm=cfPreview.months;
+        const peakNeg=Math.min(...cfPreview.netCash);
+        const peakNegMo=cfPreview.netCash.indexOf(peakNeg);
+        const breakEvenMo=cfPreview.netCash.findIndex(n=>n>=0);
+        const finalNet=cfPreview.netCash[cfPreview.netCash.length-1];
+
+        h+=`<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">`;
+        h+=`<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:10px;">Cash Flow Impact</div>`;
+
+        // Mini KPIs
+        h+=`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">`;
+        h+=`<div style="text-align:center;padding:6px 12px;background:${peakNeg<0?'#FFF5F5':'var(--bg)'};border-radius:6px;${peakNeg<0?'border:1px solid var(--red);':''}">`;
+        h+=`<div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Peak Deficit</div>`;
+        h+=`<div style="font-family:Oswald;font-size:16px;font-weight:600;color:var(--red);">${fmtD(peakNeg)}</div>`;
+        h+=`<div style="font-size:10px;color:var(--text-light);">${cfm[peakNegMo]?.label||''}</div></div>`;
+        h+=`<div style="text-align:center;padding:6px 12px;background:var(--bg);border-radius:6px;">`;
+        h+=`<div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Break Even</div>`;
+        h+=`<div style="font-family:Oswald;font-size:16px;font-weight:600;color:var(--green);">${breakEvenMo>=0?cfm[breakEvenMo]?.label:'Never'}</div></div>`;
+        h+=`<div style="text-align:center;padding:6px 12px;background:var(--bg);border-radius:6px;">`;
+        h+=`<div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">Final Net</div>`;
+        h+=`<div style="font-family:Oswald;font-size:16px;font-weight:600;color:${finalNet>=0?'var(--green)':'var(--red)'};">${fmtD(finalNet)}</div></div>`;
+        h+=`</div>`;
+
+        // Mini S-Curve
+        const svgW2=Math.max(cfm.length*40,500),svgH2=160,pL2=60,pR2=16,pT2=20,pB2=24;
+        const pW2=svgW2-pL2-pR2,pH2=svgH2-pT2-pB2;
+        const xSt2=cfm.length>1?pW2/(cfm.length-1):pW2;
+        const yMn2=Math.min(0,...cfPreview.netCash);
+        const yMx2=Math.max(...cfPreview.cumCost,...cfPreview.cumRev,1);
+        const yRng2=yMx2-yMn2||1;
+        const yP2=v=>pT2+pH2*(1-(v-yMn2)/yRng2);
+
+        h+=`<div style="overflow-x:auto;"><svg width="${svgW2}" height="${svgH2}" style="display:block;">`;
+        // Shaded area
+        let ap2='M';cfPreview.cumRev.forEach((v,i)=>{ap2+=(i?'L':'')+(pL2+i*xSt2)+','+yP2(v)});
+        for(let i=cfPreview.cumCost.length-1;i>=0;i--){ap2+='L'+(pL2+i*xSt2)+','+yP2(cfPreview.cumCost[i])}
+        ap2+='Z';
+        h+=`<path d="${ap2}" fill="var(--green)" opacity=".08"/>`;
+        if(yMn2<0) h+=`<line x1="${pL2}" y1="${yP2(0)}" x2="${svgW2-pR2}" y2="${yP2(0)}" stroke="var(--text-light)" stroke-width=".5" stroke-dasharray="4,3"/>`;
+        for(let g=0;g<=3;g++){const val=yMn2+(yRng2*g/3);const y=yP2(val);h+=`<line x1="${pL2}" y1="${y}" x2="${svgW2-pR2}" y2="${y}" stroke="var(--border)" stroke-dasharray="2,4" opacity=".3"/>`;h+=`<text x="${pL2-6}" y="${y+3}" text-anchor="end" font-size="9" fill="var(--text-light)" font-family="Oswald">${fmtD(Math.round(val))}</text>`}
+        const skip2=Math.ceil(cfm.length/10);
+        cfm.forEach((m2,i)=>{if(i%skip2===0||i===cfm.length-1) h+=`<text x="${pL2+i*xSt2}" y="${svgH2-4}" text-anchor="middle" font-size="9" fill="var(--text-light)" font-family="Oswald">${m2.label}</text>`});
+        // Cost (red), Revenue (green), Net (blue dashed)
+        let cp2='M';cfPreview.cumCost.forEach((v,i)=>{cp2+=(i?'L':'')+(pL2+i*xSt2)+','+yP2(v)});
+        h+=`<path d="${cp2}" fill="none" stroke="var(--red)" stroke-width="2" stroke-linecap="round"/>`;
+        let rp2='M';cfPreview.cumRev.forEach((v,i)=>{rp2+=(i?'L':'')+(pL2+i*xSt2)+','+yP2(v)});
+        h+=`<path d="${rp2}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round"/>`;
+        let np2='M';cfPreview.netCash.forEach((v,i)=>{np2+=(i?'L':'')+(pL2+i*xSt2)+','+yP2(v)});
+        h+=`<path d="${np2}" fill="none" stroke="#2980B9" stroke-width="1.5" stroke-dasharray="4,3" stroke-linecap="round"/>`;
+        // Peak deficit marker
+        if(peakNeg<0){const px=pL2+peakNegMo*xSt2,py=yP2(peakNeg);h+=`<circle cx="${px}" cy="${py}" r="4" fill="var(--red)" stroke="var(--white)" stroke-width="1.5"/>`;h+=`<text x="${px}" y="${py-8}" text-anchor="middle" font-size="9" font-weight="700" fill="var(--red)" font-family="Oswald">${fmtD(peakNeg)}</text>`}
+        h+=`</svg></div>`;
+        // Legend
+        h+=`<div style="display:flex;gap:14px;margin-top:4px;font-size:10px;color:var(--text-light);font-family:Oswald;letter-spacing:.5px;">`;
+        h+=`<span><span style="display:inline-block;width:10px;height:2px;background:var(--red);margin-right:3px;vertical-align:middle;"></span>Cost Out</span>`;
+        h+=`<span><span style="display:inline-block;width:10px;height:2px;background:var(--green);margin-right:3px;vertical-align:middle;"></span>Revenue In</span>`;
+        h+=`<span><span style="display:inline-block;width:10px;height:2px;background:#2980B9;margin-right:3px;vertical-align:middle;"></span>Net Cash</span>`;
+        h+=`</div>`;
+        h+=`</div>`;
+      }
+    }
+    h+=`</div>`;
+  }
+
   // ── Pay Items Table ──
   h+='<div class="card"><div class="table-wrap"><table>';
   h+='<tr><th>#</th><th>Item No.</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th><th class="num">Ret. %</th><th class="num">Phases</th><th class="num">Activities</th><th></th></tr>';
@@ -2263,8 +2368,10 @@ function renderBidItems(){
         }
         // OH + Profit breakdown (shown for both paths)
         h+=`<table style="margin-top:6px;">`;
-        h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Overhead (${((it.ohPct||0)*100).toFixed(1)}%)</td><td colspan="4"></td><td class="num">${fmtD(c.oh)}</td></tr>`;
-        h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Profit (${((it.profitPct||0)*100).toFixed(1)}%)</td><td colspan="4"></td><td class="num">${fmtD(c.profit)}</td></tr>`;
+        const drillOHPct=c.dc>0?((c.oh/c.dc)*100).toFixed(1):'0.0';
+        const drillProfitPct=c.dc>0?((c.profit/c.dc)*100).toFixed(1):'0.0';
+        h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Overhead (${drillOHPct}% of direct)</td><td colspan="4"></td><td class="num">${fmtD(c.oh)}</td></tr>`;
+        h+=`<tr style="font-size:12px;color:var(--text-light);"><td colspan="6" style="text-align:right;">+ Profit (${drillProfitPct}% of direct)</td><td colspan="4"></td><td class="num">${fmtD(c.profit)}</td></tr>`;
         h+=`<tr style="background:#E8F5E9;font-weight:600;"><td colspan="6" style="text-align:right;">Scheduled Value</td><td colspan="4"></td><td class="num">${fmtD(c.sv)}</td></tr>`;
         h+='</table></div></td></tr>';
       }else{
@@ -2959,7 +3066,6 @@ function renderSOVBuilder(){
   h+='<p style="font-size:12px;color:var(--text-light);margin:4px 0 0;">Map activities to pay items, then distribute profit across the SOV. Use sliders to front-load for cash flow.</p></div>';
   h+='<div style="display:flex;gap:8px;">';
   h+='<button class="btn-primary btn-sm" style="background:var(--orange);" onclick="addNewSOVItem()">+ New Pay Item</button>';
-  h+='<button class="btn-secondary btn-sm" onclick="resetFrontLoad()">Reset to Default</button>';
   h+='<button class="btn-green btn-sm" onclick="saveSOVItems()">Save SOV</button>';
   h+='</div></div>';
 
@@ -3017,35 +3123,6 @@ function renderSOVBuilder(){
       h+=`</div>`;
     });
     h+=`</div></div>`;
-  }
-
-  // ── FRONT-LOAD TABLE ── (sliders + override inputs)
-  if(contractAmount>0&&sovItems.length){
-    h+=`<div class="card" style="margin-bottom:16px;">`;
-    h+=`<div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">`;
-    h+=`<span>Profit Distribution — Front-Load Tool</span>`;
-    h+=`<span style="font-size:11px;color:var(--text-light);">Slide to redistribute profit across pay items. Total always equals contract amount.</span>`;
-    h+=`</div>`;
-    h+=`<div class="fl-row fl-header"><span>Pay Item</span><span>Profit Slider</span><span style="text-align:right;">Billing Value ($)</span><span style="text-align:right;">Profit ($)</span><span style="text-align:right;">Margin %</span></div>`;
-
-    sovItems.forEach((si,idx)=>{
-      const c=calcSOVItem(si,job.activities,meta);
-      const itemMargin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
-      const marginCls=itemMargin<5?'color:var(--red);':itemMargin<15?'':'color:var(--green);';
-      // Slider range: allow sliding from 0 to a generous upper bound
-      const costFloor=c.dc+(c.oh||0);
-      const maxVal=contractAmount>0?Math.min(contractAmount,Math.max(costFloor*3,c.sv*2)):costFloor*3;
-      const sliderVal=c.sv;
-
-      h+=`<div class="fl-row">`;
-      h+=`<span style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(si.description)}">${si.clientItemNo||si.id} — ${si.description||''}</span>`;
-      h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(sliderVal)}" oninput="handleFrontLoadSlider(${idx},parseFloat(this.value))">`;
-      h+=`<input type="number" class="fl-override" value="${Math.round(c.sv)}" step="100" onchange="handleFrontLoadOverride(${idx},parseFloat(this.value))" title="Enter exact billing value">`;
-      h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;${c.profit<0?'color:var(--red);':''}">${fmtD(c.profit)}</span>`;
-      h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;font-weight:600;${marginCls}">${itemMargin.toFixed(1)}%</span>`;
-      h+=`</div>`;
-    });
-    h+=`</div>`;
   }
 
   // ── RENDER EACH SOV ITEM AS A CARD ──
@@ -3237,7 +3314,7 @@ function handleFrontLoadSlider(idx, newBillingValue){
   const job=Store.jobs[Store.activeJob];
   if(!job||!job.sovItems[idx])return;
   _redistributeProfit(job, idx, newBillingValue);
-  renderSOVBuilder();
+  renderBidItems();
 }
 
 function handleFrontLoadOverride(idx, newBillingValue){
@@ -3245,7 +3322,7 @@ function handleFrontLoadOverride(idx, newBillingValue){
   if(!job||!job.sovItems[idx])return;
   if(isNaN(newBillingValue)) return;
   _redistributeProfit(job, idx, newBillingValue);
-  renderSOVBuilder();
+  renderBidItems();
 }
 
 function resetFrontLoad(){
@@ -3258,8 +3335,243 @@ function resetFrontLoad(){
     si.allocatedProfit=0;
   });
   runMarginEngine(job);
-  renderSOVBuilder();
+  renderBidItems();
   log('Front-load reset — profit distributed proportionally.');
+}
+
+// ═══════════════════════════════════════════
+// QUICK CASH FLOW CALCULATOR (for SOV preview)
+// Lightweight version of the full cash flow projection that returns
+// monthly arrays for cost out, revenue in, and net cash.
+// Revenue for each SOV item = its billing value (dc + oh + profit),
+// spread over months based on when its activities are scheduled.
+// ═══════════════════════════════════════════
+function _calcQuickCashFlow(job){
+  const acts=job.activities||[];
+  const sched=job.schedule||[];
+  const tm=job.taskMap||{};
+  const cf=getCFConfig(job);
+  const sovItems=job.sovItems||[];
+  const meta=job.meta||{};
+  const contractAmount=meta.contractAmount||0;
+  if(!acts.length||!sched.length||!Object.keys(tm).length) return null;
+
+  // Build bid item date ranges from taskMap
+  const biDates={};
+  Object.entries(tm).forEach(([taskId,bi])=>{
+    const t=sched.find(task=>task.id===parseInt(taskId));if(!t)return;
+    const s=toDate(t.start),f=toDate(t.finish);
+    if(!biDates[bi])biDates[bi]={start:null,finish:null};
+    if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+    if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+  });
+
+  // Assign activity dates
+  const biActGroups={};
+  acts.forEach(a=>{const bi=String(a.biditem);if(!biActGroups[bi])biActGroups[bi]=[];biActGroups[bi].push(a)});
+  Object.entries(biActGroups).forEach(([bi,biActs])=>{
+    const dates=biDates[bi];
+    if(!dates||!dates.start||!dates.finish){biActs.forEach(a=>{a._qcfStart=null;a._qcfEnd=null});return}
+    const biStart=dates.start.getTime(),biSpan=Math.max(dates.finish.getTime()-biStart,86400000);
+    const totalDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+    let cursor=0;
+    biActs.forEach(a=>{
+      const days=a.calculatedDays||1;
+      a._qcfStart=new Date(biStart+(cursor/totalDays)*biSpan);
+      a._qcfEnd=new Date(biStart+((cursor+days)/totalDays)*biSpan);
+      cursor+=days;
+    });
+  });
+
+  // Build monthly buckets
+  const datedActs=acts.filter(a=>a._qcfStart&&a._qcfEnd);
+  if(!datedActs.length) return null;
+  let projStart=new Date(Math.min(...datedActs.map(a=>a._qcfStart)));
+  let projEnd=new Date(Math.max(...datedActs.map(a=>a._qcfEnd)));
+  const maxLag=Math.max(cf.laborLagPeriods||1,cf.ownerPayTerms||1)+2;
+  projEnd=new Date(projEnd.getTime()+maxLag*30*86400000);
+
+  const months=[];
+  let cur=new Date(projStart.getFullYear(),projStart.getMonth(),1);
+  const me=new Date(projEnd.getFullYear(),projEnd.getMonth()+1,1);
+  while(cur<me){months.push({start:new Date(cur),label:cur.toLocaleDateString('en-US',{month:'short',year:'2-digit'})});cur.setMonth(cur.getMonth()+1)}
+  if(!months.length) return null;
+
+  function mIdx(d){if(!d)return -1;for(let i=months.length-1;i>=0;i--){if(d>=months[i].start)return i}return 0}
+
+  const costBuckets=months.map(()=>0);
+  const revBuckets=months.map(()=>0);
+
+  // Cost side: same as full projection — each activity's costs by timing
+  function payMi(s,e,timing,lag){
+    const mid=new Date((s.getTime()+e.getTime())/2);
+    const mi=mIdx(mid);if(mi<0)return -1;
+    if(timing==='weekly'){const d=mid.getDay();const ws=new Date(mid);ws.setDate(ws.getDate()-(d===0?6:d-1));const pd=new Date(ws);pd.setDate(pd.getDate()+(lag||1)*7);return Math.min(mIdx(pd),months.length-1)}
+    if(timing==='after_billing')return Math.min(mi+1+(cf.ownerPayTerms||1)+(lag||0),months.length-1);
+    return Math.min(mi+(lag||1),months.length-1);
+  }
+  datedActs.forEach(a=>{
+    const addC=(tKey,lKey,amt)=>{if(!amt)return;const mi=payMi(a._qcfStart,a._qcfEnd,cf[tKey]||'monthly',cf[lKey]||1);if(mi>=0)costBuckets[mi]+=amt};
+    addC('laborTiming','laborLagPeriods',a.labor||0);
+    addC('burdenTiming','burdenLagPeriods',a.burden||0);
+    addC('eqpTiming','eqpLagPeriods',(a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0));
+    addC('matTiming','matLagPeriods',(a.permMat||0)+(a.constMat||0));
+    addC('subsTiming','subsLagPeriods',a.subs||0);
+    addC('truckingTiming','truckingLagPeriods',a.trucking||0);
+  });
+
+  // Revenue side: use SOV billing values, not cost-to-rev ratio
+  // Each SOV item's billing value (dc+oh+profit) is earned proportionally
+  // over the months its activities are scheduled, then paid after owner lag
+  const actMap={};acts.forEach(a=>{actMap[a.code]=a});
+  const retPct=(cf.retainagePct||5)/100;
+  const ownerLag=cf.ownerPayTerms||1;
+
+  // Mob payment
+  if(cf.mobPct>0&&contractAmount>0){
+    const mobAmt=contractAmount*(cf.mobPct/100)*(1-retPct);
+    const mi=Math.min(ownerLag,months.length-1);
+    revBuckets[mi]+=mobAmt;
+  }
+
+  // Per SOV item: spread its billing value over the months its activities run
+  sovItems.forEach(si=>{
+    const c=calcSOVItem(si,acts,meta);
+    const billingVal=c.sv;
+    if(billingVal<=0) return;
+    const itemActs=(si.activityIds||[]).map(id=>actMap[id]).filter(Boolean).filter(a=>a._qcfStart&&a._qcfEnd);
+    if(!itemActs.length) return;
+    const itemDirect=itemActs.reduce((s,a)=>s+(a.directTotal||0),0);
+    if(!itemDirect) return;
+
+    // Each activity earns its proportion of the billing value
+    itemActs.forEach(a=>{
+      const share=(a.directTotal||0)/itemDirect;
+      const earnedRev=billingVal*share;
+      const billed=earnedRev*(1-retPct);
+      const mid=new Date((a._qcfStart.getTime()+a._qcfEnd.getTime())/2);
+      const mi=mIdx(mid);
+      if(mi>=0){
+        const payMi2=Math.min(mi+ownerLag,months.length-1);
+        revBuckets[payMi2]+=billed;
+      }
+    });
+  });
+
+  // Retainage release at end
+  if(contractAmount>0&&months.length>1){
+    revBuckets[months.length-1]+=contractAmount*retPct;
+  }
+
+  // Cumulative
+  const cumCost=[],cumRev=[],netCash=[];
+  let rC=0,rR=0;
+  months.forEach((_,i)=>{rC+=costBuckets[i];rR+=revBuckets[i];cumCost.push(rC);cumRev.push(rR);netCash.push(rR-rC)});
+
+  // Clean up temp dates
+  acts.forEach(a=>{delete a._qcfStart;delete a._qcfEnd});
+
+  return {months,costBuckets,revBuckets,cumCost,cumRev,netCash};
+}
+
+// ═══════════════════════════════════════════
+// AUTO-OPTIMIZE FRONT-LOADING
+// Strategy: shift profit toward SOV items that bill EARLY in the schedule
+// (earlier avg activity date = more front-loaded). Items with later dates
+// get less profit. Goal: minimize peak cash deficit.
+// ═══════════════════════════════════════════
+function autoOptimizeFrontLoad(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems||!job.meta.contractAmount) return;
+
+  const sovItems=job.sovItems;
+  const acts=job.activities||[];
+  const sched=job.schedule||[];
+  const tm=job.taskMap||{};
+  const meta=job.meta;
+  const actMap={};acts.forEach(a=>{actMap[a.code]=a});
+
+  // Calculate each SOV item's average schedule date (midpoint of its activities)
+  // Items earlier in the schedule get more profit (front-load)
+  const biDates={};
+  Object.entries(tm).forEach(([taskId,bi])=>{
+    const t=sched.find(task=>task.id===parseInt(taskId));if(!t)return;
+    const s=toDate(t.start),f=toDate(t.finish);
+    if(!biDates[bi])biDates[bi]={start:null,finish:null};
+    if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+    if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+  });
+
+  // Assign activity dates
+  const biActGroups2={};
+  acts.forEach(a=>{const bi=String(a.biditem);if(!biActGroups2[bi])biActGroups2[bi]=[];biActGroups2[bi].push(a)});
+  Object.entries(biActGroups2).forEach(([bi,biActs])=>{
+    const dates=biDates[bi];
+    if(!dates||!dates.start||!dates.finish){biActs.forEach(a=>{a._optMid=null});return}
+    const biStart=dates.start.getTime(),biSpan=Math.max(dates.finish.getTime()-biStart,86400000);
+    const totalDays=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+    let cursor=0;
+    biActs.forEach(a=>{
+      const days=a.calculatedDays||1;
+      const st=biStart+(cursor/totalDays)*biSpan;
+      const en=biStart+((cursor+days)/totalDays)*biSpan;
+      a._optMid=new Date((st+en)/2);
+      cursor+=days;
+    });
+  });
+
+  // First run the margin engine to get baseline allocations
+  runMarginEngine(job);
+
+  // Compute average date for each SOV item
+  const profitPool=meta._profitPool||0;
+  const totalDirect=meta._totalDirect||0;
+  const itemData=sovItems.map((si,idx)=>{
+    const itemActs=(si.activityIds||[]).map(id=>actMap[id]).filter(Boolean).filter(a=>a._optMid);
+    const dc=itemActs.reduce((s,a)=>s+(a.directTotal||0),0);
+    let avgDate=null;
+    if(itemActs.length&&dc>0){
+      // Weighted average by cost
+      const weightedSum=itemActs.reduce((s,a)=>s+(a._optMid.getTime())*(a.directTotal||0),0);
+      avgDate=new Date(weightedSum/dc);
+    }
+    return {idx,si,dc,avgDate,oh:si.allocatedOH||0};
+  });
+
+  // Clean up
+  acts.forEach(a=>{delete a._optMid});
+
+  // Sort by date (earliest first). Items without dates go last.
+  const dated=itemData.filter(d=>d.avgDate).sort((a,b)=>a.avgDate-b.avgDate);
+  const undated=itemData.filter(d=>!d.avgDate);
+
+  if(!dated.length){log('Cannot optimize — no schedule mapping found.');return}
+
+  // Strategy: use an exponential decay weighting
+  // Earlier items get higher weight. The total weighted profit = profitPool.
+  // Weight = e^(-k * rank), where k controls how aggressively we front-load.
+  // We use k=0.15 as a moderate front-load (not too extreme).
+  const k=0.15;
+  const allItems=[...dated,...undated];
+  const weights=allItems.map((_,i)=>Math.exp(-k*i));
+  const totalWeight=weights.reduce((s,w)=>s+w,0);
+
+  allItems.forEach((d,i)=>{
+    const share=weights[i]/totalWeight;
+    d.si.allocatedProfit=Math.round(profitPool*share*100)/100;
+    d.si._manualProfit=true;
+  });
+
+  // Fine-tune: ensure rounding doesn't drift from total
+  const allocatedSum=sovItems.reduce((s,si)=>s+(si.allocatedProfit||0),0);
+  const drift=profitPool-allocatedSum;
+  if(Math.abs(drift)>0.01&&sovItems.length){
+    sovItems[0].allocatedProfit+=drift;
+  }
+
+  renderBidItems();
+  renderSOVBuilder();
+  log('Front-loading optimized — profit shifted toward early-schedule items to reduce cash deficit.');
 }
 
 function removeSOVItem(idx){
