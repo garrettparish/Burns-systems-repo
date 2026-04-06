@@ -1380,7 +1380,7 @@ function autoSuggestAll(){
   job.schedule.forEach(t=>{
     if(!job.taskMap[t.id]){
       const suggested=suggestBidItem(t.name,job.bidItems,job.activities);
-      if(suggested)job.taskMap[t.id]=suggested;
+      if(suggested)job.taskMap[t.id]=[suggested];
     }
   });
   renderMapping();
@@ -1391,10 +1391,25 @@ function autoSuggestAll(){
 
 function clearAllMappings(){const job=Store.jobs[Store.activeJob];if(!job)return;job.taskMap={};renderMapping();log('All mappings cleared.');saveJob(Store.activeJob)}
 
-function updateTaskMapping(taskId, bidItemId){
+// Helper: get bid items for a task (handles both old string and new array format)
+function getTaskBidItems(tm, taskId){
+  const v=tm[taskId];
+  if(!v) return [];
+  if(Array.isArray(v)) return v;
+  return [v]; // backward compat: old string format
+}
+
+function updateTaskMapping(taskId, bidItemId, isAdd){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.taskMap)job.taskMap={};
-  if(bidItemId){job.taskMap[taskId]=bidItemId}else{delete job.taskMap[taskId]}
+  let current=getTaskBidItems(job.taskMap,taskId);
+  if(isAdd){
+    if(!current.includes(bidItemId))current.push(bidItemId);
+  }else{
+    current=current.filter(b=>b!==bidItemId);
+  }
+  if(current.length)job.taskMap[taskId]=current;
+  else delete job.taskMap[taskId];
   renderMapping();
   saveJob(Store.activeJob);
 }
@@ -1494,7 +1509,7 @@ function saveNewTask(){
   job.schedule.push(newTask);
   // Auto-map to the bid item
   if(!job.taskMap)job.taskMap={};
-  job.taskMap[newTask.id]=biditem;
+  job.taskMap[newTask.id]=[biditem];
   // Update meta dates
   const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
   if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}
@@ -1509,7 +1524,7 @@ function confirmMapping(){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   const mapped=Object.keys(job.taskMap||{}).length;
   // Check for bid items with activities but no schedule task mapped
-  const mappedBidItems=new Set(Object.values(job.taskMap||{}));
+  const mappedBidItems=new Set(Object.values(job.taskMap||{}).flat());
   const orphanBids=job.bidItems.filter(b=>{
     if(mappedBidItems.has(b.biditem))return false;
     return job.activities.some(a=>String(a.biditem)===String(b.biditem));
@@ -1564,32 +1579,47 @@ function renderMapping(){
   h+='<tr><th style="width:30px">#</th><th>Task Name</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th style="min-width:280px;">Pay Item Assignment</th></tr>';
 
   job.schedule.forEach(t=>{
-    const currentMap=job.taskMap[t.id]||'';
-    const isMapped=!!currentMap;
+    const currentBIs=getTaskBidItems(job.taskMap,t.id);
+    const isMapped=currentBIs.length>0;
     const selClass=isMapped?'mapped':'unmapped';
-    let selHtml=`<select class="${selClass}" onchange="updateTaskMapping(${t.id},this.value)">`;
-    selHtml+='<option value="">— Unassigned —</option>';
+
+    // Build tags for selected items
+    let tagHtml='';
+    if(currentBIs.length===0){
+      tagHtml='<span style="color:var(--text-light);font-size:12px;">— Unassigned —</span>';
+    } else {
+      currentBIs.forEach(bi=>{
+        const b=job.bidItems.find(x=>x.biditem===bi);
+        const desc=b?b.description:'';
+        const shortDesc=desc.length>20?desc.substring(0,20)+'…':desc;
+        tagHtml+=`<span style="display:inline-block;background:var(--ash);border-radius:3px;padding:1px 6px;margin:1px 2px;font-size:11px;white-space:nowrap;">${bi}${shortDesc?' — '+shortDesc:''} <span style="cursor:pointer;color:var(--red);font-weight:bold;margin-left:3px;" onclick="event.stopPropagation();updateTaskMapping(${t.id},'${bi}',false)">×</span></span>`;
+      });
+    }
+
+    // Build checkbox dropdown
+    let ddHtml=`<div class="map-multi-dd" style="position:relative;">`;
+    ddHtml+=`<div onclick="toggleMapDD(this)" style="border:1px solid ${isMapped?'var(--green)':'var(--border)'};border-radius:4px;padding:4px 8px;min-height:28px;cursor:pointer;display:flex;align-items:center;flex-wrap:wrap;gap:2px;background:${isMapped?'#F4F7F4':'#FFFDF0'};">${tagHtml}<span style="margin-left:auto;font-size:10px;color:var(--text-light);">▼</span></div>`;
+    ddHtml+=`<div class="map-dd-list" style="display:none;position:absolute;z-index:100;top:100%;left:0;right:0;max-height:250px;overflow-y:auto;background:white;border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.15);margin-top:2px;">`;
     sortedGroups.forEach(g=>{
-      selHtml+=`<optgroup label="${g.name}">`;
+      ddHtml+=`<div style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${g.name}</div>`;
       g.items.forEach(b=>{
-        const sel=currentMap===b.biditem?'selected':'';
-        // Show phase code count if SOV items exist
+        const isChecked=currentBIs.includes(b.biditem);
         const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
         const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
         const pcLabel=pcCount?` (${pcCount} phases)`:'';
-        selHtml+=`<option value="${b.biditem}" ${sel}>${b.biditem} — ${b.description}${pcLabel}</option>`;
+        ddHtml+=`<label style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''"><input type="checkbox" ${isChecked?'checked':''} onchange="updateTaskMapping(${t.id},'${b.biditem}',this.checked)" style="margin:0;"> <strong>${b.biditem}</strong> — ${b.description}${pcLabel}</label>`;
       });
-      selHtml+='</optgroup>';
     });
-    selHtml+='</select>';
+    ddHtml+=`</div></div>`;
+
     const rowBg=isMapped?'':'background:#FFFDF0;';
-    h+=`<tr style="${rowBg}"><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr||'—'}</td><td>${t.status||'—'}</td><td>${selHtml}</td></tr>`;
+    h+=`<tr style="${rowBg}"><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr||'—'}</td><td>${t.status||'—'}</td><td style="min-width:300px;">${ddHtml}</td></tr>`;
   });
 
   h+='</table></div></div>';
 
   // Find bid items with no schedule task mapped to them
-  const mappedBidItems=new Set(Object.values(job.taskMap));
+  const mappedBidItems=new Set(Object.values(job.taskMap).flat());
   const orphanBids=job.bidItems.filter(b=>!mappedBidItems.has(b.biditem));
   if(orphanBids.length){
     h+='<div class="card" style="margin-top:12px;border-color:var(--orange);">';
@@ -1633,6 +1663,16 @@ function renderMapping(){
 
   el.innerHTML=h;
 }
+
+function toggleMapDD(el){
+  const dd=el.nextElementSibling;
+  const wasOpen=dd.style.display!=='none';
+  // Close all other open dropdowns
+  document.querySelectorAll('.map-dd-list').forEach(d=>{d.style.display='none'});
+  if(!wasOpen)dd.style.display='block';
+}
+// Close mapping dropdowns on outside click
+document.addEventListener('click',function(e){if(!e.target.closest('.map-multi-dd'))document.querySelectorAll('.map-dd-list').forEach(d=>{d.style.display='none'})});
 
 // ═══════════════════════════════════════════
 // INLINE ROW EDITING
@@ -1923,12 +1963,15 @@ function renderDashboard(){
       if(hasSched){
         const _sched=job.schedule,_tm=job.taskMap;
         const _biDates={};
-        Object.entries(_tm).forEach(([taskId,bi])=>{
-          const t=_sched.find(task=>task.id===parseInt(taskId));if(!t)return;
+        Object.entries(_tm).forEach(([taskId,val])=>{
+          const bis=getTaskBidItems(_tm,taskId);
+          const t=_sched.find(task=>String(task.id)===String(taskId));if(!t)return;
           const s=toDate(t.start),f=toDate(t.finish);
-          if(!_biDates[bi])_biDates[bi]={start:null,finish:null};
-          if(s&&(!_biDates[bi].start||s<_biDates[bi].start))_biDates[bi].start=s;
-          if(f&&(!_biDates[bi].finish||f>_biDates[bi].finish))_biDates[bi].finish=f;
+          bis.forEach(bi=>{
+            if(!_biDates[bi])_biDates[bi]={start:null,finish:null};
+            if(s&&(!_biDates[bi].start||s<_biDates[bi].start))_biDates[bi].start=s;
+            if(f&&(!_biDates[bi].finish||f>_biDates[bi].finish))_biDates[bi].finish=f;
+          });
         });
         const _biActGroups={};
         acts.forEach(a=>{const bi=String(a.biditem);if(!_biActGroups[bi])_biActGroups[bi]=[];_biActGroups[bi].push(a)});
@@ -2226,7 +2269,8 @@ function renderGlobalView(){
     validTasks.forEach((t)=>{
       let disc;
       if(hasMappings&&tm[t.id]){
-        disc=getBidItemDiscipline(tm[t.id],j.activities,j);
+        const _tmBIs=getTaskBidItems(tm,t.id);
+        disc=getBidItemDiscipline(_tmBIs[0],j.activities,j);
       }else{
         disc=getTaskDiscipline(t.name);
       }
@@ -2356,12 +2400,15 @@ function renderGlobalCashFlow(jobIds){
 
     // Activity date assignment (same logic as per-job)
     const biDates={};
-    Object.entries(tm).forEach(([si,bi])=>{
+    Object.entries(tm).forEach(([si,val])=>{
+      const bis=getTaskBidItems(tm,si);
       const t=job.schedule.find(task=>String(task.id)===String(si));if(!t)return;
       const s=toDate(t.start),f=toDate(t.finish);
-      if(!biDates[bi])biDates[bi]={start:null,finish:null};
-      if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
-      if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+      bis.forEach(bi=>{
+        if(!biDates[bi])biDates[bi]={start:null,finish:null};
+        if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+        if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+      });
     });
     const biActGroups={};
     acts.forEach(a=>{const bi=String(a.biditem);if(!biActGroups[bi])biActGroups[bi]=[];biActGroups[bi].push(a)});
@@ -3120,7 +3167,7 @@ function renderSchedule(){
     const actByBi={};_acts.forEach(a=>{const bi=String(a.biditem);if(!actByBi[bi])actByBi[bi]=[];actByBi[bi].push(a)});
     // Reverse taskMap: bidItem → [taskIds]
     const biToTasks={};
-    Object.entries(_tm).forEach(([taskId,bi])=>{if(!biToTasks[bi])biToTasks[bi]=[];biToTasks[bi].push(taskId)});
+    Object.entries(_tm).forEach(([taskId,val])=>{const bis=getTaskBidItems(_tm,taskId);bis.forEach(bi=>{if(!biToTasks[bi])biToTasks[bi]=[];biToTasks[bi].push(taskId)})});
 
     const _today=new Date();
     const compRows=[];
@@ -3578,7 +3625,7 @@ function renderJobCostSchedule(){
       const baseBidItem=job.baseline.bidItems.find(bi=>bi.biditem===a.biditem);
       if(baseBidItem&&job.baseline.schedule){
         job.baseline.schedule.forEach(st=>{
-          if(st.id&&job.baseline.taskMap&&job.baseline.taskMap[st.id]===a.biditem){
+          if(st.id&&job.baseline.taskMap&&(Array.isArray(job.baseline.taskMap[st.id])?job.baseline.taskMap[st.id]:[job.baseline.taskMap[st.id]||'']).includes(a.biditem)){
             const s=toDate(st.start),f=toDate(st.finish);
             if(s&&(!baselineStart||s<baselineStart))baselineStart=s;
             if(f&&(!baselineEnd||f>baselineEnd))baselineEnd=f;
@@ -4268,12 +4315,15 @@ function _calcQuickCashFlow(job){
 
   // Build bid item date ranges from taskMap
   const biDates={};
-  Object.entries(tm).forEach(([taskId,bi])=>{
+  Object.entries(tm).forEach(([taskId,val])=>{
+    const bis=getTaskBidItems(tm,taskId);
     const t=sched.find(task=>String(task.id)===String(taskId));if(!t)return;
     const s=toDate(t.start),f=toDate(t.finish);
-    if(!biDates[bi])biDates[bi]={start:null,finish:null};
-    if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
-    if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+    bis.forEach(bi=>{
+      if(!biDates[bi])biDates[bi]={start:null,finish:null};
+      if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+      if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+    });
   });
 
   // Assign activity dates
@@ -4804,12 +4854,15 @@ function renderCashFlowProjection(){
 
   // Build activity → date range from schedule via taskMap (same logic as JCS)
   const biDates={};
-  Object.entries(tm).forEach(([taskId,bi])=>{
+  Object.entries(tm).forEach(([taskId,val])=>{
+    const bis=getTaskBidItems(tm,taskId);
     const t=sched.find(task=>String(task.id)===String(taskId));if(!t)return;
     const s=toDate(t.start),f=toDate(t.finish);
-    if(!biDates[bi])biDates[bi]={start:null,finish:null};
-    if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
-    if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+    bis.forEach(bi=>{
+      if(!biDates[bi])biDates[bi]={start:null,finish:null};
+      if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+      if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+    });
   });
 
   // Assign each activity a start/end based on its bid item's schedule
