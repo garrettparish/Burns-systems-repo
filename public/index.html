@@ -1399,6 +1399,8 @@ function getTaskBidItems(tm, taskId){
   return [v]; // backward compat: old string format
 }
 
+let _openMapDDTaskId=null;
+let _openMapDDSearch='';
 function updateTaskMapping(taskId, bidItemId, isAdd){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.taskMap)job.taskMap={};
@@ -1410,6 +1412,10 @@ function updateTaskMapping(taskId, bidItemId, isAdd){
   }
   if(current.length)job.taskMap[taskId]=current;
   else delete job.taskMap[taskId];
+  // Remember which dropdown was open + search text so we can restore after re-render
+  _openMapDDTaskId=taskId;
+  const activeList=document.querySelector('.map-dd-list[style*="display: block"], .map-dd-list[style*="display:block"]');
+  if(activeList){const si=activeList.querySelector('input[type=text]');_openMapDDSearch=si?si.value:'';}
   renderMapping();
   saveJob(Store.activeJob);
 }
@@ -1599,18 +1605,20 @@ function renderMapping(){
     // Build checkbox dropdown
     let ddHtml=`<div class="map-multi-dd" style="position:relative;">`;
     ddHtml+=`<div onclick="toggleMapDD(this)" style="border:1px solid ${isMapped?'var(--green)':'var(--border)'};border-radius:4px;padding:4px 8px;min-height:28px;cursor:pointer;display:flex;align-items:center;flex-wrap:wrap;gap:2px;background:${isMapped?'#F4F7F4':'#FFFDF0'};">${tagHtml}<span style="margin-left:auto;font-size:10px;color:var(--text-light);">▼</span></div>`;
-    ddHtml+=`<div class="map-dd-list" style="display:none;position:absolute;z-index:100;top:100%;left:0;right:0;max-height:250px;overflow-y:auto;background:white;border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.15);margin-top:2px;">`;
+    ddHtml+=`<div class="map-dd-list" style="display:none;position:absolute;z-index:100;top:100%;left:0;right:0;max-height:300px;background:white;border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.15);margin-top:2px;">`;
+    ddHtml+=`<div style="padding:4px;border-bottom:1px solid var(--border);position:sticky;top:0;background:white;z-index:1;"><input type="text" placeholder="Search pay items..." onclick="event.stopPropagation()" oninput="filterMapDD(this)" style="width:100%;box-sizing:border-box;padding:4px 8px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-family:'Source Serif 4',serif;"></div>`;
+    ddHtml+=`<div style="overflow-y:auto;max-height:250px;">`;
     sortedGroups.forEach(g=>{
-      ddHtml+=`<div style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${g.name}</div>`;
+      ddHtml+=`<div class="map-dd-group" style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${g.name}</div>`;
       g.items.forEach(b=>{
         const isChecked=currentBIs.includes(b.biditem);
         const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
         const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
         const pcLabel=pcCount?` (${pcCount} phases)`:'';
-        ddHtml+=`<label style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''"><input type="checkbox" ${isChecked?'checked':''} onchange="updateTaskMapping(${t.id},'${b.biditem}',this.checked)" style="margin:0;"> <strong>${b.biditem}</strong> — ${b.description}${pcLabel}</label>`;
+        ddHtml+=`<label class="map-dd-item" data-search="${b.biditem} ${(b.description||'').toLowerCase()}" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''"><input type="checkbox" ${isChecked?'checked':''} onchange="updateTaskMapping(${t.id},'${b.biditem}',this.checked)" style="margin:0;"> <strong>${b.biditem}</strong> — ${b.description}${pcLabel}</label>`;
       });
     });
-    ddHtml+=`</div></div>`;
+    ddHtml+=`</div></div></div>`;
 
     const rowBg=isMapped?'':'background:#FFFDF0;';
     h+=`<tr style="${rowBg}"><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr||'—'}</td><td>${t.status||'—'}</td><td style="min-width:300px;">${ddHtml}</td></tr>`;
@@ -1662,6 +1670,22 @@ function renderMapping(){
   }
 
   el.innerHTML=h;
+
+  // Restore open dropdown after re-render (keeps multi-select usable without closing)
+  if(_openMapDDTaskId!==null){
+    const allDDs=el.querySelectorAll('.map-multi-dd');
+    allDDs.forEach(dd=>{
+      // Find the dropdown for the task that was being edited
+      const chk=dd.querySelector('input[type=checkbox]');
+      if(!chk)return;
+      const onChange=chk.getAttribute('onchange')||'';
+      if(onChange.includes('('+_openMapDDTaskId+',')){
+        const list=dd.querySelector('.map-dd-list');
+        if(list){list.style.display='block';const si=list.querySelector('input[type=text]');if(si){si.value=_openMapDDSearch;si.focus();filterMapDD(si)}}
+      }
+    });
+    _openMapDDTaskId=null;
+  }
 }
 
 function toggleMapDD(el){
@@ -1669,7 +1693,24 @@ function toggleMapDD(el){
   const wasOpen=dd.style.display!=='none';
   // Close all other open dropdowns
   document.querySelectorAll('.map-dd-list').forEach(d=>{d.style.display='none'});
-  if(!wasOpen)dd.style.display='block';
+  if(!wasOpen){dd.style.display='block';const inp=dd.querySelector('input[type=text]');if(inp){inp.value='';inp.focus();filterMapDD(inp)}}
+}
+function filterMapDD(inp){
+  const q=inp.value.toLowerCase().trim();
+  const list=inp.closest('.map-dd-list');
+  list.querySelectorAll('.map-dd-item').forEach(el=>{
+    const match=!q||el.dataset.search.includes(q);
+    el.style.display=match?'flex':'none';
+  });
+  // Hide group headers if all items in group are hidden
+  list.querySelectorAll('.map-dd-group').forEach(gh=>{
+    let next=gh.nextElementSibling;let hasVisible=false;
+    while(next&&next.classList.contains('map-dd-item')){
+      if(next.style.display!=='none')hasVisible=true;
+      next=next.nextElementSibling;
+    }
+    gh.style.display=hasVisible?'':'none';
+  });
 }
 // Close mapping dropdowns on outside click
 document.addEventListener('click',function(e){if(!e.target.closest('.map-multi-dd'))document.querySelectorAll('.map-dd-list').forEach(d=>{d.style.display='none'})});
