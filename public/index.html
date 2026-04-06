@@ -217,6 +217,14 @@ tr:hover{background:#FAF8F5}
 /* Gantt Bars */
 .jcs-baseline-bar{transition:all .2s}
 .jcs-gantt-bar:hover{opacity:1 !important}
+/* Help modal content */
+.help-section{margin-bottom:16px}
+.help-section h4{font-family:Oswald,sans-serif;font-size:14px;letter-spacing:.5px;text-transform:uppercase;color:var(--green);margin:0 0 6px 0;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.help-section p{margin:4px 0}
+.help-tag{display:inline-block;font-family:Oswald,sans-serif;font-size:10px;letter-spacing:.5px;padding:1px 6px;border-radius:3px;margin-right:4px}
+.help-tag.source{background:#E8F8F5;color:var(--teal)}
+.help-tag.editable{background:#FFF8F0;color:var(--orange)}
+.help-tag.auto{background:#F0F4FF;color:var(--blue)}
 @media(max-width:768px){.import-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.nav-tab{padding:10px 12px;font-size:11px}.jcs-actions{flex-direction:column}}
 </style>
 </head>
@@ -255,6 +263,7 @@ tr:hover{background:#FAF8F5}
     <button class="sub-tab" data-sub="jcs" onclick="switchSubTab('jcs')">Job Cost Schedule</button>
     <button class="sub-tab" data-sub="cashflow" onclick="switchSubTab('cashflow')">Cash Flow</button>
     <button class="sub-tab" data-sub="setup" onclick="switchSubTab('setup')">Project Set Up</button>
+    <button onclick="showTabHelp()" style="background:none;border:2px solid var(--sand);color:var(--sand);font-family:Oswald,sans-serif;font-size:13px;font-weight:700;width:26px;height:26px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-left:auto;transition:all .2s;" title="Tab Info &amp; Help" onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'" onmouseout="this.style.borderColor='var(--sand)';this.style.color='var(--sand)'">?</button>
   </div>
 
   <!-- Sub-panel: Overview -->
@@ -395,6 +404,17 @@ tr:hover{background:#FAF8F5}
   </div>
 </div>
 
+<!-- TAB HELP MODAL -->
+<div class="modal-bg" id="tabHelpModal">
+  <div class="modal" style="max-width:640px;max-height:80vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3 id="tabHelpTitle" style="margin:0;"></h3>
+      <button onclick="closeTabHelp()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-light);padding:0 4px;">&times;</button>
+    </div>
+    <div id="tabHelpBody" style="font-size:13px;line-height:1.7;color:var(--text);"></div>
+  </div>
+</div>
+
 <!-- EDIT ROW MODAL -->
 <div class="modal-bg" id="editRowModal">
   <div class="modal wide">
@@ -496,6 +516,185 @@ function saveAdminPin(){
   closeAdminPinModal();
   log('Admin password updated.');
 }
+
+// ═══════════════════════════════════════════
+// TAB HELP / INFO SYSTEM
+// ═══════════════════════════════════════════
+function showTabHelp(){
+  const tab=window._activeSubTab||'overview';
+  const help=_tabHelpContent[tab];
+  if(!help) return;
+  document.getElementById('tabHelpTitle').innerHTML=help.title;
+  document.getElementById('tabHelpBody').innerHTML=help.body;
+  document.getElementById('tabHelpModal').classList.add('show');
+}
+function closeTabHelp(){document.getElementById('tabHelpModal').classList.remove('show')}
+
+const _tabHelpContent={
+  overview:{
+    title:'Overview — Dashboard',
+    body:`
+<div class="help-section"><h4>What This Tab Shows</h4>
+<p>A high-level snapshot of the entire job: contract value, costs, profit, man hours, and schedule status. This is your executive summary — everything rolls up here.</p></div>
+
+<div class="help-section"><h4>Where the Data Comes From</h4>
+<p><span class="help-tag source">HeavyBid</span> <strong>Activities import</strong> — drives direct cost, man hours, labor/equipment/material/sub breakdown, and discipline groupings.</p>
+<p><span class="help-tag source">HeavyBid</span> <strong>Bid Items import</strong> — provides pay item structure, overhead, and profit from the original estimate.</p>
+<p><span class="help-tag source">Job Settings</span> <strong>Contract Amount &amp; OH</strong> — entered manually when creating/editing the job. If set, the contract KPI shows "(Entered)" and profit is calculated top-down as Contract − Direct − OH.</p>
+<p><span class="help-tag source">HeavyJob</span> <strong>Actuals import</strong> — drives the Actuals KPIs (cost to date, budget remaining, variance) and the Budget vs Actual by Category table.</p>
+<p><span class="help-tag source">Schedule</span> <strong>Smartsheet import + mapping</strong> — used for the "Scheduled to Date" column in the actuals table and the schedule alerts.</p></div>
+
+<div class="help-section"><h4>Key Concepts</h4>
+<p><strong>Contract Amount (Entered vs Estimated)</strong> — If you set a contract amount in Job Settings, that's the source of truth. Otherwise it sums bid item totals as an estimate.</p>
+<p><strong>Profit Pool</strong> — Contract − Direct Costs − Overhead. This is the pool distributed across pay items in the Front-Load Tool.</p>
+<p><strong>Budget vs Actual by Category</strong> — Compares what HeavyBid budgeted per cost type against what HeavyJob reports as spent. The "Scheduled" column shows what the cost schedule says you <em>should</em> have spent by today based on the timeline.</p>
+<p><strong>Alerts</strong> — Yellow banners flag missing data: no schedule, unmapped tasks, unbilled activities, or missing cash flow config.</p></div>
+
+<div class="help-section"><h4>Editing</h4>
+<p><span class="help-tag editable">Editable</span> Contract amount, overhead, and job details — click <strong>Edit Job</strong> in the job bar.</p>
+<p>Everything else on this tab is read-only and auto-calculated from imported data.</p></div>
+`},
+
+  biditems:{
+    title:'Pay Items — SOV &amp; Margin',
+    body:`
+<div class="help-section"><h4>What This Tab Shows</h4>
+<p>The Schedule of Values (SOV) — your pay items with their scheduled values, direct costs, overhead, profit, and margin. This is what you bill against.</p></div>
+
+<div class="help-section"><h4>Where the Data Comes From</h4>
+<p><span class="help-tag auto">Auto-Built</span> <strong>From HeavyBid Activities</strong> — when activities are imported with phase codes, the system auto-groups them into pay items by phase code. Each pay item's cost is the sum of its mapped activities.</p>
+<p><span class="help-tag source">Job Settings</span> <strong>Contract &amp; OH</strong> — the margin engine uses these to calculate the profit pool and distribute OH + profit across items.</p></div>
+
+<div class="help-section"><h4>Profit Distribution / Front-Load Tool</h4>
+<p>The collapsible panel at the bottom lets you control how profit is spread across pay items.</p>
+<p><strong>Sliders</strong> — drag to adjust a pay item's billing value. Profit is redistributed from other items to keep the total = contract amount.</p>
+<p><strong>Manual override</strong> — type an exact dollar amount in the input box next to the slider.</p>
+<p><strong>Lock button (🔒)</strong> — locks a pay item so its billing value won't change when you adjust other items. Locked items are skipped during redistribution.</p>
+<p><strong>Optimize for Cash Flow</strong> — auto-shifts profit toward early-schedule items using exponential weighting to minimize your peak cash deficit.</p>
+<p><strong>Reset to Default</strong> — clears all locks and manual adjustments, redistributes profit proportionally by direct cost.</p>
+<p><strong>Cash Flow Impact</strong> — the mini S-curve and KPIs at the bottom update live as you move sliders, showing how your choices affect peak deficit and break-even.</p></div>
+
+<div class="help-section"><h4>PIN Protection</h4>
+<p>If a Margin PIN is set on the job (in Job Settings), the Front-Load Tool requires the PIN or admin password to open. Once entered, it stays unlocked for the session.</p></div>
+
+<div class="help-section"><h4>Editing</h4>
+<p><span class="help-tag editable">Editable</span> Pay item description, client item #, quantity, unit, retainage %, and activity mapping — expand any pay item row.</p>
+<p><span class="help-tag editable">Editable</span> Profit sliders, manual overrides, and locks in the Front-Load Tool.</p>
+<p>You can also add new pay items manually with the "+ Add Pay Item" button in the SOV builder (Setup tab).</p></div>
+`},
+
+  schedule:{
+    title:'Schedule — Master Timeline',
+    body:`
+<div class="help-section"><h4>What This Tab Shows</h4>
+<p>The master schedule with task dates, durations, status, and a Gantt chart. Also shows the Schedule vs Actuals comparison when HeavyJob data is imported.</p></div>
+
+<div class="help-section"><h4>Where the Data Comes From</h4>
+<p><span class="help-tag source">Smartsheet</span> <strong>Schedule import</strong> — the primary source. Import your Smartsheet schedule export (.xlsx) from the Setup tab.</p>
+<p><span class="help-tag source">HeavyJob</span> <strong>Actuals import</strong> — drives the Schedule vs Actuals comparison at the bottom, showing which items are on track, behind, or ahead.</p></div>
+
+<div class="help-section"><h4>Schedule vs Actuals Comparison</h4>
+<p>Only appears when you have both schedule mapping and HeavyJob actuals imported.</p>
+<p><strong>Scheduled %</strong> — how far through the timeline window each bid item should be, based on today's date.</p>
+<p><strong>Actual %</strong> — weighted average of % complete from HeavyJob for the cost codes in that bid item.</p>
+<p><strong>Status badges</strong> — <span style="color:var(--red);font-weight:600;">Behind</span> (actual &gt; 20% less than scheduled), <span style="color:var(--orange);font-weight:600;">Watch</span> (5-20% behind), <span style="color:var(--green);font-weight:600;">On Track</span>, <span style="color:var(--teal);font-weight:600;">Ahead</span> (actual &gt; 10% ahead).</p>
+<p>Items sorted by urgency — behind items show first.</p></div>
+
+<div class="help-section"><h4>Editing</h4>
+<p><span class="help-tag editable">Editable</span> Task name, start/finish dates, status, crew, and predecessors — all editable directly in the table.</p>
+<p><span class="help-tag editable">Editable</span> Add new tasks with "+ Add Task" or add change order tasks with the CO button.</p>
+<p><strong>Calc Dependencies</strong> — recalculates task dates based on predecessor relationships.</p>
+<p>Date warnings: red background = finish before start, orange = predecessor conflict.</p></div>
+`},
+
+  jcs:{
+    title:'Job Cost Schedule — Activity Detail',
+    body:`
+<div class="help-section"><h4>What This Tab Shows</h4>
+<p>Every activity from HeavyBid shown on a Gantt timeline, grouped by discipline (Erosion, Earthwork, Storm, Paving, etc.). Each row shows quantity, production rate, days, hours, and cost — with baseline and actuals comparison when available.</p></div>
+
+<div class="help-section"><h4>Where the Data Comes From</h4>
+<p><span class="help-tag source">HeavyBid</span> <strong>Activities</strong> — the rows themselves (code, description, qty, units, rate, hours, direct cost).</p>
+<p><span class="help-tag source">Smartsheet</span> <strong>Schedule + Mapping</strong> — provides the Gantt bar positions. Activities are assigned dates based on their bid item's mapped schedule task.</p>
+<p><span class="help-tag source">Baseline</span> <strong>Lock</strong> — if a baseline is locked, the "Base $" column shows the original budgeted cost per activity for variance tracking.</p>
+<p><span class="help-tag source">HeavyJob</span> <strong>Actuals</strong> — the "Budget $", "Actual $", and "Variance" columns. Matches HeavyJob cost codes to HeavyBid phase codes.</p></div>
+
+<div class="help-section"><h4>KPIs at the Top</h4>
+<p><strong>Est. Cost to Date</strong> — prorated direct cost based on how far through each activity's schedule window we are today.</p>
+<p><strong>Est. Revenue to Date</strong> — estimated billings based on cost-to-date × (contract ÷ total direct cost).</p>
+<p><strong>Proj. Next Month</strong> — cost, revenue, and hours projected for the next calendar month based on which activities overlap that period.</p></div>
+
+<div class="help-section"><h4>Unmapped Activities</h4>
+<p>Activities in the orange "NEEDS SCHEDULE DATES" section have a bid item that isn't mapped to any schedule task. Go to Setup → Schedule Mapping to fix.</p></div>
+
+<div class="help-section"><h4>Editing</h4>
+<p><span class="help-tag editable">Editable</span> Click the ✎ pencil on any row to edit activity details (quantity, hours, costs, etc.).</p>
+<p>Changes here update the dashboard, pay items, and cash flow automatically.</p></div>
+`},
+
+  cashflow:{
+    title:'Cash Flow — Projection &amp; S-Curve',
+    body:`
+<div class="help-section"><h4>What This Tab Shows</h4>
+<p>A monthly cash flow projection showing when money goes out (costs) and when it comes in (revenue from billings). The S-curve chart visualizes cumulative cost vs revenue over the project timeline.</p></div>
+
+<div class="help-section"><h4>Where the Data Comes From</h4>
+<p><span class="help-tag source">HeavyBid</span> <strong>Activities</strong> — provides the cost amounts (labor, equipment, material, subs) per activity.</p>
+<p><span class="help-tag source">Schedule</span> <strong>Mapping</strong> — determines <em>when</em> each cost hits based on the activity's scheduled dates.</p>
+<p><span class="help-tag source">Cash Flow Config</span> <strong>(Setup tab)</strong> — controls the timing of when each cost type is actually paid out and when revenue is received.</p>
+<p><span class="help-tag source">SOV / Pay Items</span> — billing values from the pay items determine the revenue side.</p></div>
+
+<div class="help-section"><h4>How It Works</h4>
+<p><strong>Cost side</strong> — each activity's costs are placed in the month they're scheduled, then shifted by the payment lag you configured (e.g., labor paid 1 month after work, subs paid when owner pays).</p>
+<p><strong>Revenue side</strong> — each SOV item's billing value is earned proportionally over its scheduled months, then shifted by the owner payment terms.</p>
+<p><strong>Retainage</strong> — withheld per your retainage % setting, released at project end.</p>
+<p><strong>Mobilization</strong> — front-loaded revenue based on your mob % setting.</p></div>
+
+<div class="help-section"><h4>Key Metrics</h4>
+<p><strong>Peak Deficit</strong> — the most negative your cash position gets (max out-of-pocket).</p>
+<p><strong>Break Even</strong> — the month when cumulative revenue first exceeds cumulative cost.</p>
+<p><strong>Final Net</strong> — your total profit at project completion.</p></div>
+
+<div class="help-section"><h4>Editing</h4>
+<p>This tab is read-only. To change the projection, adjust:</p>
+<p>• <strong>Timing settings</strong> in Setup → Cash Flow Config</p>
+<p>• <strong>Billing values</strong> in the Pay Items → Front-Load Tool</p>
+<p>• <strong>Schedule dates</strong> in the Schedule tab</p></div>
+`},
+
+  setup:{
+    title:'Project Set Up — Imports &amp; Config',
+    body:`
+<div class="help-section"><h4>What This Tab Does</h4>
+<p>This is where you bring data into the system and configure job-level settings. Everything starts here.</p></div>
+
+<div class="help-section"><h4>Import Zones (Drag &amp; Drop)</h4>
+<p><span class="help-tag source">HeavyBid</span> <strong>Activities</strong> — export "All Activities" from HeavyBid as .xlsx. This is the primary data source. Includes cost codes, phase codes, quantities, crew, hours, and all cost columns (labor, burden, material, equipment, subs, trucking). Phase codes auto-build the SOV/pay items.</p>
+<p><span class="help-tag source">HeavyBid</span> <strong>Bid Items</strong> — export "Bid Items" from HeavyBid. Provides overhead and profit per bid item from the original estimate. Merged with activities if both are imported.</p>
+<p><span class="help-tag source">Smartsheet</span> <strong>Schedule</strong> — export your Smartsheet schedule as .xlsx. Needs: Task ID, Task Name, Start, Finish, Duration. Optional: Status, Crew, Predecessors.</p>
+<p><span class="help-tag source">HeavyJob</span> <strong>Actuals</strong> — pull the "Cost Code Summary" report from HeavyJob (start of job to current date, summary by cost codes). Provides actual cost, hours, qty, and % complete per cost code with full labor/equipment/material/sub breakdown.</p></div>
+
+<div class="help-section"><h4>Staging Review</h4>
+<p>Every import goes through a staging review before being committed. You can uncheck rows, edit individual values, delete bad rows, or add missing ones. Click "Confirm Import" to apply.</p></div>
+
+<div class="help-section"><h4>Schedule Mapping</h4>
+<p>After importing both activities and schedule, use "Map Schedule → Pay Items" to connect schedule tasks to bid items. The system auto-suggests matches by name. This mapping is what puts activities on the Gantt timeline and enables the cash flow projection.</p></div>
+
+<div class="help-section"><h4>SOV / Pay Items Builder</h4>
+<p>After activities are imported, click "Build SOV / Pay Items" to create the schedule of values. If activities have phase codes, pay items are auto-built by grouping activities under their phase codes.</p></div>
+
+<div class="help-section"><h4>Cash Flow Configuration</h4>
+<p>Appears after activities + schedule are imported. Controls payment timing for each cost category:</p>
+<p><strong>Payment timing</strong> — Weekly, Bi-Weekly, Monthly, or "When Owner Pays" (for subs).</p>
+<p><strong>Lag periods</strong> — how many periods after work before the cost is paid (e.g., labor lag = 1 month).</p>
+<p><strong>Owner terms</strong> — how many months after billing before the owner pays.</p>
+<p><strong>Retainage %</strong> — held back from each billing, released at end.</p>
+<p><strong>Mobilization %</strong> — front-loaded revenue as a % of contract.</p></div>
+
+<div class="help-section"><h4>Edit Log &amp; Import Log</h4>
+<p>Tracks who changed what and when. The current user name is set at the top right of this section — click "Change User" to update.</p></div>
+`}
+};
 
 // ═══════════════════════════════════════════
 // EDIT LOG / USER TRACKING
@@ -2777,7 +2976,7 @@ function renderSchedule(){
       let totalBudget=0,weightedPct=0,totalActualCost=0,totalBudgetCost=0;
       let hasActualData=false;
       biActs.forEach(a=>{
-        const ac=actualsMap[a.code];
+        const ac=actualsMap[a.code]||actualsMap[a.phaseCode];
         if(ac){
           hasActualData=true;
           const bCost=ac.budgetCost||0;
@@ -3169,7 +3368,7 @@ function renderJobCostSchedule(){
     }
 
     // Actuals matching
-    const actualData=job.actuals?.find(ac=>ac.code===a.code);
+    const actualData=job.actuals?.find(ac=>ac.code===a.code||ac.code===a.phaseCode||(a.phaseCode&&ac.code===String(a.phaseCode)));
     let r='<tr>';
     r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${pcBadge}${shortName}</td>`;
     r+=`<td>${qty}${units?' '+units:''}</td>`;
