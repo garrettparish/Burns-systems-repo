@@ -152,7 +152,12 @@ tr:hover{background:#FAF8F5}
 .sov-billing-grid label{font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);display:block;margin-bottom:2px}
 .sov-billing-grid input,.sov-billing-grid select{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:inherit}
 /* Front-Load Sliders */
-.fl-row{display:grid;grid-template-columns:180px 1fr 100px 100px 100px;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px}
+.fl-row{display:grid;grid-template-columns:32px 180px 1fr 100px 100px 100px;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px}
+.fl-lock{width:24px;height:24px;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:all .15s;color:var(--text-light)}
+.fl-lock:hover{border-color:var(--gold);color:var(--gold)}
+.fl-lock.locked{background:var(--gold);border-color:var(--gold);color:#fff}
+.fl-row.fl-locked{background:#FFFBF0;opacity:.85}
+.fl-row.fl-locked .fl-slider,.fl-row.fl-locked .fl-override{pointer-events:none;opacity:.4}
 .fl-row:hover{background:#FAFAF8}
 .fl-header{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);background:var(--ash);border-radius:6px 6px 0 0;border-bottom:2px solid var(--border)}
 .fl-slider{-webkit-appearance:none;width:100%;height:6px;border-radius:3px;background:var(--ash);outline:none;cursor:pointer}
@@ -222,6 +227,7 @@ tr:hover{background:#FAF8F5}
   <div style="display:flex;align-items:center;gap:12px;">
     <div class="topbar-phase">Phase 1A</div>
     <button onclick="switchToSubTab('setup')" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:18px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Project Set Up" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#9881;</button>
+    <button onclick="showAdminPinModal()" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:15px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Admin Password" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#x1f511;</button>
   </div>
 </div>
 
@@ -345,10 +351,46 @@ tr:hover{background:#FAF8F5}
     <label>Total Contract Amount ($)</label><input type="number" id="newJobContract" placeholder="e.g. 2500000" step="0.01" min="0">
     <label>Total Overhead ($)</label><input type="number" id="newJobOH" placeholder="e.g. 350000" step="0.01" min="0">
     <p style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">Enter the executed contract value and total overhead. Profit will be calculated as Contract − (Direct Costs + OH) and distributed across pay items.</p>
+    <label>Margin PIN (4-6 digits)</label><input type="password" id="newJobPin" placeholder="e.g. 1234" maxlength="6" pattern="[0-9]*" inputmode="numeric" style="letter-spacing:4px;font-family:monospace;font-size:16px;">
+    <p style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">Required to access or modify the profit distribution / front-load tool. Leave blank for no protection.</p>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeNewJobModal()">Cancel</button>
       <button id="jobDeleteBtn" style="display:none;background:#C0392B;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:600;" onclick="confirmDeleteJob()">Delete Job</button>
       <button class="btn-primary" id="jobModalSaveBtn" onclick="createJob()">Create Job</button>
+    </div>
+  </div>
+</div>
+
+<!-- PIN PROMPT MODAL -->
+<div class="modal-bg" id="pinModal">
+  <div class="modal" style="max-width:340px;text-align:center;">
+    <div style="font-size:32px;margin-bottom:8px;">&#x1f512;</div>
+    <h3 style="margin-bottom:4px;">Margin Access</h3>
+    <p id="pinModalMsg" style="font-size:12px;color:var(--text-light);margin-bottom:16px;">Enter the job PIN or admin password to access profit distribution.</p>
+    <input type="password" id="pinInput" placeholder="Enter PIN" maxlength="20" style="text-align:center;letter-spacing:4px;font-family:monospace;font-size:20px;padding:12px;width:100%;border:2px solid var(--border);border-radius:8px;" onkeydown="if(event.key==='Enter')submitPin()">
+    <div id="pinError" style="color:var(--red);font-size:12px;margin-top:6px;min-height:18px;"></div>
+    <div class="modal-actions" style="margin-top:12px;">
+      <button class="btn-secondary" onclick="closePinModal()">Cancel</button>
+      <button class="btn-primary" onclick="submitPin()">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADMIN PIN MODAL -->
+<div class="modal-bg" id="adminPinModal">
+  <div class="modal" style="max-width:380px;">
+    <h3>Admin Password</h3>
+    <p style="font-size:12px;color:var(--text-light);margin-bottom:12px;">Set a master admin password that can bypass any job PIN. This is stored locally on this browser.</p>
+    <label>Current Admin Password</label>
+    <input type="password" id="adminPinCurrent" placeholder="Enter current (if set)" style="letter-spacing:3px;font-family:monospace;">
+    <label>New Admin Password</label>
+    <input type="password" id="adminPinNew" placeholder="New password" style="letter-spacing:3px;font-family:monospace;">
+    <label>Confirm New Password</label>
+    <input type="password" id="adminPinConfirm" placeholder="Confirm" style="letter-spacing:3px;font-family:monospace;">
+    <div id="adminPinError" style="color:var(--red);font-size:12px;margin-top:4px;min-height:18px;"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeAdminPinModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveAdminPin()">Save</button>
     </div>
   </div>
 </div>
@@ -369,7 +411,91 @@ tr:hover{background:#FAF8F5}
 // ═══════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════
-const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]} };
+const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]}, _pinAuth:{} };
+
+// ═══════════════════════════════════════════
+// PIN / ACCESS CONTROL
+// ═══════════════════════════════════════════
+let _pinCallback=null; // function to call after successful PIN entry
+
+function jobHasPin(jobId){
+  const job=Store.jobs[jobId||Store.activeJob];
+  return job&&job.meta&&job.meta.jobPin&&job.meta.jobPin.length>0;
+}
+
+function isMarginUnlocked(jobId){
+  const jid=jobId||Store.activeJob;
+  if(!jobHasPin(jid))return true; // No PIN set = always open
+  return !!Store._pinAuth[jid];
+}
+
+function requireMarginAccess(callback){
+  // If no PIN on this job, just run the callback
+  if(!jobHasPin())return callback();
+  // If already authenticated this session, run callback
+  if(isMarginUnlocked())return callback();
+  // Otherwise show PIN modal
+  _pinCallback=callback;
+  document.getElementById('pinInput').value='';
+  document.getElementById('pinError').textContent='';
+  document.getElementById('pinModal').classList.add('show');
+  setTimeout(()=>document.getElementById('pinInput').focus(),100);
+}
+
+function submitPin(){
+  const input=document.getElementById('pinInput').value.trim();
+  if(!input){document.getElementById('pinError').textContent='Enter a PIN or admin password.';return}
+  const job=Store.jobs[Store.activeJob];
+  const jobPin=job&&job.meta?job.meta.jobPin:'';
+  const adminPin=localStorage.getItem('bdc_admin_pin')||'';
+
+  // Check against job PIN or admin password
+  if(input===jobPin||(adminPin&&input===adminPin)){
+    Store._pinAuth[Store.activeJob]=true;
+    closePinModal();
+    if(_pinCallback){_pinCallback();_pinCallback=null}
+    log('Margin access unlocked'+(input===adminPin?' (admin)':'')+' for this session.');
+  } else {
+    document.getElementById('pinError').textContent='Incorrect PIN. Try again.';
+    document.getElementById('pinInput').value='';
+    document.getElementById('pinInput').focus();
+  }
+}
+
+function closePinModal(){
+  document.getElementById('pinModal').classList.remove('show');
+  _pinCallback=null;
+}
+
+// Admin password management
+function showAdminPinModal(){
+  ['adminPinCurrent','adminPinNew','adminPinConfirm'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('adminPinError').textContent='';
+  const hasExisting=!!localStorage.getItem('bdc_admin_pin');
+  document.getElementById('adminPinCurrent').style.display=hasExisting?'block':'none';
+  document.querySelector('label[for="adminPinCurrent"]')?.style&&(document.getElementById('adminPinCurrent').previousElementSibling.style.display=hasExisting?'block':'none');
+  document.getElementById('adminPinModal').classList.add('show');
+}
+
+function closeAdminPinModal(){document.getElementById('adminPinModal').classList.remove('show')}
+
+function saveAdminPin(){
+  const existing=localStorage.getItem('bdc_admin_pin')||'';
+  const current=document.getElementById('adminPinCurrent').value.trim();
+  const newPin=document.getElementById('adminPinNew').value.trim();
+  const confirm=document.getElementById('adminPinConfirm').value.trim();
+  const errEl=document.getElementById('adminPinError');
+
+  // If admin password exists, must enter current one first
+  if(existing&&current!==existing){errEl.textContent='Current admin password is incorrect.';return}
+  if(!newPin){errEl.textContent='Enter a new password.';return}
+  if(newPin.length<4){errEl.textContent='Password must be at least 4 characters.';return}
+  if(newPin!==confirm){errEl.textContent='Passwords do not match.';return}
+
+  localStorage.setItem('bdc_admin_pin',newPin);
+  closeAdminPinModal();
+  log('Admin password updated.');
+}
 
 // ═══════════════════════════════════════════
 // EDIT LOG / USER TRACKING
@@ -642,12 +768,12 @@ updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // JOB MANAGEMENT
 // ═══════════════════════════════════════════
 let _editingJobId=null;
-function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobContract').value='';document.getElementById('newJobOH').value='';document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('jobDeleteBtn').style.display='none';document.getElementById('newJobModal').classList.add('show')}
-function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobContract').value=m.contractAmount||'';document.getElementById('newJobOH').value=m.totalOH||'';document.getElementById('jobDeleteBtn').style.display='inline-block';document.getElementById('newJobModal').classList.add('show')}
-function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;m.contractAmount=parseFloat(document.getElementById('newJobContract').value)||0;m.totalOH=parseFloat(document.getElementById('newJobOH').value)||0;closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
+function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobContract').value='';document.getElementById('newJobOH').value='';document.getElementById('newJobPin').value='';document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('jobDeleteBtn').style.display='none';document.getElementById('newJobModal').classList.add('show')}
+function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobContract').value=m.contractAmount||'';document.getElementById('newJobOH').value=m.totalOH||'';document.getElementById('newJobPin').value=m.jobPin||'';document.getElementById('jobDeleteBtn').style.display='inline-block';document.getElementById('newJobModal').classList.add('show')}
+function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;m.contractAmount=parseFloat(document.getElementById('newJobContract').value)||0;m.totalOH=parseFloat(document.getElementById('newJobOH').value)||0;const pin=document.getElementById('newJobPin').value.trim();m.jobPin=pin||'';if(pin&&Store._pinAuth)delete Store._pinAuth[_editingJobId];closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
 function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();switchJob();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
-function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,contractAmount:parseFloat(document.getElementById('newJobContract').value)||0,totalOH:parseFloat(document.getElementById('newJobOH').value)||0,created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[],sovItems:[],cashFlowConfig:null};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
+function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}const pin=document.getElementById('newJobPin').value.trim();Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,contractAmount:parseFloat(document.getElementById('newJobContract').value)||0,totalOH:parseFloat(document.getElementById('newJobOH').value)||0,jobPin:pin||'',created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[],sovItems:[],cashFlowConfig:null};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
 
 function switchJob(){
   Store.activeJob=document.getElementById('jobSelect').value||null;
@@ -2193,12 +2319,13 @@ function renderBidItems(){
   const contractAmount=job.meta.contractAmount||0;
   const profitPool=job.meta._profitPool||0;
   if(contractAmount>0&&sovItems.length){
-    const _flOpen=window._frontLoadOpen!==false; // default open
+    const _flOpen=window._frontLoadOpen===true; // default closed (PIN-gated)
+    const _marginLocked=!isMarginUnlocked();
     h+=`<div class="card" style="margin-bottom:16px;">`;
-    h+=`<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:0 0 8px 0;" onclick="window._frontLoadOpen=!window._frontLoadOpen;renderBidItems();">`;
-    h+=`<div class="card-title" style="margin:0;">Profit Distribution — Front-Load Tool</div>`;
+    h+=`<div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:0 0 8px 0;" onclick="toggleFrontLoadPanel()">`;
+    h+=`<div class="card-title" style="margin:0;">Profit Distribution — Front-Load Tool${_marginLocked?' &#x1f512;':''}</div>`;
     h+=`<div style="display:flex;align-items:center;gap:12px;">`;
-    h+=`<span style="font-size:11px;color:var(--text-light);">Total always equals contract amount</span>`;
+    h+=`<span style="font-size:11px;color:var(--text-light);">${_marginLocked?'PIN required':'Total always equals contract amount'}</span>`;
     h+=`<span style="font-size:16px;color:var(--text-light);transition:transform .2s;${_flOpen?'transform:rotate(180deg);':''}">&darr;</span>`;
     h+=`</div></div>`;
 
@@ -2210,7 +2337,7 @@ function renderBidItems(){
       h+=`</div>`;
 
       // Slider rows
-      h+=`<div class="fl-row fl-header"><span>Pay Item</span><span>Profit Slider</span><span style="text-align:right;">Billing Value ($)</span><span style="text-align:right;">Profit ($)</span><span style="text-align:right;">Margin %</span></div>`;
+      h+=`<div class="fl-row fl-header"><span></span><span>Pay Item</span><span>Profit Slider</span><span style="text-align:right;">Billing Value ($)</span><span style="text-align:right;">Profit ($)</span><span style="text-align:right;">Margin %</span></div>`;
       items.forEach((it,i)=>{
         const c=it.c;
         const itemMargin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
@@ -2218,10 +2345,12 @@ function renderBidItems(){
         const costFloor=c.dc+(c.oh||0);
         const maxVal=contractAmount>0?Math.min(contractAmount,Math.max(costFloor*3,c.sv*2)):costFloor*3;
 
-        h+=`<div class="fl-row">`;
+        const isLocked=!!job.sovItems[it.idx]._lockedProfit;
+        h+=`<div class="fl-row${isLocked?' fl-locked':''}">`;
+        h+=`<button class="fl-lock${isLocked?' locked':''}" onclick="toggleProfitLock(${it.idx})" title="${isLocked?'Unlock — allow redistribution':'Lock — freeze billing value'}">&#x1f512;</button>`;
         h+=`<span style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(it.description)}">${it.clientItemNo||it.id} — ${it.description||''}</span>`;
-        h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(c.sv)}" oninput="handleFrontLoadSlider(${it.idx},parseFloat(this.value))">`;
-        h+=`<input type="number" class="fl-override" value="${Math.round(c.sv)}" step="100" onchange="handleFrontLoadOverride(${it.idx},parseFloat(this.value))" title="Enter exact billing value">`;
+        h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(c.sv)}" oninput="handleFrontLoadSlider(${it.idx},parseFloat(this.value))"${isLocked?' disabled':''}>`;
+        h+=`<input type="number" class="fl-override" value="${Math.round(c.sv)}" step="100" onchange="handleFrontLoadOverride(${it.idx},parseFloat(this.value))" title="Enter exact billing value"${isLocked?' disabled':''}>`;
         h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;${c.profit<0?'color:var(--red);':''}">${fmtD(c.profit)}</span>`;
         h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;font-weight:600;${marginCls}">${itemMargin.toFixed(1)}%</span>`;
         h+=`</div>`;
@@ -3269,6 +3398,23 @@ function addNewSOVItem(){
 }
 
 // ═══════════════════════════════════════════
+// FRONT-LOAD PANEL TOGGLE (PIN-GATED)
+// ═══════════════════════════════════════════
+function toggleFrontLoadPanel(){
+  if(window._frontLoadOpen){
+    // Closing — always allowed
+    window._frontLoadOpen=false;
+    renderBidItems();
+  } else {
+    // Opening — require PIN if set
+    requireMarginAccess(()=>{
+      window._frontLoadOpen=true;
+      renderBidItems();
+    });
+  }
+}
+
+// ═══════════════════════════════════════════
 // FRONT-LOAD HANDLERS
 // When you adjust one item's billing value, the delta in profit is
 // spread proportionally across all OTHER items so the total always
@@ -3295,27 +3441,24 @@ function _redistributeProfit(job, changedIdx, newBillingValue){
   si.allocatedProfit=Math.round(newProfit*100)/100;
   si._manualProfit=true;
 
-  // Only rob from UNTOUCHED items (not manually adjusted).
-  // Previously adjusted items keep their values.
-  const untouched=sovItems.filter((_,i)=>i!==changedIdx&&!_._manualProfit);
-  const touched=sovItems.filter((_,i)=>i!==changedIdx&&_._manualProfit);
+  // LOCKED items are completely frozen — never touched by redistribution.
+  // Then among remaining: prefer untouched, fall back to touched-but-unlocked.
+  const unlocked=sovItems.filter((_,i)=>i!==changedIdx&&!_._lockedProfit);
+  const untouched=unlocked.filter(o=>!o._manualProfit);
+  const touchedUnlocked=unlocked.filter(o=>o._manualProfit);
 
-  if(untouched.length){
-    // Spread delta across untouched items proportionally by their current profit
-    const untouchedTotal=untouched.reduce((s,o)=>s+(o.allocatedProfit||0),0);
-    untouched.forEach(o=>{
-      const share=untouchedTotal!==0?(o.allocatedProfit||0)/untouchedTotal:1/untouched.length;
-      o.allocatedProfit=Math.round(((o.allocatedProfit||0)-delta*share)*100)/100;
-    });
-  } else {
-    // All items have been touched — fall back to spreading across all non-current items
-    const others=sovItems.filter((_,i)=>i!==changedIdx);
-    const otherTotal=others.reduce((s,o)=>s+(o.allocatedProfit||0),0);
-    others.forEach(o=>{
-      const share=otherTotal!==0?(o.allocatedProfit||0)/otherTotal:1/Math.max(others.length,1);
+  // Pick the pool to rob from: untouched first, then all unlocked
+  const pool=untouched.length?untouched:unlocked;
+
+  if(pool.length){
+    const poolTotal=pool.reduce((s,o)=>s+(o.allocatedProfit||0),0);
+    pool.forEach(o=>{
+      const share=poolTotal!==0?(o.allocatedProfit||0)/poolTotal:1/pool.length;
       o.allocatedProfit=Math.round(((o.allocatedProfit||0)-delta*share)*100)/100;
     });
   }
+  // If everything is locked except the changed item, delta has nowhere to go —
+  // the user sees the total won't match contract. That's intentional; they control it.
 
   // Clean up
   sovItems.forEach(si=>{delete si._calcDirect});
@@ -3339,15 +3482,31 @@ function handleFrontLoadOverride(idx, newBillingValue){
 function resetFrontLoad(){
   const job=Store.jobs[Store.activeJob];
   if(!job||!job.sovItems)return;
-  if(!confirm('Reset all front-loading? Profit will be redistributed proportionally by direct cost.'))return;
+  if(!confirm('Reset all front-loading? Profit will be redistributed proportionally by direct cost. All locks will be cleared.'))return;
   job.sovItems.forEach(si=>{
     delete si._manualProfit;
     delete si._overrideValue;
+    delete si._lockedProfit;
     si.allocatedProfit=0;
   });
   runMarginEngine(job);
   renderBidItems();
-  log('Front-load reset — profit distributed proportionally.');
+  log('Front-load reset — profit distributed proportionally, all locks cleared.');
+}
+
+function toggleProfitLock(idx){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.sovItems[idx])return;
+  const si=job.sovItems[idx];
+  if(si._lockedProfit){
+    delete si._lockedProfit;
+    log(`Unlocked pay item ${si.clientItemNo||si.id} — will participate in redistribution.`);
+  } else {
+    si._lockedProfit=true;
+    si._manualProfit=true; // Locked implies manual — don't redistribute to it
+    log(`Locked pay item ${si.clientItemNo||si.id} — billing value frozen.`);
+  }
+  renderBidItems();
 }
 
 // ═══════════════════════════════════════════
@@ -3562,22 +3721,29 @@ function autoOptimizeFrontLoad(){
   // Earlier items get higher weight. The total weighted profit = profitPool.
   // Weight = e^(-k * rank), where k controls how aggressively we front-load.
   // We use k=0.15 as a moderate front-load (not too extreme).
+  // LOCKED items keep their current profit — only redistribute the remaining pool.
   const k=0.15;
   const allItems=[...dated,...undated];
-  const weights=allItems.map((_,i)=>Math.exp(-k*i));
-  const totalWeight=weights.reduce((s,w)=>s+w,0);
+  const lockedProfit=allItems.filter(d=>d.si._lockedProfit).reduce((s,d)=>s+(d.si.allocatedProfit||0),0);
+  const availablePool=profitPool-lockedProfit;
+  const unlocked=allItems.filter(d=>!d.si._lockedProfit);
 
-  allItems.forEach((d,i)=>{
-    const share=weights[i]/totalWeight;
-    d.si.allocatedProfit=Math.round(profitPool*share*100)/100;
-    d.si._manualProfit=true;
-  });
+  if(unlocked.length){
+    const weights=unlocked.map((_,i)=>Math.exp(-k*i));
+    const totalWeight=weights.reduce((s,w)=>s+w,0);
+
+    unlocked.forEach((d,i)=>{
+      const share=weights[i]/totalWeight;
+      d.si.allocatedProfit=Math.round(availablePool*share*100)/100;
+      d.si._manualProfit=true;
+    });
+  }
 
   // Fine-tune: ensure rounding doesn't drift from total
   const allocatedSum=sovItems.reduce((s,si)=>s+(si.allocatedProfit||0),0);
   const drift=profitPool-allocatedSum;
-  if(Math.abs(drift)>0.01&&sovItems.length){
-    sovItems[0].allocatedProfit+=drift;
+  if(Math.abs(drift)>0.01&&unlocked.length){
+    unlocked[0].si.allocatedProfit+=drift;
   }
 
   renderBidItems();
