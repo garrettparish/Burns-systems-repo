@@ -440,6 +440,28 @@ let _schedSortDir='asc'; // sort direction: asc or desc
 let _cfTimeFrom=0;
 let _cfTimeTo=0; // 0 means "show all" — renderCashFlowProjection will set to months.length-1
 
+// ── Generic table sort system ──
+const _tblSort={};
+function sortHdr(tid,col,label,renderFn,extra){
+  const s=_tblSort[tid]||{};const active=s.col===col;
+  const arrow=active?(s.dir==='asc'?' ▲':' ▼'):'';
+  const stl='cursor:pointer;user-select:none;white-space:nowrap;'+(active?'color:var(--blue);':'');
+  return '<th class="num" style="'+stl+(extra||'')+'" onclick="var s=_tblSort[\''+tid+'\']||{};_tblSort[\''+tid+'\']={col:\''+col+'\',dir:(s.col===\''+col+'\'&&s.dir===\'asc\')?\'desc\':\'asc\'};'+renderFn+'();">'+label+arrow+'</th>';
+}
+function sortHdrL(tid,col,label,renderFn,extra){
+  // Left-aligned version (no .num class)
+  const s=_tblSort[tid]||{};const active=s.col===col;
+  const arrow=active?(s.dir==='asc'?' ▲':' ▼'):'';
+  const stl='cursor:pointer;user-select:none;white-space:nowrap;'+(active?'color:var(--blue);':'');
+  return '<th style="'+stl+(extra||'')+'" onclick="var s=_tblSort[\''+tid+'\']||{};_tblSort[\''+tid+'\']={col:\''+col+'\',dir:(s.col===\''+col+'\'&&s.dir===\'asc\')?\'desc\':\'asc\'};'+renderFn+'();">'+label+arrow+'</th>';
+}
+function doSort(arr,tid,defs){
+  const s=_tblSort[tid];if(!s||!s.col)return arr;
+  const fn=defs[s.col];if(!fn)return arr;
+  const dir=s.dir==='desc'?-1:1;
+  return [...arr].sort((a,b)=>fn(a,b)*dir);
+}
+
 // ═══════════════════════════════════════════
 // PIN / ACCESS CONTROL
 // ═══════════════════════════════════════════
@@ -1626,9 +1648,16 @@ function renderMapping(){
   h+='</div>';
 
   h+='<div class="card" style="margin-top:12px;"><div class="table-wrap"><table class="map-table">';
-  h+='<tr><th style="width:30px">#</th><th>Task Name</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th style="min-width:280px;">Pay Item Assignment</th></tr>';
+  const _mapTasks=doSort([...job.schedule],'mapTbl',{id:(a,b)=>(parseInt(a.id)||0)-(parseInt(b.id)||0),name:(a,b)=>(a.name||'').localeCompare(b.name||''),start:(a,b)=>(toDate(a.start)||new Date(9999,0))-(toDate(b.start)||new Date(9999,0)),finish:(a,b)=>(toDate(a.finish)||new Date(9999,0))-(toDate(b.finish)||new Date(9999,0)),dur:(a,b)=>{const da=toDate(a.start)&&toDate(a.finish)?Math.ceil((toDate(a.finish)-toDate(a.start))/86400000):9999;const db=toDate(b.start)&&toDate(b.finish)?Math.ceil((toDate(b.finish)-toDate(b.start))/86400000):9999;return da-db},status:(a,b)=>{const o={'Complete':0,'In Progress':1,'Not Started':2,'On Hold':3};return (o[a.status]??2)-(o[b.status]??2)}});
+  h+='<tr>'+sortHdrL('mapTbl','id','#','renderMapping','width:30px;');
+  h+=sortHdrL('mapTbl','name','Task Name','renderMapping');
+  h+=sortHdrL('mapTbl','start','Start','renderMapping');
+  h+=sortHdrL('mapTbl','finish','Finish','renderMapping');
+  h+=sortHdr('mapTbl','dur','Duration','renderMapping');
+  h+=sortHdrL('mapTbl','status','Status','renderMapping');
+  h+='<th style="min-width:280px;">Pay Item Assignment</th></tr>';
 
-  job.schedule.forEach(t=>{
+  _mapTasks.forEach(t=>{
     const currentBIs=getTaskBidItems(job.taskMap,t.id);
     const isMapped=currentBIs.length>0;
     const selClass=isMapped?'mapped':'unmapped';
@@ -2109,20 +2138,38 @@ function renderDashboard(){
   h+='<div class="card"><div class="card-title">Cost Breakdown</div><div class="cost-bars">';
   costCats.forEach(c=>{const w=Math.max((c.v/maxC)*100,1);h+=`<div class="cost-bar-row"><div class="cost-bar-label">${c.l}</div><div class="cost-bar-fill" style="width:${w}%;background:${c.c};"></div><div class="cost-bar-value">${fmtD(c.v)}</div></div>`});
   h+='</div></div>';
-  h+='<div class="card"><div class="card-title">By Discipline</div><table><tr><th>Discipline</th><th class="num">Items</th><th class="num">Direct</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th></tr>';
-  discList.forEach(d=>{h+=`<tr><td><span class="disc-dot" style="background:${d.color}"></span>${d.name}</td><td class="num">${d.count}</td><td class="num">${fmtD(d.direct)}</td><td class="num">${fmtD(d.overhead)}</td><td class="num">${fmtD(d.profit)}</td><td class="num">${fmtD(d.contract)}</td></tr>`});
+  const _dlSorted=doSort(discList,'ddisc',{name:(a,b)=>a.name.localeCompare(b.name),count:(a,b)=>a.count-b.count,direct:(a,b)=>a.direct-b.direct,overhead:(a,b)=>a.overhead-b.overhead,profit:(a,b)=>a.profit-b.profit,contract:(a,b)=>a.contract-b.contract});
+  h+='<div class="card"><div class="card-title">By Discipline</div><table><tr>';
+  h+=sortHdrL('ddisc','name','Discipline','renderDashboard');
+  h+=sortHdr('ddisc','count','Items','renderDashboard');
+  h+=sortHdr('ddisc','direct','Direct','renderDashboard');
+  h+=sortHdr('ddisc','overhead','Overhead','renderDashboard');
+  h+=sortHdr('ddisc','profit','Profit','renderDashboard');
+  h+=sortHdr('ddisc','contract','Contract','renderDashboard');
+  h+='</tr>';
+  _dlSorted.forEach(d=>{h+=`<tr><td><span class="disc-dot" style="background:${d.color}"></span>${d.name}</td><td class="num">${d.count}</td><td class="num">${fmtD(d.direct)}</td><td class="num">${fmtD(d.overhead)}</td><td class="num">${fmtD(d.profit)}</td><td class="num">${fmtD(d.contract)}</td></tr>`});
   h+='</table></div></div>';
 
   // Pay Items (SOV) table — or fall back to raw bid items if SOV not built
   const sovItems=job.sovItems||[];
   if(sovItems.length){
     h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Pay Items (SOV)<button class="edit-btn" onclick="switchSubTab(\'biditems\')">View All &rarr;</button></div><div class="table-wrap"><table>';
-    h+='<tr><th>#</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th></tr>';
-    let tSV=0,tDC2=0,tOHP=0;
     runMarginEngine(job);
-    sovItems.forEach((si,i)=>{
-      const c=calcSOVItem(si,acts,job.meta);
-      const margin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;
+    // Pre-compute for sort
+    const _sovCalc=sovItems.map((si,i)=>{const c=calcSOVItem(si,acts,job.meta);const margin=c.sv>0?((c.sv-c.dc)/c.sv*100):0;return {si,c,margin,idx:i}});
+    const _sovSorted=doSort(_sovCalc,'dsov',{id:(a,b)=>String(a.si.clientItemNo||a.si.id).localeCompare(String(b.si.clientItemNo||b.si.id)),desc:(a,b)=>(a.si.description||'').localeCompare(b.si.description||''),qty:(a,b)=>(a.si.contractQty||0)-(b.si.contractQty||0),unitPrice:(a,b)=>(a.c.unitPrice||0)-(b.c.unitPrice||0),sv:(a,b)=>(a.c.sv||0)-(b.c.sv||0),dc:(a,b)=>(a.c.dc||0)-(b.c.dc||0),ohp:(a,b)=>(a.c.oh+a.c.profit)-(b.c.oh+b.c.profit),margin:(a,b)=>a.margin-b.margin});
+    h+='<tr>'+sortHdrL('dsov','id','#','renderDashboard');
+    h+=sortHdrL('dsov','desc','Description','renderDashboard');
+    h+='<th>Units</th>';
+    h+=sortHdr('dsov','qty','Qty','renderDashboard');
+    h+=sortHdr('dsov','unitPrice','Unit Price','renderDashboard');
+    h+=sortHdr('dsov','sv','Scheduled Value','renderDashboard');
+    h+=sortHdr('dsov','dc','Direct Cost','renderDashboard');
+    h+=sortHdr('dsov','ohp','OH+P','renderDashboard');
+    h+=sortHdr('dsov','margin','Margin','renderDashboard');
+    h+='</tr>';
+    let tSV=0,tDC2=0,tOHP=0;
+    _sovSorted.forEach(({si,c,margin})=>{
       const mCls=margin<5?'negative':margin<10?'':'positive';
       tSV+=c.sv;tDC2+=c.dc;tOHP+=c.oh+c.profit;
       h+=`<tr><td>${si.clientItemNo||si.id}</td><td>${esc(si.description)}</td><td>${si.unit}</td><td class="num">${fmt(si.contractQty)}</td><td class="num">${fmtD2(c.unitPrice)}</td><td class="num"><strong>${fmtD(c.sv)}</strong></td><td class="num">${fmtD(c.dc)}</td><td class="num">${fmtD(c.oh+c.profit)}</td><td class="num ${mCls}">${fmtPct(margin)}</td></tr>`;
@@ -2131,10 +2178,20 @@ function renderDashboard(){
     h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="5">TOTALS</td><td class="num">${fmtD(tSV)}</td><td class="num">${fmtD(tDC2)}</td><td class="num">${fmtD(tOHP)}</td><td class="num">${fmtPct(tMargin)}</td></tr>`;
     h+='</table></div></div>';
   } else {
-    const sorted=[...bidSummaries].sort((a,b)=>(b.takeoffTotal||0)-(a.takeoffTotal||0));
+    const _biSorted=doSort([...bidSummaries],'dbi',{biditem:(a,b)=>String(a.biditem).localeCompare(String(b.biditem)),desc:(a,b)=>(a.description||'').localeCompare(b.description||''),disc:(a,b)=>(a.discipline?.name||'').localeCompare(b.discipline?.name||''),bidQty:(a,b)=>(a.bidQuantity||0)-(b.bidQuantity||0),unitPrice:(a,b)=>(a.unitPrice||0)-(b.unitPrice||0),direct:(a,b)=>(a.directTotal||0)-(b.directTotal||0),contract:(a,b)=>(a.takeoffTotal||0)-(b.takeoffTotal||0),profit:(a,b)=>{const pa=(a.takeoffTotal||0)>0?((a.markup||0)/(a.takeoffTotal||1)*100):0;const pb=(b.takeoffTotal||0)>0?((b.markup||0)/(b.takeoffTotal||1)*100):0;return pa-pb}});
+    if(!_tblSort['dbi']) _biSorted.sort((a,b)=>(b.takeoffTotal||0)-(a.takeoffTotal||0)); // default sort by contract desc
     h+='<div class="card"><div class="card-title">Pay Items <span style="font-weight:300;font-size:12px;color:var(--orange);">(SOV not built yet)</span></div><div class="table-wrap"><table>';
-    h+='<tr><th>#</th><th>Description</th><th>Discipline</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct Cost</th><th class="num">Contract</th><th class="num">Profit %</th></tr>';
-    sorted.forEach(b=>{
+    h+='<tr>'+sortHdrL('dbi','biditem','#','renderDashboard');
+    h+=sortHdrL('dbi','desc','Description','renderDashboard');
+    h+=sortHdrL('dbi','disc','Discipline','renderDashboard');
+    h+='<th>Units</th>';
+    h+=sortHdr('dbi','bidQty','Bid Qty','renderDashboard');
+    h+=sortHdr('dbi','unitPrice','Unit Price','renderDashboard');
+    h+=sortHdr('dbi','direct','Direct Cost','renderDashboard');
+    h+=sortHdr('dbi','contract','Contract','renderDashboard');
+    h+=sortHdr('dbi','profit','Profit %','renderDashboard');
+    h+='</tr>';
+    _biSorted.forEach(b=>{
       const bContract=b.takeoffTotal||0;
       const pPct=bContract>0?((b.markup||0)/bContract*100):0;
       const pClass=pPct<3?'negative':pPct<8?'':'positive';
@@ -2420,28 +2477,32 @@ function renderGlobalView(){
   h+=renderGlobalCashFlow(ids);
 
   h+='<div class="card"><div class="card-title">Job Summary</div><div class="table-wrap"><table>';
-  // Check if any job has actuals
   const _gHasActuals=ids.some(id=>{const j=Store.jobs[id];return j.actuals&&j.actuals.length>0});
-  h+='<tr><th>Job</th><th>Client</th><th>Type</th><th class="num">Direct Cost</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th class="num">Profit %</th>';
-  if(_gHasActuals) h+='<th class="num" style="color:var(--blue);">Actual Cost</th><th class="num" style="color:var(--blue);">Variance</th><th class="num" style="color:var(--blue);">% Complete</th>';
-  h+='<th class="num">Items</th><th>Schedule</th></tr>';
+  // Pre-compute job rows for sorting
+  const _gRows=ids.map(id=>{const j=Store.jobs[id],m=j.meta;const dc=j.bidItems.reduce((s,b)=>s+b.directTotal,0);const oh=j.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=j.bidItems.reduce((s,b)=>s+(b.markup||0),0);const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const jAct=j.actuals||[];const jActCost=jAct.reduce((s,a)=>s+(a.actualCost||0),0);const jBudCost=jAct.reduce((s,a)=>s+(a.budgetCost||0),0);const jPctComp=jBudCost>0?Math.min(jActCost/jBudCost*100,999):0;const jVar=jBudCost-jActCost;return {id,j,m,dc,oh,pr,ct,pp,jAct,jActCost,jBudCost,jPctComp,jVar,items:j.bidItems.length,dt:m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—',hasJA:jAct.length>0}});
+  const _gSorted=doSort(_gRows,'gjs',{name:(a,b)=>(a.m.name||'').localeCompare(b.m.name||''),client:(a,b)=>(a.m.client||'').localeCompare(b.m.client||''),type:(a,b)=>(a.m.billingType||'').localeCompare(b.m.billingType||''),dc:(a,b)=>a.dc-b.dc,oh:(a,b)=>a.oh-b.oh,pr:(a,b)=>a.pr-b.pr,ct:(a,b)=>a.ct-b.ct,pp:(a,b)=>a.pp-b.pp,actCost:(a,b)=>a.jActCost-b.jActCost,variance:(a,b)=>a.jVar-b.jVar,pctComp:(a,b)=>a.jPctComp-b.jPctComp,items:(a,b)=>a.items-b.items});
+  h+='<tr>'+sortHdrL('gjs','name','Job','renderGlobalView');
+  h+=sortHdrL('gjs','client','Client','renderGlobalView');
+  h+=sortHdrL('gjs','type','Type','renderGlobalView');
+  h+=sortHdr('gjs','dc','Direct Cost','renderGlobalView');
+  h+=sortHdr('gjs','oh','Overhead','renderGlobalView');
+  h+=sortHdr('gjs','pr','Profit','renderGlobalView');
+  h+=sortHdr('gjs','ct','Contract','renderGlobalView');
+  h+=sortHdr('gjs','pp','Profit %','renderGlobalView');
+  if(_gHasActuals){h+=sortHdr('gjs','actCost','Actual Cost','renderGlobalView');h+=sortHdr('gjs','variance','Variance','renderGlobalView');h+=sortHdr('gjs','pctComp','% Complete','renderGlobalView')}
+  h+=sortHdr('gjs','items','Items','renderGlobalView');
+  h+='<th>Schedule</th></tr>';
   let _gTotDC=0,_gTotOH=0,_gTotPR=0,_gTotCT=0,_gTotActCost=0,_gTotBudCost=0;
-  ids.forEach(id=>{const j=Store.jobs[id],m=j.meta;const dc=j.bidItems.reduce((s,b)=>s+b.directTotal,0);const oh=j.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=j.bidItems.reduce((s,b)=>s+(b.markup||0),0);const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const ppC=pp<5?'negative':pp<10?'':'positive';const dt=m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—';
-    // Aggregate actuals for this job
-    const jAct=j.actuals||[];
-    const jActCost=jAct.reduce((s,a)=>s+(a.actualCost||0),0);
-    const jBudCost=jAct.reduce((s,a)=>s+(a.budgetCost||0),0);
-    const jPctComp=jBudCost>0?Math.min(jActCost/jBudCost*100,999):0;
-    const jVar=jBudCost-jActCost;
-    _gTotDC+=dc;_gTotOH+=oh;_gTotPR+=pr;_gTotCT+=ct;_gTotActCost+=jActCost;_gTotBudCost+=jBudCost;
-    h+=`<tr><td><strong>${m.name} #${m.number}</strong></td><td>${m.client||'—'}</td><td>${m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(dc)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(pr)}</td><td class="num"><strong>${fmtD(ct)}</strong></td><td class="num ${ppC}">${fmtPct(pp)}</td>`;
+  _gSorted.forEach(r=>{
+    const ppC=r.pp<5?'negative':r.pp<10?'':'positive';
+    _gTotDC+=r.dc;_gTotOH+=r.oh;_gTotPR+=r.pr;_gTotCT+=r.ct;_gTotActCost+=r.jActCost;_gTotBudCost+=r.jBudCost;
+    h+=`<tr><td><strong>${r.m.name} #${r.m.number}</strong></td><td>${r.m.client||'—'}</td><td>${r.m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(r.dc)}</td><td class="num">${fmtD(r.oh)}</td><td class="num">${fmtD(r.pr)}</td><td class="num"><strong>${fmtD(r.ct)}</strong></td><td class="num ${ppC}">${fmtPct(r.pp)}</td>`;
     if(_gHasActuals){
-      const hasJA=jAct.length>0;
-      h+=`<td class="num">${hasJA?fmtD(jActCost):'—'}</td>`;
-      h+=`<td class="num" style="color:${jVar>=0?'var(--green)':'var(--red)'}">${hasJA?fmtD(jVar):'—'}</td>`;
-      h+=`<td class="num">${hasJA?jPctComp.toFixed(0)+'%':'—'}</td>`;
+      h+=`<td class="num">${r.hasJA?fmtD(r.jActCost):'—'}</td>`;
+      h+=`<td class="num" style="color:${r.jVar>=0?'var(--green)':'var(--red)'}">${r.hasJA?fmtD(r.jVar):'—'}</td>`;
+      h+=`<td class="num">${r.hasJA?r.jPctComp.toFixed(0)+'%':'—'}</td>`;
     }
-    h+=`<td class="num">${j.bidItems.length}</td><td>${dt}</td></tr>`});
+    h+=`<td class="num">${r.items}</td><td>${r.dt}</td></tr>`});
   // Totals row
   if(ids.length>1){
     const _gTotPP=_gTotCT>0?_gTotPR/_gTotCT*100:0;const _gTotPPC=_gTotPP<5?'negative':_gTotPP<10?'':'positive';
@@ -3039,11 +3100,24 @@ function renderBidItems(){
     h+=`</div>`;
   }
 
-  // ── Pay Items Table ──
+  // ── Pay Items Table — sortable ──
+  const _biSortFns={idx:(a,b)=>a.idx-b.idx,itemNo:(a,b)=>String(a.clientItemNo||a.id).localeCompare(String(b.clientItemNo||b.id)),desc:(a,b)=>(a.description||'').localeCompare(b.description||''),qty:(a,b)=>(a.contractQty||0)-(b.contractQty||0),unitPrice:(a,b)=>(a.c.unitPrice||0)-(b.c.unitPrice||0),sv:(a,b)=>(a.c.sv||0)-(b.c.sv||0),dc:(a,b)=>(a.c.dc||0)-(b.c.dc||0),ohp:(a,b)=>(a.c.oh+a.c.profit)-(b.c.oh+b.c.profit),margin:(a,b)=>{const ma=a.c.sv>0?((a.c.sv-a.c.dc)/a.c.sv*100):0;const mb=b.c.sv>0?((b.c.sv-b.c.dc)/b.c.sv*100):0;return ma-mb},actCost:(a,b)=>(a._actActualCost||0)-(b._actActualCost||0),actVar:(a,b)=>(a._actBudgetCost-a._actActualCost)-(b._actBudgetCost-b._actActualCost),actPct:(a,b)=>(a._actPctComplete||0)-(b._actPctComplete||0),phases:(a,b)=>(a.phaseCodes||[]).length-(b.phaseCodes||[]).length,acts:(a,b)=>(a.activityIds||[]).length-(b.activityIds||[]).length};
+  filtered=doSort(filtered,'biTbl',_biSortFns);
   h+='<div class="card"><div class="table-wrap"><table>';
-  h+='<tr><th>#</th><th>Item No.</th><th>Description</th><th>Units</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Scheduled Value</th><th class="num">Direct Cost</th><th class="num">OH+P</th><th class="num">Margin</th>';
-  if(_biHasActuals){h+='<th class="num" style="color:var(--blue);">Actual Cost</th><th class="num" style="color:var(--blue);">Variance</th><th class="num" style="color:var(--blue);">% Comp</th>'}
-  h+='<th class="num">Phases</th><th class="num">Activities</th><th></th></tr>';
+  h+='<tr>'+sortHdr('biTbl','idx','#','renderBidItems');
+  h+=sortHdrL('biTbl','itemNo','Item No.','renderBidItems');
+  h+=sortHdrL('biTbl','desc','Description','renderBidItems');
+  h+='<th>Units</th>';
+  h+=sortHdr('biTbl','qty','Qty','renderBidItems');
+  h+=sortHdr('biTbl','unitPrice','Unit Price','renderBidItems');
+  h+=sortHdr('biTbl','sv','Scheduled Value','renderBidItems');
+  h+=sortHdr('biTbl','dc','Direct Cost','renderBidItems');
+  h+=sortHdr('biTbl','ohp','OH+P','renderBidItems');
+  h+=sortHdr('biTbl','margin','Margin','renderBidItems');
+  if(_biHasActuals){h+=sortHdr('biTbl','actCost','Actual Cost','renderBidItems');h+=sortHdr('biTbl','actVar','Variance','renderBidItems');h+=sortHdr('biTbl','actPct','% Comp','renderBidItems')}
+  h+=sortHdr('biTbl','phases','Phases','renderBidItems');
+  h+=sortHdr('biTbl','acts','Activities','renderBidItems');
+  h+='<th></th></tr>';
 
   filtered.forEach(it=>{
     const c=it.c;
@@ -3399,13 +3473,21 @@ function renderSchedule(){
     h+=`<button class="btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;background:${_flaggedOnly?'var(--blue)':'var(--bg)'};color:${_flaggedOnly?'#fff':'var(--text-light)'};border:1px solid ${_flaggedOnly?'var(--blue)':'var(--border)'};" onclick="window._showFlaggedOnlySvA=!window._showFlaggedOnlySvA;renderSchedule();">${_flaggedOnly?'Show All':'Flagged Only'}</button>`;
     h+='</div></div>';
 
-    // Table layout
+    // Table layout — sortable
+    const _svaSorts={name:(a,b)=>(a.name||'').localeCompare(b.name||''),start:(a,b)=>(a.tStart||new Date(9999,0))-(b.tStart||new Date(9999,0)),finish:(a,b)=>(a.tEnd||new Date(9999,0))-(b.tEnd||new Date(9999,0)),schedPct:(a,b)=>a.schedPct-b.schedPct,actualPct:(a,b)=>a.actualPct-b.actualPct,variance:(a,b)=>(a.actualPct-a.schedPct)-(b.actualPct-b.schedPct),budget:(a,b)=>(a.biBudgetDirect||0)-(b.biBudgetDirect||0),actualCost:(a,b)=>(a.totalActualCost||0)-(b.totalActualCost||0),costVar:(a,b)=>(a.costVar||0)-(b.costVar||0),status:(a,b)=>{const o={behind:0,watch:1,'on-track':2,'not-started':3,ahead:4,complete:5};return (o[a.status]??3)-(o[b.status]??3)}};
+    const sortedDisp=doSort(displayRows,'sva',_svaSorts);
     h+='<div class="table-wrap" style="max-height:500px;"><table style="font-size:12px;">';
-    h+='<tr><th style="min-width:180px;">Task</th><th>Start</th><th>Finish</th><th class="num">Sched %</th><th class="num">Actual %</th><th class="num">Variance</th>';
-    if(_actuals.length) h+='<th class="num">Budget</th><th class="num">Actual Cost</th><th class="num">Cost Var</th>';
-    h+='<th style="min-width:80px;">Status</th><th style="min-width:160px;">Progress</th></tr>';
+    h+='<tr>'+sortHdrL('sva','name','Task','renderSchedule','min-width:180px;');
+    h+=sortHdrL('sva','start','Start','renderSchedule');
+    h+=sortHdrL('sva','finish','Finish','renderSchedule');
+    h+=sortHdr('sva','schedPct','Sched %','renderSchedule');
+    h+=sortHdr('sva','actualPct','Actual %','renderSchedule');
+    h+=sortHdr('sva','variance','Variance','renderSchedule');
+    if(_actuals.length){h+=sortHdr('sva','budget','Budget','renderSchedule');h+=sortHdr('sva','actualCost','Actual Cost','renderSchedule');h+=sortHdr('sva','costVar','Cost Var','renderSchedule')}
+    h+=sortHdrL('sva','status','Status','renderSchedule','min-width:80px;');
+    h+='<th style="min-width:160px;">Progress</th></tr>';
 
-    displayRows.forEach(r=>{
+    sortedDisp.forEach(r=>{
       const rowBg=r.status==='behind'?'background:#FFF5F5;':r.status==='watch'?'background:#FFFAF0;':'';
       h+=`<tr style="${rowBg}">`;
       // Task name
