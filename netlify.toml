@@ -1,0 +1,34 @@
+# Netlify build configuration
+# Docs: https://docs.netlify.com/configure-builds/file-based-configuration/
+
+[build]
+  # Default build command (adjust per project)
+  # command = "npm run build"
+  publish = "public/"
+
+# Production deploy (main branch)
+[context.production]
+  environment = { NODE_ENV = "production" }
+
+# Preview deploys (any branch except main)
+[context.deploy-preview]
+  environment = { NODE_ENV = "development" }
+
+# Branch deploys
+[context.branch-deploy]
+  environment = { NODE_ENV = "development" }
+
+# Redirects — SPA support (uncomment for single-page apps)
+# [[redirects]]
+#   from = "/*"
+#   to = "/index.html"
+#   status = 200
+
+# Headers — security defaults
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
