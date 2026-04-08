@@ -2219,7 +2219,7 @@ function renderDashboard(){
     h+='</div>';
   }
 
-  if(sched.length){h+='<div class="card"><div class="card-title">Schedule Overview</div>'+renderGantt(sched,m)+'</div>'}
+  if(sched.length){const _dblSch=job.baseline&&job.baseline.schedule?job.baseline.schedule:null;h+='<div class="card"><div class="card-title">Schedule Overview</div>'+renderGantt(sched,m,_dblSch)+'</div>'}
   el.innerHTML=h;
 }
 
@@ -2242,9 +2242,9 @@ function lockBaseline(){
   const contract=bids.reduce((s,b)=>s+(b.takeoffTotal||0),0);
   job.baseline={
     lockedAt:new Date(),
-    schedule:[...(job.schedule||[])],
-    bidItems:[...bids],
-    sovItems:[...(job.sovItems||[])],
+    schedule:(job.schedule||[]).map(t=>({...t,start:t.start instanceof Date?t.start.toISOString():t.start,finish:t.finish instanceof Date?t.finish.toISOString():t.finish})),
+    bidItems:bids.map(b=>({...b})),
+    sovItems:(job.sovItems||[]).map(s=>({...s})),
     totalDirect,totalOverhead,totalProfit,contract
   };
   addEditLog('Locked baseline snapshot');
@@ -2367,20 +2367,44 @@ function topoSortTasks(tasks){
   return result;
 }
 
-function renderGantt(tasks,meta){
+function renderGantt(tasks,meta,baselineSchedule){
   const vt=topoSortTasks(tasks).map(t=>({...t,start:toDate(t.start),finish:toDate(t.finish)})).filter(t=>t.start&&t.finish);
   if(!vt.length)return'<p style="color:var(--text-light)">No schedule dates available.</p>';
-  const mn=new Date(Math.min(...vt.map(t=>t.start))),mx=new Date(Math.max(...vt.map(t=>t.finish)));
+  // Build baseline lookup by task ID
+  const blMap={};
+  if(baselineSchedule&&baselineSchedule.length){
+    baselineSchedule.forEach(bt=>{blMap[String(bt.id)]={start:toDate(bt.start),finish:toDate(bt.finish)}});
+  }
+  const hasBL=Object.keys(blMap).length>0;
+  const allDates=[...vt.map(t=>t.start),...vt.map(t=>t.finish)];
+  if(hasBL) Object.values(blMap).forEach(b=>{if(b.start)allDates.push(b.start);if(b.finish)allDates.push(b.finish)});
+  const mn=new Date(Math.min(...allDates)),mx=new Date(Math.max(...allDates));
   const td=Math.max((mx-mn)/86400000,1);
   let months='';const c=new Date(mn);c.setDate(1);
   while(c<=mx){const ms=Math.max(0,(c-mn)/86400000);const nm=new Date(c);nm.setMonth(nm.getMonth()+1);const me=Math.min(td,(nm-mn)/86400000);months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;c.setMonth(c.getMonth()+1)}
-  let h=`<div style="overflow-x:auto;"><div style="min-width:800px;"><div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;">${months}</div>`;
+  let h=`<div style="overflow-x:auto;"><div style="min-width:800px;">`;
+  if(hasBL) h+=`<div style="display:flex;gap:14px;margin-bottom:6px;font-size:10px;color:var(--text-light);font-family:Oswald;letter-spacing:.5px;"><span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:6px;border-radius:2px;background:var(--blue);opacity:.8;"></span>Current</span><span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:6px;border-radius:2px;background:var(--text-light);opacity:.3;"></span>Baseline</span></div>`;
+  h+=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;">${months}</div>`;
   vt.forEach(t=>{
     const durDays=Math.max((t.finish-t.start)/86400000,0);
-    if(durDays>=td*.95)return; // skip tasks spanning entire duration
+    if(durDays>=td*.95)return;
     const l=((t.start-mn)/86400000)/td*100,w=Math.max(((t.finish-t.start)/86400000)/td*100,.5);
     const sc=t.status==='Complete'?'var(--teal)':t.status==='In Progress'?'var(--blue)':t.atRisk==='Yes'?'var(--red)':(t.variance!=null&&t.variance<-5)?'var(--yellow)':'var(--green)';
-    h+=`<div style="display:flex;align-items:center;margin-bottom:2px;"><div style="width:220px;min-width:220px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${t.name}">${t.name}</div><div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${sc};border-radius:2px;opacity:.8;" title="${t.name}: ${fmtDate(t.start)} — ${fmtDate(t.finish)}"></div></div><div style="width:50px;min-width:50px;text-align:right;font-size:11px;color:var(--text-light);padding-left:6px;">${t.durationStr}</div></div>`;
+    // Baseline ghost bar
+    const bl=blMap[String(t.id)];
+    let blBar='';
+    if(bl&&bl.start&&bl.finish){
+      const bll=((bl.start-mn)/86400000)/td*100,blw=Math.max(((bl.finish-bl.start)/86400000)/td*100,.5);
+      blBar=`<div style="position:absolute;left:${bll}%;width:${blw}%;height:6px;top:5px;background:var(--text-light);border-radius:2px;opacity:.25;" title="Baseline: ${fmtDate(bl.start)} — ${fmtDate(bl.finish)}"></div>`;
+    }
+    // Schedule variance indicator
+    let varInd='';
+    if(bl&&bl.finish&&t.finish){
+      const drift=Math.round((t.finish-bl.finish)/86400000);
+      if(drift>2) varInd=`<span style="font-size:9px;color:var(--red);font-weight:600;margin-left:4px;">+${drift}d</span>`;
+      else if(drift<-2) varInd=`<span style="font-size:9px;color:var(--teal);font-weight:600;margin-left:4px;">${drift}d</span>`;
+    }
+    h+=`<div style="display:flex;align-items:center;margin-bottom:2px;"><div style="width:220px;min-width:220px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${t.name}">${t.name}${varInd}</div><div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;">${blBar}<div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${sc};border-radius:2px;opacity:.8;" title="${t.name}: ${fmtDate(t.start)} — ${fmtDate(t.finish)}"></div></div><div style="width:50px;min-width:50px;text-align:right;font-size:11px;color:var(--text-light);padding-left:6px;">${t.durationStr}</div></div>`;
   });
   h+='</div></div>';return h;
 }
@@ -2435,12 +2459,12 @@ function renderGlobalView(){
       if(t.finish>dj.end)dj.end=t.finish;
       dj.tasks.push(t);
     });
-    j.bidItems.forEach(b=>{
+    (j.bidItems||[]).forEach(b=>{
       const d=getBidItemDiscipline(b.biditem,j.activities,j);
       if(dg[d.name])dg[d.name].cost+=(b.takeoffTotal||0);
       if(_discGlobal[d.name]&&_discGlobal[d.name].jobs[id])_discGlobal[d.name].jobs[id].cost+=(b.takeoffTotal||0);
     });
-    _allJobDiscData[id]={bars:Object.values(dg).sort((a,b)=>a.start-b.start),ct:j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0)};
+    _allJobDiscData[id]={bars:Object.values(dg).sort((a,b)=>a.start-b.start),ct:(j.bidItems||[]).reduce((s,b)=>s+(b.takeoffTotal||0),0)};
   });
 
   if(!_byDisc){
@@ -2479,7 +2503,7 @@ function renderGlobalView(){
   h+='<div class="card"><div class="card-title">Job Summary</div><div class="table-wrap"><table>';
   const _gHasActuals=ids.some(id=>{const j=Store.jobs[id];return j.actuals&&j.actuals.length>0});
   // Pre-compute job rows for sorting
-  const _gRows=ids.map(id=>{const j=Store.jobs[id],m=j.meta;const dc=j.bidItems.reduce((s,b)=>s+b.directTotal,0);const oh=j.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=j.bidItems.reduce((s,b)=>s+(b.markup||0),0);const ct=j.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const jAct=j.actuals||[];const jActCost=jAct.reduce((s,a)=>s+(a.actualCost||0),0);const jBudCost=jAct.reduce((s,a)=>s+(a.budgetCost||0),0);const jPctComp=jBudCost>0?Math.min(jActCost/jBudCost*100,999):0;const jVar=jBudCost-jActCost;return {id,j,m,dc,oh,pr,ct,pp,jAct,jActCost,jBudCost,jPctComp,jVar,items:j.bidItems.length,dt:m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—',hasJA:jAct.length>0}});
+  const _gRows=ids.map(id=>{const j=Store.jobs[id],m=j.meta;const dc=(j.bidItems||[]).reduce((s,b)=>s+b.directTotal,0);const oh=(j.bidItems||[]).reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);const pr=(j.bidItems||[]).reduce((s,b)=>s+(b.markup||0),0);const ct=(j.bidItems||[]).reduce((s,b)=>s+(b.takeoffTotal||0),0);const pp=ct>0?pr/ct*100:0;const jAct=j.actuals||[];const jActCost=jAct.reduce((s,a)=>s+(a.actualCost||0),0);const jBudCost=jAct.reduce((s,a)=>s+(a.budgetCost||0),0);const jPctComp=jBudCost>0?Math.min(jActCost/jBudCost*100,999):0;const jVar=jBudCost-jActCost;return {id,j,m,dc,oh,pr,ct,pp,jAct,jActCost,jBudCost,jPctComp,jVar,items:(j.bidItems||[]).length,dt:m.startDate&&m.endDate?fmtDate(m.startDate)+' — '+fmtDate(m.endDate):'—',hasJA:jAct.length>0}});
   const _gSorted=doSort(_gRows,'gjs',{name:(a,b)=>(a.m.name||'').localeCompare(b.m.name||''),client:(a,b)=>(a.m.client||'').localeCompare(b.m.client||''),type:(a,b)=>(a.m.billingType||'').localeCompare(b.m.billingType||''),dc:(a,b)=>a.dc-b.dc,oh:(a,b)=>a.oh-b.oh,pr:(a,b)=>a.pr-b.pr,ct:(a,b)=>a.ct-b.ct,pp:(a,b)=>a.pp-b.pp,actCost:(a,b)=>a.jActCost-b.jActCost,variance:(a,b)=>a.jVar-b.jVar,pctComp:(a,b)=>a.jPctComp-b.jPctComp,items:(a,b)=>a.items-b.items});
   h+='<tr>'+sortHdrL('gjs','name','Job','renderGlobalView');
   h+=sortHdrL('gjs','client','Client','renderGlobalView');
@@ -2517,7 +2541,7 @@ function renderGlobalView(){
   h+='<div class="card"><div class="card-title">Product Roadmap</div>';
   const phases=[
     {phase:'Phase 1A',status:'live',label:'LIVE',items:['HeavyBid Activities import with phase codes — auto-builds pay items & SOV','Smartsheet schedule import + pay item mapping','SOV / Pay Items builder with OH+P and phase code tracking','Job Dashboard with Overview, Pay Items, Schedule, JCS, Cash Flow sub-tabs','Per-job & company-wide cash flow projections','Period-based payment timing (weekly/monthly/after billing)','Edit log tracking','Global multi-job view with stacked cash flow','Baseline lock & variance tracking (budget vs current)','Weekly cost loading schedule with cost spread analysis','HeavyJob actuals import & budget vs actual comparison','Change order task tracking with CO numbering','Dependency sequencing with automatic schedule recalculation']},
-    {phase:'Phase 1B',status:'active',label:'IN PROGRESS',items:['Inline schedule editing (edit dates, durations, status directly)','Schedule changes cascade to JCS + Cash Flow automatically','Set baseline schedule for variance tracking']},
+    {phase:'Phase 1B',status:'live',label:'LIVE',items:['Inline schedule editing (edit dates, durations, status directly)','Schedule changes cascade to JCS + Cash Flow automatically','Set baseline schedule for variance tracking — Gantt overlay, drift columns, variance KPIs']},
     {phase:'Phase 2',status:'planned',label:'PLANNED',items:['Built-in schedule builder (create tasks, durations, crews — no Smartsheet needed)','Task predecessor logic with auto-cascade','Pay application generator (% complete → billing → retainage)','Change order tracking and contract value adjustments','Actual cost entry and earned value analysis (EV, CPI, SPI)']},
     {phase:'Phase 3',status:'planned',label:'FUTURE',items:['Drag-to-resize Gantt bars for schedule editing','Resource loading and crew capacity planning','Subcontractor payment tracking (when owner pays flow)','Document management (submittals, RFIs, daily reports)','Multi-user real-time collaboration','Mobile field reporting']}
   ];
@@ -2589,7 +2613,7 @@ function renderGlobalCashFlow(jobIds){
     if(!globalStart||jStart<globalStart)globalStart=jStart;
     if(!globalEnd||jEndExt>globalEnd)globalEnd=jEndExt;
 
-    const bidContract=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+    const bidContract=(job.bidItems||[]).reduce((s,b)=>s+(b.takeoffTotal||0),0);
     const totalContract=job.meta.contractAmount||bidContract;
     const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
     const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
@@ -3269,7 +3293,30 @@ function renderSchedule(){
   h+='</div>';
 
   // Gantt
-  if(m.startDate&&m.endDate){h+='<div class="card"><div class="card-title">Gantt Chart</div>'+renderGantt(job.schedule,m)+'</div>'}
+  const _blSched=job.baseline&&job.baseline.schedule?job.baseline.schedule:null;
+  // Schedule baseline variance summary
+  if(_blSched&&_blSched.length){
+    const _blMap2={};_blSched.forEach(bt=>{_blMap2[String(bt.id)]={start:toDate(bt.start),finish:toDate(bt.finish)}});
+    let earlyCount=0,lateCount=0,onTimeCount=0,totalDrift=0,maxDrift=0,maxDriftTask='';
+    tasks.forEach(t=>{
+      const bl=_blMap2[String(t.id)];if(!bl||!bl.finish)return;
+      const cf=toDate(t.finish);if(!cf)return;
+      const drift=Math.round((cf-bl.finish)/86400000);
+      if(drift>2){lateCount++;totalDrift+=drift;if(drift>maxDrift){maxDrift=drift;maxDriftTask=t.name}}
+      else if(drift<-2){earlyCount++}
+      else{onTimeCount++}
+    });
+    const avgDrift=lateCount>0?Math.round(totalDrift/lateCount):0;
+    h+='<div class="card" style="margin-bottom:0;border-bottom:none;border-radius:8px 8px 0 0;"><div class="card-title" style="margin-bottom:12px;">Schedule Baseline Variance</div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:4px;">';
+    h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">On Time</div><div style="font-family:Oswald;font-size:22px;font-weight:600;color:var(--green);">${onTimeCount}</div></div>`;
+    h+=`<div style="text-align:center;padding:10px;background:${lateCount?'#FFF5F5':'var(--bg)'};border-radius:6px;${lateCount?'border:1px solid var(--red);':''}"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Behind</div><div style="font-family:Oswald;font-size:22px;font-weight:600;color:var(--red);">${lateCount}</div></div>`;
+    h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Ahead</div><div style="font-family:Oswald;font-size:22px;font-weight:600;color:var(--teal);">${earlyCount}</div></div>`;
+    h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Avg Drift (Late)</div><div style="font-family:Oswald;font-size:22px;font-weight:600;color:${avgDrift>5?'var(--red)':'var(--text)'};">${avgDrift>0?'+'+avgDrift:avgDrift}d</div></div>`;
+    h+=`<div style="text-align:center;padding:10px;background:var(--bg);border-radius:6px;"><div style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);margin-bottom:4px;">Max Drift</div><div style="font-family:Oswald;font-size:22px;font-weight:600;color:var(--red);">${maxDrift>0?'+'+maxDrift:0}d</div><div style="font-size:10px;color:var(--text-light);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${maxDriftTask}">${maxDriftTask||'—'}</div></div>`;
+    h+='</div></div>';
+  }
+  if(m.startDate&&m.endDate){h+='<div class="card" style="'+ (_blSched&&_blSched.length?'border-radius:0 0 8px 8px;margin-top:0;border-top:1px solid var(--border);':'')+'"><div class="card-title">Gantt Chart</div>'+renderGantt(job.schedule,m,_blSched)+'</div>'}
 
   // Editable task table
   h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Master Schedule<div style="display:flex;gap:8px;">';
@@ -3294,6 +3341,7 @@ function renderSchedule(){
   h+=_sHdr('status','Status');
   h+='<th>Crew</th>';
   h+=_sHdr('pred','Pred.');
+  if(_blSched&&_blSched.length){h+=_sHdr('drift','Drift');h+='<th style="font-size:10px;">Base Dates</th>'}
   h+='<th style="width:50px;">CO</th><th></th>';
   h+='</tr>';
   const inputSt='font-family:inherit;font-size:12px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;';
@@ -3301,13 +3349,21 @@ function renderSchedule(){
   // Sort tasks for display (original array index preserved for edit callbacks)
   const _taskOrder=tasks.map((t,i)=>({t,i}));
   const _dir=_sd==='desc'?-1:1;
-  if(_ss==='pred'){const _sorted=topoSortTasks(tasks);_taskOrder.sort((a,b)=>(_sorted.indexOf(a.t)-_sorted.indexOf(b.t))*_dir)}
+  if(_ss==='pred'){const _sorted=topoSortTasks(tasks);const _predIdx=new Map();_sorted.forEach((t,i)=>_predIdx.set(t,i));_taskOrder.sort((a,b)=>((_predIdx.get(a.t)||0)-(_predIdx.get(b.t)||0))*_dir)}
   else if(_ss==='start')_taskOrder.sort((a,b)=>{const sa=toDate(a.t.start)||new Date(9999,0),sb=toDate(b.t.start)||new Date(9999,0);return (sa-sb)*_dir});
   else if(_ss==='finish')_taskOrder.sort((a,b)=>{const sa=toDate(a.t.finish)||new Date(9999,0),sb=toDate(b.t.finish)||new Date(9999,0);return (sa-sb)*_dir});
   else if(_ss==='name')_taskOrder.sort((a,b)=>((a.t.name||'').localeCompare(b.t.name||''))*_dir);
   else if(_ss==='days')_taskOrder.sort((a,b)=>{const da=toDate(a.t.start)&&toDate(a.t.finish)?Math.ceil((toDate(a.t.finish)-toDate(a.t.start))/86400000):9999;const db=toDate(b.t.start)&&toDate(b.t.finish)?Math.ceil((toDate(b.t.finish)-toDate(b.t.start))/86400000):9999;return (da-db)*_dir});
   else if(_ss==='status'){const _so={'Complete':0,'In Progress':1,'Not Started':2,'On Hold':3};_taskOrder.sort((a,b)=>((_so[a.t.status]??2)-(_so[b.t.status]??2))*_dir)}
+  else if(_ss==='drift'){
+    const _blIdx={};if(_blSched)_blSched.forEach(bt=>{_blIdx[String(bt.id)]={start:toDate(bt.start),finish:toDate(bt.finish)}});
+    _taskOrder.sort((a,b)=>{const ba=_blIdx[String(a.t.id)],bb=_blIdx[String(b.t.id)];const da=ba&&ba.finish&&toDate(a.t.finish)?Math.round((toDate(a.t.finish)-ba.finish)/86400000):0;const db=bb&&bb.finish&&toDate(b.t.finish)?Math.round((toDate(b.t.finish)-bb.finish)/86400000):0;return (da-db)*_dir})
+  }
   else if(_ss==='id')_taskOrder.sort((a,b)=>((parseInt(a.t.id)||0)-(parseInt(b.t.id)||0))*_dir);
+
+  // Baseline lookup for schedule variance
+  const _blIdx={};if(_blSched&&_blSched.length)_blSched.forEach(bt=>{_blIdx[String(bt.id)]={start:toDate(bt.start),finish:toDate(bt.finish)}});
+  const _hasBL=Object.keys(_blIdx).length>0;
 
   _taskOrder.forEach(({t,i})=>{
     const sd=toDate(t.start);
@@ -3346,6 +3402,18 @@ function renderSchedule(){
     h+=`</select></td>`;
     h+=`<td><input type="text" value="${esc(t.crew||'')}" onchange="updateScheduleTask(${i},'crew',this.value)" style="${inputSt}width:80px;" placeholder="Crew"></td>`;
     h+=`<td><input type="text" value="${esc(t.predecessors||'')}" onchange="updateScheduleTask(${i},'predecessors',this.value)" style="${inputSt}width:70px;color:var(--text-light);" placeholder="e.g. 3,5"></td>`;
+    // Baseline drift columns
+    if(_hasBL){
+      const bl=_blIdx[String(t.id)];
+      if(bl&&bl.finish&&fd){
+        const drift=Math.round((fd-bl.finish)/86400000);
+        const dCls=drift>2?'color:var(--red);font-weight:600;':drift<-2?'color:var(--teal);font-weight:600;':'color:var(--text-light);';
+        h+=`<td class="num" style="font-family:Oswald;font-size:12px;${dCls}">${drift>0?'+'+drift:drift}d</td>`;
+        h+=`<td style="font-size:10px;color:var(--text-light);white-space:nowrap;">${fmtDate(bl.start)} — ${fmtDate(bl.finish)}</td>`;
+      } else {
+        h+=`<td class="num" style="color:var(--text-light);font-size:11px;">—</td><td style="font-size:10px;color:var(--text-light);">—</td>`;
+      }
+    }
     h+=`<td style="text-align:center;">${t._changeOrder?`<span class="co-badge">CO#${t._coNumber||'—'}</span>`:'—'}</td>`;
     h+=`<td><button class="del-btn" onclick="removeScheduleTask(${i})" title="Delete task" style="font-size:10px;padding:2px 6px;">&#10005;</button></td>`;
     h+=`</tr>`;
@@ -3446,10 +3514,7 @@ function renderSchedule(){
 
     // Filter logic
     const _flaggedOnly=window._showFlaggedOnlySvA===true;
-    let displayRows=compRows;
-    if(_flaggedOnly){
-      displayRows=compRows.filter(r=>r.status==='behind'||r.status==='watch');
-    }
+    let displayRows=_flaggedOnly?compRows.filter(r=>r.status==='behind'||r.status==='watch'):[...compRows];
 
     // Sort: behind → watch → on-track → not-started → ahead → complete
     const order={behind:0,watch:1,'on-track':2,'not-started':3,ahead:4,complete:5};
@@ -3903,8 +3968,8 @@ function renderJobCostSchedule(){
 
   // ── JCS KPIs: Estimated to-date + Projected next month ──
   const jcsToday=new Date();
-  const jcsContract=job.meta.contractAmount||job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
-  const jcsOH=job.meta.totalOH||job.bidItems.reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
+  const jcsContract=job.meta.contractAmount||(job.bidItems||[]).reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const jcsOH=job.meta.totalOH||(job.bidItems||[]).reduce((s,b)=>s+(b.indirects||0)+(b.addonBond||0),0);
 
   // Estimated cost to-date: sum of direct costs for activities with start date <= today
   let estCostToDate=0,estHoursToDate=0,estCostNextMonth=0,estHoursNextMonth=0;
@@ -5316,7 +5381,7 @@ function renderCashFlowProjection(){
 
   // Revenue: per-SOV billing values (reflects front-load / profit distribution)
   const sovItems=job.sovItems||[];
-  const bidContractCF=job.bidItems.reduce((s,b)=>s+(b.takeoffTotal||0),0);
+  const bidContractCF=(job.bidItems||[]).reduce((s,b)=>s+(b.takeoffTotal||0),0);
   const totalContract=job.meta.contractAmount||bidContractCF;
   const totalDirect=acts.reduce((s,a)=>s+(a.directTotal||0),0);
   const costToRevRatio=totalDirect>0?totalContract/totalDirect:1;
