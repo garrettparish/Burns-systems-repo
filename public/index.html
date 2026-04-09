@@ -318,10 +318,16 @@ tr:hover{background:#FAF8F5}
         <input type="file" id="file-schedule" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'schedule')">
       </div>
       <div class="import-zone" id="zone-actuals" onclick="document.getElementById('file-actuals').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'actuals')">
-        <h3>HeavyJob Actuals</h3>
+        <h3>HeavyJob Actuals (Summary)</h3>
         <p>Costs to date, quantities installed, % complete</p>
         <div class="status pending" id="status-actuals">Drop .xlsx or click</div>
         <input type="file" id="file-actuals" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'actuals')">
+      </div>
+      <div class="import-zone" id="zone-actualsDetail" onclick="document.getElementById('file-actualsDetail').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'actualsDetail')">
+        <h3>HeavyJob Daily Detail</h3>
+        <p>Day-by-day cost code actuals — refresh-safe, auto-matches active job</p>
+        <div class="status pending" id="status-actualsDetail">Drop .xlsx or click</div>
+        <input type="file" id="file-actualsDetail" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'actualsDetail')">
       </div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -1017,7 +1023,7 @@ function switchJob(){
 }
 function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
 function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog()}
-function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule','actuals'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';if(type==='biditems'){st.className='status loaded';st.textContent=data.length+' bid items loaded (OH+P included)'}else if(type==='actuals'){st.className='status loaded';st.textContent=data.length+' actuals loaded'}else{st.className='status loaded';st.textContent=data.length+' records loaded'+extra}}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
+function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule','actuals','actualsDetail'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';if(type==='biditems'){st.className='status loaded';st.textContent=data.length+' bid items loaded (OH+P included)'}else if(type==='actuals'){st.className='status loaded';st.textContent=data.length+' actuals loaded'}else if(type==='actualsDetail'){st.className='status loaded';const freshness=job.meta.lastActualsImport?' — updated '+new Date(job.meta.lastActualsImport).toLocaleDateString():'';st.textContent=data.length+' daily rows'+freshness}else{st.className='status loaded';st.textContent=data.length+' records loaded'+extra}}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if((job.bidItems.length||job.sovItems?.length)&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Pay Items'}else{mapBtn.style.display='none'}}
   const sovBtn=document.getElementById('sovBtn');
@@ -1065,6 +1071,7 @@ function handleImportFile(file,type){
       if(type==='activities') parsed=parseActivitiesRaw(rows);
       else if(type==='biditems') parsed=parseBidItemsRaw(rows);
       else if(type==='actuals') parsed=parseActualsRaw(rows);
+      else if(type==='actualsDetail') parsed=parseActualsDetailRaw(rows);
       else parsed=parseScheduleRaw(rows);
       parsed.forEach(r=>r._selected=true);
       Store.staging={type,data:parsed};
@@ -1216,6 +1223,146 @@ function parseActualsRaw(rows){
 }
 
 // ═══════════════════════════════════════════
+// HEAVYJOB DAILY DETAIL PARSER (Phase 2)
+// ═══════════════════════════════════════════
+// Parses HJ "Cost Code Detail Report" — one row per (date, job, cost code, foreman)
+// - Skips non-data rows (group headers like "Name: Andrew D Stafford")
+// - Filters to active job by Job Code matching job.meta.number
+// - Refresh-safe: confirmStaging uses (date+costCode+foreman) as upsert key
+function parseActualsDetailRaw(rows){
+  const activeJob=Store.jobs[Store.activeJob];
+  const activeJobCode=activeJob?String(activeJob.meta.number||'').trim():'';
+  const out=[];
+  const skipped={noDate:0,otherJob:0,noCode:0};
+  rows.forEach(r=>{
+    // Date column must be a real date (skips group/summary headers)
+    const dateRaw=r['Date'];
+    if(!dateRaw){skipped.noDate++;return}
+    let d=dateRaw instanceof Date?dateRaw:new Date(dateRaw);
+    if(!d||isNaN(d.getTime())){skipped.noDate++;return}
+    const jobCode=String(r['Job Code']||'').trim();
+    const costCode=String(r['Cost Code']||'').trim();
+    if(!costCode){skipped.noCode++;return}
+    // Filter to active job only (unless no active job set)
+    if(activeJobCode&&jobCode&&jobCode!==activeJobCode){skipped.otherJob++;return}
+    const isoDate=d.toISOString().split('T')[0];
+    const actualQty=parseFloat(r['Actual Quantity'])||0;
+    const actualLaborHours=parseFloat(r['Actual Labor Hours'])||0;
+    const actualEquipHours=parseFloat(r['Actual Equipment Hours'])||0;
+    const actualLaborCost=parseFloat(r['Actual Labor Cost'])||0;
+    const actualEquipCost=parseFloat(r['Actual Equipment Cost'])||0;
+    const actualMatCost=parseFloat(r['Actual Material Cost'])||0;
+    const actualSubCost=parseFloat(r['Actual Subcontract Cost'])||0;
+    const expectedLaborHours=parseFloat(r['Expected Labor Hours'])||0;
+    const expectedLaborCost=parseFloat(r['Expected Labor Cost'])||0;
+    const expectedEquipCost=parseFloat(r['Expected Equipment Cost'])||0;
+    const expectedMatCost=parseFloat(r['Expected Material Cost'])||0;
+    const expectedSubCost=parseFloat(r['Expected Subcontract Cost'])||0;
+    // Skip rows with zero everything (empty lines)
+    const allCost=actualLaborCost+actualEquipCost+actualMatCost+actualSubCost;
+    if(allCost===0&&actualLaborHours===0&&actualEquipHours===0&&actualQty===0)return;
+    out.push({
+      date:isoDate,
+      jobCode,
+      costCode,
+      costCodeDesc:String(r['Cost Code Description']||''),
+      unit:String(r['Unit']||''),
+      foreman:String(r['Foreman']||''),
+      linkedPCO:String(r['Linked PCOs']||''),
+      actualQty,
+      actualLaborHours,
+      actualEquipHours,
+      actualLaborCost,
+      actualEquipCost,
+      actualMatCost,
+      actualSubCost,
+      actualAllCost:allCost,
+      expectedLaborHours,
+      expectedLaborCost,
+      expectedEquipCost,
+      expectedMatCost,
+      expectedSubCost,
+      _key:isoDate+'|'+costCode+'|'+String(r['Foreman']||''),
+    });
+  });
+  console.log('HJ Daily Detail parse:',{parsed:out.length,skipped});
+  return out;
+}
+
+// Rollup daily detail rows into cost-code summary (for backward-compat with job.actuals)
+function rollupActualsDetail(detail){
+  const byCode={};
+  detail.forEach(d=>{
+    if(!byCode[d.costCode]){
+      byCode[d.costCode]={
+        code:d.costCode,
+        description:d.costCodeDesc,
+        unit:d.unit,
+        budgetQty:0,
+        qtyInstalled:0,
+        actualHours:0,
+        actualEquipHrs:0,
+        actualLabor:0,
+        actualEquip:0,
+        actualMat:0,
+        actualSub:0,
+        actualCost:0,
+        budgetLabor:0,
+        budgetEquip:0,
+        budgetMat:0,
+        budgetSub:0,
+        budgetCost:0,
+        budgetHours:0,
+        lastDate:null,
+        firstDate:null,
+        dayCount:0,
+      };
+    }
+    const b=byCode[d.costCode];
+    b.qtyInstalled+=d.actualQty;
+    b.actualHours+=d.actualLaborHours;
+    b.actualEquipHrs+=d.actualEquipHours;
+    b.actualLabor+=d.actualLaborCost;
+    b.actualEquip+=d.actualEquipCost;
+    b.actualMat+=d.actualMatCost;
+    b.actualSub+=d.actualSubCost;
+    b.actualCost=b.actualLabor+b.actualEquip+b.actualMat+b.actualSub;
+    b.budgetLabor+=d.expectedLaborCost;
+    b.budgetEquip+=d.expectedEquipCost;
+    b.budgetMat+=d.expectedMatCost;
+    b.budgetSub+=d.expectedSubCost;
+    b.budgetCost=b.budgetLabor+b.budgetEquip+b.budgetMat+b.budgetSub;
+    b.budgetHours+=d.expectedLaborHours;
+    if(!b.firstDate||d.date<b.firstDate)b.firstDate=d.date;
+    if(!b.lastDate||d.date>b.lastDate)b.lastDate=d.date;
+    b.dayCount++;
+  });
+  // Compute derivative fields
+  Object.values(byCode).forEach(b=>{
+    b.qtyRemaining=Math.max(0,b.budgetQty-b.qtyInstalled);
+    b.pctComplete=b.budgetCost>0?(b.actualCost/b.budgetCost*100):0;
+    b.laborCostVar=b.budgetLabor-b.actualLabor;
+    b.equipCostVar=b.budgetEquip-b.actualEquip;
+    b.matCostVar=b.budgetMat-b.actualMat;
+    b.subCostVar=b.budgetSub-b.actualSub;
+    b.allCostVar=b.budgetCost-b.actualCost;
+  });
+  return Object.values(byCode);
+}
+
+// Merge new daily detail rows into existing — upsert by _key (date+code+foreman)
+// This is what makes re-import refresh-safe
+function mergeActualsDetail(existing,incoming){
+  const byKey={};
+  (existing||[]).forEach(r=>{byKey[r._key]=r});
+  incoming.forEach(r=>{byKey[r._key]=r}); // incoming wins on collision
+  return Object.values(byKey).sort((a,b)=>{
+    if(a.date!==b.date)return a.date<b.date?-1:1;
+    return a.costCode<b.costCode?-1:1;
+  });
+}
+
+// ═══════════════════════════════════════════
 // STAGING REVIEW
 // ═══════════════════════════════════════════
 function renderStaging(){
@@ -1240,6 +1387,17 @@ function renderStaging(){
       h+='<tr><th></th><th>Code</th><th>Description</th><th class="num">Budget Cost</th><th class="num">Actual Cost</th><th class="num">Qty Inst</th><th class="num">% Complete</th><th></th></tr>';
       data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
     }
+  }else if(type==='actualsDetail'){
+    // Summary banner — show totals
+    const tot=data.filter(d=>d._selected).reduce((s,d)=>({qty:s.qty+d.actualQty,lab:s.lab+d.actualLaborCost,eq:s.eq+d.actualEquipCost,mat:s.mat+d.actualMatCost,sub:s.sub+d.actualSubCost,hrs:s.hrs+d.actualLaborHours,all:s.all+d.actualAllCost}),{qty:0,lab:0,eq:0,mat:0,sub:0,hrs:0,all:0});
+    const uniqueCodes=new Set(data.filter(d=>d._selected).map(d=>d.costCode)).size;
+    const dateMin=data[0]?data[0].date:'';const dateMax=data[data.length-1]?data[data.length-1].date:'';
+    h=h.replace('<div class="card">','<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:10px 0;padding:12px;background:#F9F9F7;border-radius:6px;font-family:Oswald;"><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Rows</div><div style="font-size:18px;font-weight:600;">'+data.length.toLocaleString()+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Cost Codes</div><div style="font-size:18px;font-weight:600;">'+uniqueCodes+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Date Range</div><div style="font-size:13px;font-weight:600;">'+dateMin+' → '+dateMax+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Labor Hrs</div><div style="font-size:18px;font-weight:600;">'+tot.hrs.toFixed(1)+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Total Cost</div><div style="font-size:18px;font-weight:600;color:var(--orange);">$'+Math.round(tot.all).toLocaleString()+'</div></div></div><div class="card">');
+    h+='<tr><th></th><th>Date</th><th>Cost Code</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Lab Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Mat $</th><th class="num">Sub $</th><th class="num">Total</th><th>Foreman</th></tr>';
+    // Only show first 200 rows in staging for perf
+    const showMax=200;
+    data.slice(0,showMax).forEach((d,i)=>{if(!d._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td style="font-size:11px;">${d.date}</td><td><strong>${d.costCode}</strong></td><td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${d.costCodeDesc}</td><td>${d.unit}</td><td class="num">${fmt(d.actualQty)}</td><td class="num">${d.actualLaborHours.toFixed(1)}</td><td class="num">${fmtD(d.actualLaborCost)}</td><td class="num">${fmtD(d.actualEquipCost)}</td><td class="num">${fmtD(d.actualMatCost)}</td><td class="num">${fmtD(d.actualSubCost)}</td><td class="num"><strong>${fmtD(d.actualAllCost)}</strong></td><td style="font-size:10px;color:var(--text-light);">${d.foreman||'—'}</td></tr>`});
+    if(data.length>showMax)h+=`<tr><td colspan="13" style="text-align:center;padding:12px;color:var(--text-light);font-style:italic;">... and ${(data.length-showMax).toLocaleString()} more rows (all will be imported)</td></tr>`;
   }else{
     h+='<tr><th></th><th>#</th><th>Task</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th>Crew</th><th></th></tr>';
     data.forEach((t,i)=>{if(!t._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
@@ -1310,6 +1468,15 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     recalcDependencies(job);
   }else if(type==='actuals'){
     job.actuals=sel;
+  }else if(type==='actualsDetail'){
+    // Refresh-safe merge: upsert rows by (date+costCode+foreman) key
+    job.actualsDetail=mergeActualsDetail(job.actualsDetail||[],sel);
+    // Auto-regenerate the flat actuals summary so existing dashboards / JCS still work
+    job.actuals=rollupActualsDetail(job.actualsDetail);
+    job.meta.lastActualsImport=new Date().toISOString();
+    const dateRange=job.actualsDetail.length?(job.actualsDetail[0].date+' → '+job.actualsDetail[job.actualsDetail.length-1].date):'';
+    log(`Daily Detail: ${job.actualsDetail.length} total rows (${sel.length} new/updated this import). Range: ${dateRange}`);
+    addEditLog(`Imported ${sel.length} HJ daily detail rows`);
   }
   log(`${type}: ${sel.length} records confirmed.`);
   addEditLog('Imported '+sel.length+' '+type+' records');
@@ -2025,6 +2192,16 @@ function renderDashboard(){
   h+=`<div class="kpi"><div class="kpi-value">${fmt(totalMH)}</div><div class="kpi-label">Total Man Hours</div></div>`;
   h+=`<div class="kpi"><div class="kpi-value">${bids.length}</div><div class="kpi-label">Pay Items</div></div>`;
   if(schedDur) h+=`<div class="kpi"><div class="kpi-value">${schedDur}d</div><div class="kpi-label">Schedule Duration</div></div>`;
+  // Actuals freshness indicator (from daily detail imports)
+  if(m.lastActualsImport||(job.actualsDetail&&job.actualsDetail.length)){
+    const lastImp=m.lastActualsImport?new Date(m.lastActualsImport):null;
+    const daysAgo=lastImp?Math.floor((Date.now()-lastImp.getTime())/86400000):null;
+    const freshCls=daysAgo==null?'':daysAgo<=1?'good':daysAgo<=7?'':'warn';
+    const freshLbl=daysAgo==null?'Never':daysAgo===0?'Today':daysAgo===1?'Yesterday':daysAgo+'d ago';
+    const detailCount=(job.actualsDetail||[]).length;
+    const latestWorkDate=detailCount?job.actualsDetail[detailCount-1].date:'—';
+    h+=`<div class="kpi ${freshCls}"><div class="kpi-value" style="font-size:22px;">${freshLbl}</div><div class="kpi-label">Actuals Updated · ${detailCount} rows · thru ${latestWorkDate}</div></div>`;
+  }
   if(!hasBaseline) h+=`<div class="kpi" style="border-top-color:var(--sand);"><button class="edit-btn" onclick="lockBaseline()" style="width:100%;background:linear-gradient(135deg,var(--sand),#A89B8F);color:var(--white);border:none;">Lock Baseline</button><div class="kpi-label" style="margin-top:8px;">Snapshot budget</div></div>`;
   h+='</div>';
 
@@ -3154,7 +3331,8 @@ function renderBidItems(){
     h+=`<tr style="${isOpen?'background:#EBF5FB;':''}">`;
     h+=`<td>${it.idx+1}</td>`;
     h+=`<td>${it.clientItemNo||it.id}</td>`;
-    h+=`<td><strong>${flag}${esc(it.description)}</strong></td>`;
+    const _isCO=it._changeOrder||(job.bidItems||[]).some(b=>b.biditem===it.id&&b._changeOrder);
+    h+=`<td><strong>${flag}${_isCO?'<span class="co-badge" style="margin-right:6px;">CO</span>':''}${esc(it.description)}</strong></td>`;
     h+=`<td>${it.unit}</td>`;
     h+=`<td class="num">${fmt(it.contractQty)}</td>`;
     h+=`<td class="num">${fmtD2(c.unitPrice)}</td>`;
@@ -3386,8 +3564,8 @@ function renderSchedule(){
         if(ptf&&sd&&ptf>sd)depWarn=true;
       });
     }
-    const rowBg=dateWarn?'background:#FFE4E1;':depWarn?'background:#FFF8F0;':'';
-    const rowCls=dateWarn?'date-warn':depWarn?'dep-warn':'';
+    const rowBg=dateWarn?'background:#FFE4E1;':depWarn?'background:#FFF8F0;':t._changeOrder?'background:rgba(255,152,0,0.04);':'';
+    const rowCls=(dateWarn?'date-warn':depWarn?'dep-warn':'')+(t._changeOrder?' co-row':'');
 
     h+=`<tr class="${rowCls}" style="${rowBg}">`;
     h+=`<td style="color:var(--text-light);font-size:11px;">${t.id}</td>`;
@@ -3414,7 +3592,7 @@ function renderSchedule(){
         h+=`<td class="num" style="color:var(--text-light);font-size:11px;">—</td><td style="font-size:10px;color:var(--text-light);">—</td>`;
       }
     }
-    h+=`<td style="text-align:center;">${t._changeOrder?`<span class="co-badge">CO#${t._coNumber||'—'}</span>`:'—'}</td>`;
+    h+=`<td style="text-align:center;">${t._changeOrder?`<span class="co-badge">CO#${t._coNumber||'—'}</span>${t._coPhase?'<br><span style="font-size:9px;color:var(--text-light);font-family:Oswald;">'+t._coPhase+'</span>':''}`:'—'}</td>`;
     h+=`<td><button class="del-btn" onclick="removeScheduleTask(${i})" title="Delete task" style="font-size:10px;padding:2px 6px;">&#10005;</button></td>`;
     h+=`</tr>`;
   });
@@ -3692,34 +3870,104 @@ function addScheduleTask(){
   updateNavBadges();
 }
 
-// Add a change order task (Feature 4)
+// Add a change order task (Feature 4) — with phase code & bid item creation
 function addChangeOrderTask(){
   const job=Store.jobs[Store.activeJob];
   if(!job)return;
+
+  // ── Step 1: CO Number ──
   const coNumber=prompt('Enter Change Order Number (e.g., CO-001):','CO-');
   if(!coNumber)return;
+
+  // ── Step 2: Phase Code (default next 900xxx) ──
+  const existingPhases=(job.bidItems||[]).map(b=>parseInt(b.biditem)||0).filter(n=>n>=900000&&n<1000000);
+  const nextPhase=existingPhases.length?Math.max(...existingPhases)+1:900001;
+  const phaseInput=prompt('Phase Code (900000-series):',String(nextPhase));
+  if(!phaseInput)return;
+  const phaseCode=phaseInput.trim();
+
+  // ── Step 3: Description / Name ──
+  const defName=`${phaseCode} - ${coNumber}`;
+  const coName=prompt('Change Order Description:',defName);
+  if(!coName)return;
+
+  // ── Step 4: Optional CO amount ──
+  const amtStr=prompt('CO Amount ($):','0');
+  const coAmount=parseFloat((amtStr||'0').replace(/[^0-9.\-]/g,''))||0;
+
+  // ── Create schedule task ──
   const nextId=job.schedule.length?Math.max(...job.schedule.map(t=>parseInt(t.id)||0))+1:1;
   const lastTask=job.schedule.length?job.schedule[job.schedule.length-1]:null;
   const defStart=lastTask&&toDate(lastTask.finish)?toDate(lastTask.finish):new Date();
-  const defFinish=new Date(defStart.getTime()+7*86400000);
+  const defFinish=new Date(defStart.getTime()+14*86400000);
   job.schedule.push({
     id:String(nextId),
-    name:'Change Order Task',
+    name:coName,
     start:defStart,
     finish:defFinish,
-    durationDays:7,
-    durationStr:'7d',
+    durationDays:14,
+    durationStr:'14d',
     predecessors:'',
     status:'Not Started',
     atRisk:'No',
     crew:'',
     variance:null,
     _changeOrder:true,
+    _coNumber:coNumber,
+    _coPhase:phaseCode
+  });
+
+  // ── Create bid item for this CO ──
+  if(!job.bidItems)job.bidItems=[];
+  job.bidItems.push({
+    biditem:phaseCode,
+    description:coName,
+    units:'LS',
+    bidQuantity:1,
+    takeoffQuantity:1,
+    labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,trucking:0,coOH:0,
+    directTotal:coAmount,
+    indirects:0,addonBond:0,markup:0,
+    takeoffTotal:coAmount,
+    balancedTotal:coAmount,
+    unitPrice:coAmount,
+    manHours:0,
+    bidTotal:coAmount,
+    _selected:true,
+    _changeOrder:true,
+    _coNumber:coNumber,
+    _coPhase:phaseCode
+  });
+
+  // ── Create matching SOV item ──
+  if(!job.sovItems)job.sovItems=[];
+  job.sovItems.push({
+    id:phaseCode,
+    clientItemNo:phaseCode,
+    description:coName,
+    contractQty:1,
+    unit:'LS',
+    unitPrice:coAmount,
+    retainagePct:5,
+    pctCompleteMethod:'cost',
+    activityIds:[],
+    phaseCodes:[{code:phaseCode,description:coName,parentPhase:phaseCode}],
+    allocatedOH:0,
+    allocatedProfit:0,
+    _original:false,
+    _changeOrder:true,
     _coNumber:coNumber
   });
+
+  // ── Auto-map task → bid item via taskMap ──
+  if(!job.taskMap)job.taskMap={};
+  job.taskMap[String(nextId)]=[phaseCode];
+
+  // ── Update meta dates ──
   const allDates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
   if(allDates.length){job.meta.startDate=new Date(Math.min(...allDates));job.meta.endDate=new Date(Math.max(...allDates))}
-  addEditLog(`Schedule: Added change order task ${coNumber}`);
+
+  addEditLog(`Schedule: Added CO ${coNumber} — Phase ${phaseCode} — "${coName}" ($${coAmount.toLocaleString()})`);
   saveJob(Store.activeJob);
   renderSchedule();
   updateNavBadges();
@@ -3735,10 +3983,18 @@ function removeScheduleTask(idx){
 
   const name=t.name;
   const taskId=t.id;
+  const wasCO=t._changeOrder;
+  const coPhase=t._coPhase;
   job.schedule.splice(idx,1);
 
   // Clean up taskMap entries for the deleted task
   if(job.taskMap){delete job.taskMap[taskId]}
+
+  // If this was a CO task with a phase code, remove the auto-created bid item & SOV item
+  if(wasCO&&coPhase){
+    if(job.bidItems){job.bidItems=job.bidItems.filter(b=>b.biditem!==coPhase||!b._changeOrder)}
+    if(job.sovItems){job.sovItems=job.sovItems.filter(s=>s.id!==coPhase||!s._changeOrder)}
+  }
 
   // Update meta dates
   const allDates=job.schedule.map(tk=>toDate(tk.start)).concat(job.schedule.map(tk=>toDate(tk.finish))).filter(d=>d);
