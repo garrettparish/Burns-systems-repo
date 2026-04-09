@@ -2127,14 +2127,47 @@ function evaPlannedPct(job,asOf){
   const span=ed.getTime()-sd.getTime();
   return span>0?(ao.getTime()-sd.getTime())/span:0;
 }
+// Build the AUTHORITATIVE BAC map keyed by HJ cost code, summed from job.activities.
+// This is the only reliable source of true budget — actuals[].budgetCost from the HJ
+// Daily Detail rollup is quantity-driven and undercounts unit-price jobs until 100% installed.
+function evaBuildBACMap(job){
+  const map={};
+  const descMap={};
+  const qtyMap={};
+  const acts=job.activities||[];
+  acts.forEach(a=>{
+    // HJ phase code is the join key; fall back to HeavyBid activity code if no HJ mapping
+    const key=String(a.phaseCode||a.code||'').trim();
+    if(!key)return;
+    map[key]=(map[key]||0)+(Number(a.directTotal)||0);
+    qtyMap[key]=(qtyMap[key]||0)+(Number(a.quantity)||0);
+    if(!descMap[key])descMap[key]=a.phaseDesc||a.description||'';
+  });
+  return{bac:map,desc:descMap,qty:qtyMap};
+}
 // Compute full EVA snapshot for a job at a given "as of" date
 function computeEVA(job,asOf){
   const acts=(job.actuals||[]);
   const plannedPct=evaPlannedPct(job,asOf);
-  const phases=acts.map(a=>{
-    const bac=a.budgetCost||0;
+  // Build BAC map from HeavyBid activities (authoritative source)
+  const bacMap=evaBuildBACMap(job);
+  const haveActivities=Object.keys(bacMap.bac).length>0;
+  // Build a lookup of actuals by cost code for easy join
+  const actualsByCode={};
+  acts.forEach(a=>{actualsByCode[String(a.code||'').trim()]=a});
+  // Phase universe = union of activities cost codes AND actuals cost codes
+  // (so phases that haven't started yet still count toward BAC, and orphan actuals
+  // codes still appear so the user can see them)
+  const allCodes=new Set([...Object.keys(bacMap.bac),...Object.keys(actualsByCode)]);
+  const phases=Array.from(allCodes).sort().map(code=>{
+    const a=actualsByCode[code]||{code,description:bacMap.desc[code]||'',budgetCost:0,actualCost:0,budgetQty:bacMap.qty[code]||0,qtyInstalled:0};
+    // Authoritative BAC: HeavyBid activities total. Fallback: actuals[].budgetCost.
+    const bac=haveActivities?(bacMap.bac[code]||a.budgetCost||0):(a.budgetCost||0);
     const ac=a.actualCost||0;
-    const pct=evaPctComplete(a,job);
+    // % complete: override > qty-based (using activities qty if actuals qty=0) > cost-based
+    let pctSrc={...a};
+    if(haveActivities&&!pctSrc.budgetQty&&bacMap.qty[code]){pctSrc.budgetQty=bacMap.qty[code]}
+    const pct=evaPctComplete(pctSrc,job);
     const ev=bac*pct;
     const pv=bac*plannedPct;
     const cpi=ac>0?ev/ac:(ev>0?Infinity:0);
@@ -2144,7 +2177,7 @@ function computeEVA(job,asOf){
     const eac_simple=ac+(bac-ev);
     const denom=cpi*spi;
     const eac_composite=denom>0&&isFinite(denom)?ac+(bac-ev)/denom:eac_simple;
-    return{code:a.code,description:a.description,bac,ac,ev,pv,pct,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite};
+    return{code,description:a.description||bacMap.desc[code]||'',bac,ac,ev,pv,pct,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite};
   });
   const sum=phases.reduce((s,p)=>({bac:s.bac+p.bac,ev:s.ev+p.ev,ac:s.ac+p.ac,pv:s.pv+p.pv}),{bac:0,ev:0,ac:0,pv:0});
   const cpi=sum.ac>0?sum.ev/sum.ac:0;
@@ -2261,7 +2294,7 @@ function renderEVA(){
     h+='<li><strong>PV — Planned Value</strong>: The dollar value of work that <em>should</em> be complete by the as-of date based on the schedule. Currently calculated as a linear ramp from job start to job end.</li>';
     h+='<li><strong>EV — Earned Value</strong>: The dollar value of work <em>actually</em> complete. For each cost code: <code>BAC × % complete</code>. This is the most important number in EVA — it converts physical progress into dollars.</li>';
     h+='<li><strong>AC — Actual Cost</strong>: What you have actually spent so far (labor + equip + material + sub) from your HeavyJob actuals.</li>';
-    h+='<li><strong>BAC — Budget at Completion</strong>: The total budgeted cost for the job (sum of cost-code budgets).</li>';
+    h+='<li><strong>BAC — Budget at Completion</strong>: The total budgeted direct cost for the job. Pulled from the HeavyBid Activities export (sum of <code>directTotal</code> per cost code). Includes phases that haven\'t started yet, so the total reflects the full contracted budget — not just the work in progress.</li>';
     h+='</ul>';
 
     h+='<p><strong>Performance indices (the headline KPIs):</strong></p>';
@@ -2349,14 +2382,22 @@ function renderEVA(){
   h+='<th class="num">BAC</th><th class="num">% Comp</th><th class="num">EV</th><th class="num">AC</th>';
   h+='<th class="num">CPI</th><th class="num">SPI</th><th class="num">EAC</th><th class="num">VAC</th>';
   h+='<th style="text-align:center;padding:6px;">Override %</th></tr></thead><tbody>';
-  e.phases.forEach(p=>{
+  // Sort: started phases (AC>0) first by BAC desc, then not-started phases by BAC desc
+  const sortedPhases=e.phases.slice().sort((a,b)=>{
+    const aStarted=a.ac>0?1:0,bStarted=b.ac>0?1:0;
+    if(aStarted!==bStarted)return bStarted-aStarted;
+    return b.bac-a.bac;
+  });
+  sortedPhases.forEach(p=>{
     const eacP=method==='simple'?p.eac_simple:method==='composite'?p.eac_composite:p.eac_cpi;
     const vacP=p.bac-eacP;
     const cpiC=p.cpi>=1?'good':p.cpi>=.95?'':'warn';
     const spiC=p.spi>=1?'good':p.spi>=.95?'':'warn';
     const vacC=vacP>=0?'good':'warn';
     const ovVal=(job.eva.manualPctOverrides&&job.eva.manualPctOverrides[p.code]!=null)?(job.eva.manualPctOverrides[p.code]*100).toFixed(0):'';
-    h+=`<tr><td style="padding:6px;">${esc(p.code)}</td><td style="padding:6px;">${esc(p.description||'')}</td>`;
+    const notStarted=p.ac===0&&p.ev===0;
+    const rowStyle=notStarted?' style="opacity:.55;"':'';
+    h+=`<tr${rowStyle}><td style="padding:6px;">${esc(p.code)}${notStarted?' <em style="font-size:10px;color:var(--text-light);">not started</em>':''}</td><td style="padding:6px;">${esc(p.description||'')}</td>`;
     h+=`<td class="num">${fmtD(p.bac)}</td><td class="num">${fmtPct(p.pct)}</td>`;
     h+=`<td class="num">${fmtD(p.ev)}</td><td class="num">${fmtD(p.ac)}</td>`;
     h+=`<td class="num ${cpiC}">${isFinite(p.cpi)?p.cpi.toFixed(2):'—'}</td>`;
