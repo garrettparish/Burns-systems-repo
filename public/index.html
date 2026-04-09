@@ -261,6 +261,9 @@ tr:hover{background:#FAF8F5}
     <button class="sub-tab" data-sub="biditems" onclick="switchSubTab('biditems')">Pay Items</button>
     <button class="sub-tab" data-sub="schedule" onclick="switchSubTab('schedule')">Schedule</button>
     <button class="sub-tab" data-sub="jcs" onclick="switchSubTab('jcs')">Job Cost Schedule</button>
+    <button class="sub-tab" data-sub="eva" onclick="switchSubTab('eva')">EVA</button>
+    <button class="sub-tab" data-sub="forecast" onclick="switchSubTab('forecast')">Forecast</button>
+    <button class="sub-tab" data-sub="payapps" onclick="switchSubTab('payapps')">Pay Apps</button>
     <button class="sub-tab" data-sub="cashflow" onclick="switchSubTab('cashflow')">Cash Flow</button>
     <button class="sub-tab" data-sub="setup" onclick="switchSubTab('setup')">Project Set Up</button>
     <button onclick="showTabHelp()" style="background:none;border:2px solid var(--sand);color:var(--sand);font-family:Oswald,sans-serif;font-size:13px;font-weight:700;width:26px;height:26px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-left:auto;transition:all .2s;" title="Tab Info &amp; Help" onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'" onmouseout="this.style.borderColor='var(--sand)';this.style.color='var(--sand)'">?</button>
@@ -288,6 +291,21 @@ tr:hover{background:#FAF8F5}
   <!-- Sub-panel: JCS -->
   <div id="sub-jcs" class="sub-panel">
     <div id="jcsContent"></div>
+  </div>
+
+  <!-- Sub-panel: EVA -->
+  <div id="sub-eva" class="sub-panel">
+    <div id="evaContent"></div>
+  </div>
+
+  <!-- Sub-panel: Forecast -->
+  <div id="sub-forecast" class="sub-panel">
+    <div id="forecastContent"></div>
+  </div>
+
+  <!-- Sub-panel: Pay Apps -->
+  <div id="sub-payapps" class="sub-panel">
+    <div id="payAppsContent"></div>
   </div>
 
   <!-- Sub-panel: Cash Flow -->
@@ -987,6 +1005,9 @@ function renderActiveSubTab(){
     biditems:renderBidItems,
     schedule:renderSchedule,
     jcs:renderJobCostSchedule,
+    eva:renderEVA,
+    forecast:renderForecast,
+    payapps:renderPayApps,
     cashflow:renderCashFlowProjection,
     setup:updateImportPanel
   };
@@ -1412,7 +1433,7 @@ function renderStaging(){
       jobKeys.forEach(k=>{
         const j=Store.jobs[k];const jb=byJob[k];
         const dMin=jb.dates.slice().sort()[0];const dMax=jb.dates.slice().sort().reverse()[0];
-        jp+=`<label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer;"><input type="checkbox" ${jf[k]!==false?'checked':''} onchange="Store.staging.jobFilter['${k}']=this.checked;renderStaging();"><span style="flex:1;"><strong>${esc(j.meta.name)} #${esc(j.meta.number||'')}</strong> — ${jb.rows} rows, ${jb.codes.size} codes, ${dMin} → ${dMax}</span><span style="font-family:Oswald;color:var(--orange);font-weight:600;">$${Math.round(jb.cost).toLocaleString()}</span></label>`;
+        jp+=`<label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer;"><input type="checkbox" ${jf[k]!==false?'checked':''} onchange="Store.staging.jobFilter['${k}']=this.checked;renderStaging();"><span style="flex:1;"><strong>${esc(j.meta.name)} #${esc(j.meta.number||'')}</strong> — ${jb.rows} rows, ${jb.codes.size} codes, ${dMin} → ${dMax}</span><span style="font-family:Oswald;color:var(--orange);font-weight:600;margin-left:12px;white-space:nowrap;">· $${Math.round(jb.cost).toLocaleString()}</span></label>`;
       });
       jp+='</div>';
       h=h.replace('<div class="card">',jp+'<div class="card">');
@@ -1499,6 +1520,8 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     recalcDependencies(job);
   }else if(type==='actuals'){
     job.actuals=sel;
+    // Capture EVA snapshot on every actuals import (in addition to weekly auto-capture)
+    if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(job);
   }else if(type==='actualsDetail'){
     // Multi-job dispatch: group selected rows by _targetJobKey, apply to each
     const byJob={};
@@ -1510,6 +1533,8 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
       tj.actualsDetail=mergeActualsDetail(tj.actualsDetail||[],byJob[jk]);
       tj.actuals=rollupActualsDetail(tj.actualsDetail);
       tj.meta.lastActualsImport=now;
+      // Capture EVA snapshot for each updated job
+      if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(tj);
       const dr=tj.actualsDetail.length?(tj.actualsDetail[0].date+' → '+tj.actualsDetail[tj.actualsDetail.length-1].date):'';
       log(`${tj.meta.name} #${tj.meta.number}: ${tj.actualsDetail.length} total rows (${byJob[jk].length} new/updated). Range: ${dr}`);
     });
@@ -2080,6 +2105,643 @@ function saveEditRow(){const{type,index,isStaging}=_editCtx;const src=isStaging?
     if(!isStaging){const job=Store.jobs[Store.activeJob];if(job){const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}}}
   }
   closeEditRow();if(isStaging)renderStaging();else{const desc=type==='activity'?(r.code+' '+r.description):type==='biditem'?(r.biditem+' '+r.description):(r.name||'task');addEditLog('Edited '+type+': '+desc.substring(0,40));renderBidItems();renderSchedule();renderDashboard();renderJobCostSchedule();saveJob(Store.activeJob)}}
+
+// ═══════════════════════════════════════════
+// EARNED VALUE ANALYSIS (Phase 2 Step 2)
+// ═══════════════════════════════════════════
+// Compute %complete for one phase: manual override > qty-based > cost-based
+function evaPctComplete(a,job){
+  const ov=job.eva&&job.eva.manualPctOverrides&&job.eva.manualPctOverrides[a.code];
+  if(ov!=null&&!isNaN(ov))return Math.max(0,Math.min(1,Number(ov)));
+  if(a.budgetQty>0&&a.qtyInstalled>=0)return Math.max(0,Math.min(1,a.qtyInstalled/a.budgetQty));
+  if(a.budgetCost>0)return Math.max(0,Math.min(1,a.actualCost/a.budgetCost));
+  return 0;
+}
+// Linear planned %complete from job start→end at "as of" date (no schedule = 0)
+function evaPlannedPct(job,asOf){
+  const sd=toDate(job.meta.startDate),ed=toDate(job.meta.endDate);
+  if(!sd||!ed)return 0;
+  const ao=asOf instanceof Date?asOf:new Date();
+  if(ao<=sd)return 0;
+  if(ao>=ed)return 1;
+  const span=ed.getTime()-sd.getTime();
+  return span>0?(ao.getTime()-sd.getTime())/span:0;
+}
+// Compute full EVA snapshot for a job at a given "as of" date
+function computeEVA(job,asOf){
+  const acts=(job.actuals||[]);
+  const plannedPct=evaPlannedPct(job,asOf);
+  const phases=acts.map(a=>{
+    const bac=a.budgetCost||0;
+    const ac=a.actualCost||0;
+    const pct=evaPctComplete(a,job);
+    const ev=bac*pct;
+    const pv=bac*plannedPct;
+    const cpi=ac>0?ev/ac:(ev>0?Infinity:0);
+    const spi=pv>0?ev/pv:(ev>0?Infinity:0);
+    const cv=ev-ac, sv=ev-pv;
+    const eac_cpi=cpi>0&&isFinite(cpi)?bac/cpi:bac;
+    const eac_simple=ac+(bac-ev);
+    const denom=cpi*spi;
+    const eac_composite=denom>0&&isFinite(denom)?ac+(bac-ev)/denom:eac_simple;
+    return{code:a.code,description:a.description,bac,ac,ev,pv,pct,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite};
+  });
+  const sum=phases.reduce((s,p)=>({bac:s.bac+p.bac,ev:s.ev+p.ev,ac:s.ac+p.ac,pv:s.pv+p.pv}),{bac:0,ev:0,ac:0,pv:0});
+  const cpi=sum.ac>0?sum.ev/sum.ac:0;
+  const spi=sum.pv>0?sum.ev/sum.pv:0;
+  const cv=sum.ev-sum.ac, sv=sum.ev-sum.pv;
+  const eac_cpi=cpi>0?sum.bac/cpi:sum.bac;
+  const eac_simple=sum.ac+(sum.bac-sum.ev);
+  const denom2=cpi*spi;
+  const eac_composite=denom2>0?sum.ac+(sum.bac-sum.ev)/denom2:eac_simple;
+  const tcpi=(sum.bac-sum.ac)>0?(sum.bac-sum.ev)/(sum.bac-sum.ac):0;
+  return{phases,bac:sum.bac,ev:sum.ev,ac:sum.ac,pv:sum.pv,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite,etc_cpi:eac_cpi-sum.ac,vac_cpi:sum.bac-eac_cpi,tcpi,plannedPct};
+}
+// ISO Monday of the week containing date d, as YYYY-MM-DD (UTC-based to avoid TZ drift)
+function evaWeekKey(d){
+  const src=d instanceof Date?d:new Date(d);
+  const dt=new Date(Date.UTC(src.getFullYear(),src.getMonth(),src.getDate()));
+  const day=dt.getUTCDay(); // 0=Sun..6=Sat
+  const diff=(day===0?-6:1-day);
+  dt.setUTCDate(dt.getUTCDate()+diff);
+  return dt.toISOString().slice(0,10);
+}
+// Capture/refresh this week's EVA snapshot. Safe to call repeatedly:
+// the current week's row is upserted in place; older weeks are never touched.
+function evaMaybeSnapshot(job){
+  if(!job.actuals||!job.actuals.length)return;
+  if(!job.evaSnapshots)job.evaSnapshots=[];
+  const wk=evaWeekKey(new Date());
+  const e=computeEVA(job,new Date());
+  if(!e.bac)return;
+  const row={weekOf:wk,bac:e.bac,pv:e.pv,ev:e.ev,ac:e.ac,cpi:e.cpi,spi:e.spi,capturedAt:new Date().toISOString()};
+  const idx=job.evaSnapshots.findIndex(s=>s.weekOf===wk);
+  if(idx>=0)job.evaSnapshots[idx]=row;
+  else job.evaSnapshots.push(row);
+  // Keep snapshots sorted oldest→newest
+  job.evaSnapshots.sort((a,b)=>a.weekOf<b.weekOf?-1:1);
+}
+function evaSetMethod(method){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.eva)job.eva={};
+  job.eva.defaultEacMethod=method;
+  saveJob(Store.activeJob);
+  renderEVA();
+}
+function evaSetOverride(code,val){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.eva)job.eva={};
+  if(!job.eva.manualPctOverrides)job.eva.manualPctOverrides={};
+  if(val===''||val==null){delete job.eva.manualPctOverrides[code]}
+  else{const n=parseFloat(val);if(isNaN(n))return;job.eva.manualPctOverrides[code]=Math.max(0,Math.min(1,n/100))}
+  saveJob(Store.activeJob);
+  renderEVA();
+}
+function renderEVA(){
+  const el=document.getElementById('evaContent');
+  if(!el)return;
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
+  const job=Store.jobs[Store.activeJob];
+  if(!job.actuals||!job.actuals.length){
+    el.innerHTML='<div class="empty-state"><h2>No Actuals Yet</h2><p>Import HeavyJob actuals (summary or daily detail) from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> to enable Earned Value Analysis.</p></div>';
+    return;
+  }
+  // Auto-snapshot weekly
+  evaMaybeSnapshot(job);
+  if(!job.eva)job.eva={};
+  const method=job.eva.defaultEacMethod||'cpi';
+  const e=computeEVA(job,new Date());
+  const eacShown=method==='simple'?e.eac_simple:method==='composite'?e.eac_composite:e.eac_cpi;
+  const etcShown=eacShown-e.ac;
+  const vacShown=e.bac-eacShown;
+  const cpiCls=e.cpi>=1?'good':e.cpi>=.95?'':'warn';
+  const spiCls=e.spi>=1?'good':e.spi>=.95?'':'warn';
+  const cvCls=e.cv>=0?'good':'warn';
+  const svCls=e.sv>=0?'good':'warn';
+  const vacCls=vacShown>=0?'good':'warn';
+
+  let h='';
+  // Header / method picker
+  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"><span>Earned Value — As of '+new Date().toLocaleDateString()+'</span>';
+  h+='<span style="font-size:12px;font-weight:400;color:var(--text-light);">EAC Method: ';
+  h+=`<select onchange="evaSetMethod(this.value)" style="font-family:Oswald;font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid var(--sand);">`;
+  h+=`<option value="cpi" ${method==='cpi'?'selected':''}>BAC ÷ CPI (Recommended)</option>`;
+  h+=`<option value="simple" ${method==='simple'?'selected':''}>AC + (BAC − EV)</option>`;
+  h+=`<option value="composite" ${method==='composite'?'selected':''}>AC + (BAC − EV) ÷ (CPI × SPI)</option>`;
+  h+='</select></span></div>';
+
+  // KPI tiles grid
+  const tile=(label,val,cls,sub)=>`<div class="kpi" style="padding:12px;background:var(--card);border:1px solid var(--sand);border-radius:8px;text-align:center;"><div style="font-family:Oswald;font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.6px;">${label}</div><div class="${cls||''}" style="font-family:Oswald;font-size:22px;font-weight:600;margin-top:4px;">${val}</div>${sub?'<div style="font-size:11px;color:var(--text-light);margin-top:2px;">'+sub+'</div>':''}</div>`;
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:12px;">';
+  h+=tile('BAC',fmtD(e.bac));
+  h+=tile('EV (Earned)',fmtD(e.ev),'',fmtPct(e.bac>0?e.ev/e.bac:0)+' complete');
+  h+=tile('AC (Actual)',fmtD(e.ac));
+  h+=tile('PV (Planned)',fmtD(e.pv),'',fmtPct(e.plannedPct)+' planned');
+  h+=tile('CPI',e.cpi.toFixed(2),cpiCls,e.cpi>=1?'On/under budget':'Over budget');
+  h+=tile('SPI',e.spi.toFixed(2),spiCls,e.spi>=1?'On/ahead of schedule':'Behind schedule');
+  h+=tile('Cost Variance',fmtD(e.cv),cvCls);
+  h+=tile('Schedule Variance',fmtD(e.sv),svCls);
+  h+=tile('EAC',fmtD(eacShown),'',method==='cpi'?'BAC ÷ CPI':method==='simple'?'AC + remaining':'CPI × SPI weighted');
+  h+=tile('ETC',fmtD(etcShown),'','to go');
+  h+=tile('VAC',fmtD(vacShown),vacCls,vacShown>=0?'under budget':'over budget');
+  h+=tile('TCPI',e.tcpi?e.tcpi.toFixed(2):'—','',e.tcpi>1.1?'Aggressive':e.tcpi>1?'Tight':'Achievable');
+  h+='</div></div>';
+
+  // S-curve trend chart from snapshots
+  const snaps=job.evaSnapshots||[];
+  if(snaps.length){
+    const w=900,padL=60,padR=20,padT=20,padB=40,chartH=220;
+    const maxV=Math.max(...snaps.map(s=>Math.max(s.pv,s.ev,s.ac)),e.bac,1);
+    const xStep=snaps.length>1?(w-padL-padR)/(snaps.length-1):0;
+    const x=i=>padL+i*xStep;
+    const y=v=>padT+chartH-(v/maxV)*chartH;
+    const series=(key,color,label)=>{
+      let p='';
+      snaps.forEach((s,i)=>{p+=(i?'L':'M')+x(i)+','+y(s[key])});
+      return`<path d="${p}" stroke="${color}" stroke-width="2" fill="none"/>`;
+    };
+    let svg=`<svg viewBox="0 0 ${w} ${chartH+padT+padB}" style="width:100%;height:auto;background:var(--card);border-radius:6px;">`;
+    // BAC reference line
+    svg+=`<line x1="${padL}" y1="${y(e.bac)}" x2="${w-padR}" y2="${y(e.bac)}" stroke="#bbb" stroke-width="1" stroke-dasharray="4,4"/>`;
+    svg+=`<text x="${w-padR-4}" y="${y(e.bac)-4}" font-size="10" fill="#888" text-anchor="end" font-family="Oswald">BAC ${fmtD(e.bac)}</text>`;
+    // Y-axis gridlines
+    for(let i=0;i<=4;i++){const yv=padT+(chartH/4)*i;const vv=maxV*(1-i/4);svg+=`<line x1="${padL}" y1="${yv}" x2="${w-padR}" y2="${yv}" stroke="#eee"/><text x="${padL-6}" y="${yv+3}" font-size="9" fill="#888" text-anchor="end" font-family="Oswald">${fmtD(vv)}</text>`}
+    svg+=series('pv','#888','PV');
+    svg+=series('ev','#48742C','EV');
+    svg+=series('ac','#F26722','AC');
+    snaps.forEach((s,i)=>{
+      svg+=`<circle cx="${x(i)}" cy="${y(s.pv)}" r="2" fill="#888"/>`;
+      svg+=`<circle cx="${x(i)}" cy="${y(s.ev)}" r="3" fill="#48742C"/>`;
+      svg+=`<circle cx="${x(i)}" cy="${y(s.ac)}" r="3" fill="#F26722"/>`;
+      if(i===0||i===snaps.length-1||snaps.length<=8){
+        svg+=`<text x="${x(i)}" y="${chartH+padT+14}" font-size="9" fill="#888" text-anchor="middle" font-family="Oswald">${s.weekOf.slice(5)}</text>`;
+      }
+    });
+    svg+='</svg>';
+    h+='<div class="card" style="margin-top:16px;"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;"><span>S-Curve — PV / EV / AC Trend</span><span style="font-size:11px;font-weight:400;"><span style="color:#888;">■ PV</span>  <span style="color:#48742C;">■ EV</span>  <span style="color:#F26722;">■ AC</span></span></div>'+svg+'<div style="font-size:11px;color:var(--text-light);text-align:center;margin-top:4px;">'+snaps.length+' weekly snapshot'+(snaps.length===1?'':'s')+' — auto-captured Monday mornings</div></div>';
+  }else{
+    h+='<div class="card" style="margin-top:16px;"><div class="card-title">S-Curve — PV / EV / AC Trend</div><div style="padding:24px;text-align:center;color:var(--text-light);font-size:13px;">No snapshots yet — first weekly snapshot will be captured automatically. Reload after Monday or import more actuals to begin building the trend.</div></div>';
+  }
+
+  // Per-phase EVA table
+  h+='<div class="card" style="margin-top:16px;"><div class="card-title">Per-Phase EVA</div>';
+  h+='<div style="overflow-x:auto;"><table style="width:100%;font-size:13px;"><thead><tr style="background:var(--card);">';
+  h+='<th style="text-align:left;padding:6px;">Code</th><th style="text-align:left;padding:6px;">Description</th>';
+  h+='<th class="num">BAC</th><th class="num">% Comp</th><th class="num">EV</th><th class="num">AC</th>';
+  h+='<th class="num">CPI</th><th class="num">SPI</th><th class="num">EAC</th><th class="num">VAC</th>';
+  h+='<th style="text-align:center;padding:6px;">Override %</th></tr></thead><tbody>';
+  e.phases.forEach(p=>{
+    const eacP=method==='simple'?p.eac_simple:method==='composite'?p.eac_composite:p.eac_cpi;
+    const vacP=p.bac-eacP;
+    const cpiC=p.cpi>=1?'good':p.cpi>=.95?'':'warn';
+    const spiC=p.spi>=1?'good':p.spi>=.95?'':'warn';
+    const vacC=vacP>=0?'good':'warn';
+    const ovVal=(job.eva.manualPctOverrides&&job.eva.manualPctOverrides[p.code]!=null)?(job.eva.manualPctOverrides[p.code]*100).toFixed(0):'';
+    h+=`<tr><td style="padding:6px;">${esc(p.code)}</td><td style="padding:6px;">${esc(p.description||'')}</td>`;
+    h+=`<td class="num">${fmtD(p.bac)}</td><td class="num">${fmtPct(p.pct)}</td>`;
+    h+=`<td class="num">${fmtD(p.ev)}</td><td class="num">${fmtD(p.ac)}</td>`;
+    h+=`<td class="num ${cpiC}">${isFinite(p.cpi)?p.cpi.toFixed(2):'—'}</td>`;
+    h+=`<td class="num ${spiC}">${isFinite(p.spi)?p.spi.toFixed(2):'—'}</td>`;
+    h+=`<td class="num">${fmtD(eacP)}</td><td class="num ${vacC}">${fmtD(vacP)}</td>`;
+    h+=`<td style="text-align:center;padding:6px;"><input type="number" min="0" max="100" step="1" placeholder="auto" value="${ovVal}" onchange="evaSetOverride('${p.code.replace(/'/g,"\\'")}',this.value)" style="width:60px;font-family:Oswald;font-size:12px;text-align:right;padding:3px 6px;border:1px solid var(--sand);border-radius:4px;"></td></tr>`;
+  });
+  h+='</tbody></table></div>';
+  h+='<div style="font-size:11px;color:var(--text-light);margin-top:8px;">% Complete uses installed quantity when available, otherwise AC ÷ BAC. Override the column to lock a phase to a PM-set value.</div>';
+  h+='</div>';
+
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// FORECAST ENGINE (Phase 2 Step 4)
+// ═══════════════════════════════════════════
+// Per-cost-code forecast: PM override > selected EAC method > BAC
+function forecastFor(phase,job){
+  const ovs=job.forecast&&job.forecast.overrides;
+  if(ovs&&ovs[phase.code]!=null&&!isNaN(ovs[phase.code]))return Number(ovs[phase.code]);
+  const src=(job.forecast&&job.forecast.source)||'eac_cpi';
+  const v=phase[src];
+  return(v!=null&&isFinite(v))?v:phase.bac;
+}
+function setForecastSource(src){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.forecast)job.forecast={};
+  job.forecast.source=src;
+  saveJob(Store.activeJob);renderForecast();
+}
+function setForecastOverride(code,val){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.forecast)job.forecast={};
+  if(!job.forecast.overrides)job.forecast.overrides={};
+  if(val===''||val==null){delete job.forecast.overrides[code]}
+  else{const n=parseFloat(String(val).replace(/[^0-9.\-]/g,''));if(isNaN(n))return;job.forecast.overrides[code]=n}
+  saveJob(Store.activeJob);renderForecast();
+}
+function clearForecastOverride(code){setForecastOverride(code,'')}
+function renderForecast(){
+  const el=document.getElementById('forecastContent');
+  if(!el)return;
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
+  const job=Store.jobs[Store.activeJob];
+  if(!job.actuals||!job.actuals.length){el.innerHTML='<div class="empty-state"><h2>No Actuals Yet</h2><p>Import HeavyJob actuals from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> to enable forecasting.</p></div>';return}
+  if(!job.forecast)job.forecast={};
+  const src=job.forecast.source||'eac_cpi';
+  const e=computeEVA(job,new Date());
+  // Build forecast rows
+  const rows=e.phases.map(p=>{
+    const fc=forecastFor(p,job);
+    const variance=p.bac-fc;
+    const override=(job.forecast.overrides&&job.forecast.overrides[p.code]!=null);
+    return{...p,forecast:fc,variance,override};
+  });
+  const totBac=rows.reduce((s,r)=>s+r.bac,0);
+  const totAc=rows.reduce((s,r)=>s+r.ac,0);
+  const totForecast=rows.reduce((s,r)=>s+r.forecast,0);
+  const totVar=totBac-totForecast;
+  const contract=job.meta.contractAmount||0;
+  const projMargin=contract-totForecast;
+  const projMarginPct=contract>0?(projMargin/contract)*100:0;
+  const overrideCount=rows.filter(r=>r.override).length;
+  const varCls=totVar>=0?'good':'warn';
+  const marginCls=projMargin>=0?'good':'warn';
+
+  let h='';
+  // Header card with method picker + KPIs
+  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"><span>Forecast Engine</span>';
+  h+='<span style="font-size:12px;font-weight:400;color:var(--text-light);">Default forecast source: ';
+  h+=`<select onchange="setForecastSource(this.value)" style="font-family:Oswald;font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid var(--sand);">`;
+  h+=`<option value="eac_cpi" ${src==='eac_cpi'?'selected':''}>EAC = BAC ÷ CPI (Recommended)</option>`;
+  h+=`<option value="eac_simple" ${src==='eac_simple'?'selected':''}>EAC = AC + (BAC − EV)</option>`;
+  h+=`<option value="eac_composite" ${src==='eac_composite'?'selected':''}>EAC = AC + (BAC − EV) ÷ (CPI × SPI)</option>`;
+  h+='</select></span></div>';
+  const tile=(label,val,cls,sub)=>`<div style="padding:12px;background:var(--card);border:1px solid var(--sand);border-radius:8px;text-align:center;"><div style="font-family:Oswald;font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.6px;">${label}</div><div class="${cls||''}" style="font-family:Oswald;font-size:22px;font-weight:600;margin-top:4px;">${val}</div>${sub?'<div style="font-size:11px;color:var(--text-light);margin-top:2px;">'+sub+'</div>':''}</div>`;
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px;">';
+  h+=tile('Total Budget (BAC)',fmtD(totBac));
+  h+=tile('Cost to Date',fmtD(totAc),'',totBac>0?fmtPct(totAc/totBac)+' of BAC':'');
+  h+=tile('Projected Final',fmtD(totForecast),'',overrideCount?overrideCount+' line override'+(overrideCount===1?'':'s'):'all from EAC');
+  h+=tile('Forecast Variance',fmtD(totVar),varCls,totVar>=0?'under budget':'over budget');
+  if(contract>0){
+    h+=tile('Contract',fmtD(contract));
+    h+=tile('Projected Margin',fmtD(projMargin),marginCls,projMarginPct.toFixed(1)+'%');
+  }
+  h+='</div></div>';
+
+  // Per-phase table
+  h+='<div class="card" style="margin-top:16px;"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;"><span>Per-Phase Forecast</span><span style="font-size:11px;font-weight:400;color:var(--text-light);">Override = lock the projected final cost; clear to revert to EAC</span></div>';
+  h+='<div style="overflow-x:auto;"><table style="width:100%;font-size:13px;"><thead><tr style="background:var(--card);">';
+  h+='<th style="text-align:left;padding:6px;">Code</th><th style="text-align:left;padding:6px;">Description</th>';
+  h+='<th class="num">Budget</th><th class="num">AC</th><th class="num">EAC (calc)</th>';
+  h+='<th class="num">Forecast</th><th class="num">Variance</th>';
+  h+='<th style="text-align:center;padding:6px;">Override $</th><th></th></tr></thead><tbody>';
+  rows.forEach(r=>{
+    const eacShown=src==='eac_simple'?r.eac_simple:src==='eac_composite'?r.eac_composite:r.eac_cpi;
+    const vCls=r.variance>=0?'good':'warn';
+    const ovStyle=r.override?'background:#FFF3CD;border-color:var(--orange);':'';
+    const ovVal=r.override?Math.round(job.forecast.overrides[r.code]):'';
+    h+=`<tr><td style="padding:6px;">${esc(r.code)}</td><td style="padding:6px;">${esc(r.description||'')}</td>`;
+    h+=`<td class="num">${fmtD(r.bac)}</td><td class="num">${fmtD(r.ac)}</td><td class="num">${fmtD(eacShown)}</td>`;
+    h+=`<td class="num"><strong>${fmtD(r.forecast)}</strong></td>`;
+    h+=`<td class="num ${vCls}">${fmtD(r.variance)}</td>`;
+    h+=`<td style="text-align:center;padding:6px;"><input type="number" step="100" placeholder="auto" value="${ovVal}" onchange="setForecastOverride('${r.code.replace(/'/g,"\\'")}',this.value)" style="width:100px;font-family:Oswald;font-size:12px;text-align:right;padding:3px 6px;border:1px solid var(--sand);border-radius:4px;${ovStyle}"></td>`;
+    h+=`<td style="padding:6px;">${r.override?`<button class="edit-btn" onclick="clearForecastOverride('${r.code.replace(/'/g,"\\'")}')" style="padding:3px 8px;font-size:11px;">Clear</button>`:''}</td></tr>`;
+  });
+  // Totals row
+  h+=`<tr style="background:var(--card);font-weight:600;"><td colspan="2" style="padding:8px;">TOTALS</td><td class="num">${fmtD(totBac)}</td><td class="num">${fmtD(totAc)}</td><td class="num">—</td><td class="num">${fmtD(totForecast)}</td><td class="num ${varCls}">${fmtD(totVar)}</td><td colspan="2"></td></tr>`;
+  h+='</tbody></table></div></div>';
+
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// PAY APPLICATIONS — AIA G702/G703 (Phase 2 Step 3)
+// ═══════════════════════════════════════════
+// Each pay app:
+// { number, periodFrom, periodTo, retainagePct, status,
+//   submittedDate, paidDate, notes,
+//   lines: { [sovItemId]: { pctComplete, materialsStored } },
+//   coAdjustments: [{number, description, amount}]  // change orders effective this period
+// }
+function getPayAppLineItems(job){
+  // Prefer SOV items (proper schedule of values), fall back to bid items
+  if(job.sovItems&&job.sovItems.length){
+    return job.sovItems.map(s=>({
+      id:String(s.id||s.clientItemNo||''),
+      clientItemNo:String(s.clientItemNo||s.id||''),
+      description:s.description||'',
+      scheduledValue:(Number(s.contractQty)||0)*(Number(s.unitPrice)||0),
+      _co:!!s._changeOrder
+    }));
+  }
+  if(job.bidItems&&job.bidItems.length){
+    return job.bidItems.map(b=>({
+      id:String(b.biditem||''),
+      clientItemNo:String(b.biditem||''),
+      description:b.description||'',
+      scheduledValue:Number(b.takeoffTotal)||(Number(b.bidQuantity)||0)*(Number(b.unitPrice)||0),
+      _co:false
+    }));
+  }
+  return[];
+}
+function priorPctComplete(job,uptoNumber,itemId){
+  // Sum the % complete for itemId up through (but NOT including) uptoNumber.
+  // Actually pay apps are cumulative, so prior = the immediately-prior submitted/paid app's pct.
+  if(!job.payApps||!job.payApps.length)return 0;
+  const prior=job.payApps.filter(a=>a.number<uptoNumber).sort((a,b)=>b.number-a.number)[0];
+  if(!prior||!prior.lines||!prior.lines[itemId])return 0;
+  return Number(prior.lines[itemId].pctComplete)||0;
+}
+function priorMaterialsStored(job,uptoNumber,itemId){
+  if(!job.payApps||!job.payApps.length)return 0;
+  const prior=job.payApps.filter(a=>a.number<uptoNumber).sort((a,b)=>b.number-a.number)[0];
+  if(!prior||!prior.lines||!prior.lines[itemId])return 0;
+  return Number(prior.lines[itemId].materialsStored)||0;
+}
+function computePayApp(job,app){
+  const items=getPayAppLineItems(job);
+  const lines=app.lines||{};
+  const rows=items.map(it=>{
+    const ln=lines[it.id]||{pctComplete:0,materialsStored:0};
+    const pct=Number(ln.pctComplete)||0;
+    const mat=Number(ln.materialsStored)||0;
+    const sv=it.scheduledValue||0;
+    const totalCompleted=sv*(pct/100);
+    const priorPct=priorPctComplete(job,app.number,it.id);
+    const fromPrevious=sv*(priorPct/100);
+    const thisPeriod=Math.max(0,totalCompleted-fromPrevious);
+    const totalCompletedAndStored=totalCompleted+mat;
+    const pctG=sv>0?(totalCompletedAndStored/sv)*100:0;
+    const balance=Math.max(0,sv-totalCompletedAndStored);
+    return{...it,pctComplete:pct,materialsStored:mat,scheduledValue:sv,fromPrevious,thisPeriod,totalCompleted,totalCompletedAndStored,pctG,balance,priorPct};
+  });
+  const sumSV=rows.reduce((s,r)=>s+r.scheduledValue,0);
+  const sumPrev=rows.reduce((s,r)=>s+r.fromPrevious,0);
+  const sumThis=rows.reduce((s,r)=>s+r.thisPeriod,0);
+  const sumMat=rows.reduce((s,r)=>s+r.materialsStored,0);
+  const sumTotal=rows.reduce((s,r)=>s+r.totalCompletedAndStored,0);
+  const sumBal=rows.reduce((s,r)=>s+r.balance,0);
+  const retPct=Number(app.retainagePct)||0;
+  const retainage=sumTotal*(retPct/100);
+  const earnedLessRet=sumTotal-retainage;
+  // Previous certificates = prior app's earnedLessRet
+  let priorEarnedLessRet=0;
+  if(job.payApps&&job.payApps.length){
+    const prior=job.payApps.filter(a=>a.number<app.number).sort((a,b)=>b.number-a.number)[0];
+    if(prior){const pc=computePayApp(job,prior);priorEarnedLessRet=pc.earnedLessRet}
+  }
+  const currentDue=earnedLessRet-priorEarnedLessRet;
+  // Contract sum = original + change orders
+  const originalContract=Number(job.meta.contractAmount)||sumSV;
+  const coTotal=(app.coAdjustments||[]).reduce((s,c)=>s+(Number(c.amount)||0),0);
+  // For G702 we want the running total of all COs through this app (cumulative)
+  let cumCO=0;
+  if(job.payApps&&job.payApps.length){
+    job.payApps.filter(a=>a.number<=app.number).forEach(a=>{(a.coAdjustments||[]).forEach(c=>{cumCO+=Number(c.amount)||0})});
+  }else{cumCO=coTotal}
+  const contractToDate=originalContract+cumCO;
+  return{rows,sumSV,sumPrev,sumThis,sumMat,sumTotal,sumBal,retPct,retainage,earnedLessRet,priorEarnedLessRet,currentDue,originalContract,coTotal,cumCO,contractToDate};
+}
+// New blank pay app with auto-incrementing number and period
+function newPayApp(job){
+  const items=getPayAppLineItems(job);
+  if(!items.length){alert('Build pay items / SOV first before creating a pay application.');return null}
+  const num=(job.payApps&&job.payApps.length)?Math.max(...job.payApps.map(a=>a.number))+1:1;
+  // Default period: from prior app's periodTo (or job start) to today
+  let pf=null;
+  if(job.payApps&&job.payApps.length){const last=job.payApps.slice().sort((a,b)=>b.number-a.number)[0];pf=last.periodTo}
+  if(!pf&&job.meta.startDate){pf=new Date(job.meta.startDate).toISOString().slice(0,10)}
+  if(!pf)pf=new Date().toISOString().slice(0,10);
+  const pt=new Date().toISOString().slice(0,10);
+  // Carry-forward % from prior app (PM bumps the values that changed)
+  const lines={};
+  items.forEach(it=>{lines[it.id]={pctComplete:priorPctComplete(job,num,it.id),materialsStored:priorMaterialsStored(job,num,it.id)}});
+  return{number:num,periodFrom:pf,periodTo:pt,retainagePct:5,status:'draft',submittedDate:'',paidDate:'',notes:'',lines,coAdjustments:[]};
+}
+function createNewPayApp(){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.payApps)job.payApps=[];
+  const app=newPayApp(job);if(!app)return;
+  job.payApps.push(app);
+  Store._payAppActive=app.number;
+  addEditLog('Created Pay App #'+app.number);
+  saveJob(Store.activeJob);renderPayApps();
+}
+function deletePayApp(num){
+  const job=Store.jobs[Store.activeJob];if(!job||!job.payApps)return;
+  if(!confirm('Delete Pay App #'+num+'? This cannot be undone.'))return;
+  job.payApps=job.payApps.filter(a=>a.number!==num);
+  if(Store._payAppActive===num)Store._payAppActive=null;
+  addEditLog('Deleted Pay App #'+num);
+  saveJob(Store.activeJob);renderPayApps();
+}
+function setPayAppActive(num){Store._payAppActive=num;renderPayApps()}
+function updatePayAppField(field,val){
+  const job=Store.jobs[Store.activeJob];if(!job||!job.payApps)return;
+  const app=job.payApps.find(a=>a.number===Store._payAppActive);if(!app)return;
+  app[field]=field==='retainagePct'?(parseFloat(val)||0):val;
+  saveJob(Store.activeJob);renderPayApps();
+}
+function updatePayAppLine(itemId,field,val){
+  const job=Store.jobs[Store.activeJob];if(!job||!job.payApps)return;
+  const app=job.payApps.find(a=>a.number===Store._payAppActive);if(!app)return;
+  if(!app.lines)app.lines={};
+  if(!app.lines[itemId])app.lines[itemId]={pctComplete:0,materialsStored:0};
+  const n=parseFloat(val);
+  app.lines[itemId][field]=isNaN(n)?0:(field==='pctComplete'?Math.max(0,Math.min(100,n)):Math.max(0,n));
+  saveJob(Store.activeJob);renderPayApps();
+}
+function addPayAppCO(){
+  const job=Store.jobs[Store.activeJob];if(!job||!job.payApps)return;
+  const app=job.payApps.find(a=>a.number===Store._payAppActive);if(!app)return;
+  if(!app.coAdjustments)app.coAdjustments=[];
+  const num=prompt('Change order number:','CO-'+(app.coAdjustments.length+1));if(num==null)return;
+  const desc=prompt('Description:','');if(desc==null)return;
+  const amt=parseFloat(prompt('Amount ($):','0'));if(isNaN(amt))return;
+  app.coAdjustments.push({number:num,description:desc,amount:amt});
+  saveJob(Store.activeJob);renderPayApps();
+}
+function removePayAppCO(idx){
+  const job=Store.jobs[Store.activeJob];if(!job||!job.payApps)return;
+  const app=job.payApps.find(a=>a.number===Store._payAppActive);if(!app||!app.coAdjustments)return;
+  app.coAdjustments.splice(idx,1);
+  saveJob(Store.activeJob);renderPayApps();
+}
+function printPayApp(){
+  // Open a new window with the print view rendered
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const app=job.payApps.find(a=>a.number===Store._payAppActive);if(!app)return;
+  const c=computePayApp(job,app);
+  const html=renderPayAppPrintHTML(job,app,c);
+  const w=window.open('','_blank','width=1100,height=800');
+  w.document.write(html);w.document.close();
+  setTimeout(()=>{try{w.focus();w.print()}catch(e){}},300);
+}
+function renderPayAppPrintHTML(job,app,c){
+  const m=job.meta;
+  const fmt$=n=>'$'+(Math.round((n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  let h='<!doctype html><html><head><meta charset="utf-8"><title>Pay App #'+app.number+' — '+esc(m.name||'')+'</title>';
+  h+='<style>body{font-family:Arial,sans-serif;font-size:11px;color:#000;margin:24px;}h1{font-size:16px;text-align:center;margin:0 0 4px;}h2{font-size:13px;margin:18px 0 6px;border-bottom:1px solid #000;padding-bottom:2px;}table{width:100%;border-collapse:collapse;font-size:10px;}th,td{border:1px solid #000;padding:4px 6px;}th{background:#eee;}.num{text-align:right;}.lbl{background:#f5f5f5;font-weight:bold;}@media print{body{margin:12px}}.sig{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:24px;font-size:10px;}.sig div{border-top:1px solid #000;padding-top:4px;}</style></head><body>';
+  // ── G702 Cover Sheet ──
+  h+='<h1>APPLICATION AND CERTIFICATE FOR PAYMENT</h1>';
+  h+='<div style="text-align:center;font-size:10px;">AIA Document G702 — Application No. '+app.number+'</div>';
+  h+='<table style="margin-top:10px;"><tr>';
+  h+='<td style="width:33%;"><strong>TO OWNER:</strong><br>'+esc(m.client||'')+'</td>';
+  h+='<td style="width:33%;"><strong>PROJECT:</strong><br>'+esc(m.name||'')+' #'+esc(m.number||'')+'</td>';
+  h+='<td style="width:33%;"><strong>APPLICATION NO:</strong> '+app.number+'<br><strong>PERIOD:</strong> '+esc(app.periodFrom||'')+' to '+esc(app.periodTo||'')+'</td>';
+  h+='</tr><tr>';
+  h+='<td><strong>FROM CONTRACTOR:</strong><br>Burns Dirt Construction</td>';
+  h+='<td colspan="2"><strong>VIA ARCHITECT/ENGINEER:</strong><br>&nbsp;</td>';
+  h+='</tr></table>';
+  h+='<h2>CONTRACTOR\'S APPLICATION FOR PAYMENT</h2>';
+  h+='<table>';
+  h+='<tr><td style="width:70%;">1. ORIGINAL CONTRACT SUM</td><td class="num">'+fmt$(c.originalContract)+'</td></tr>';
+  h+='<tr><td>2. NET CHANGE BY CHANGE ORDERS</td><td class="num">'+fmt$(c.cumCO)+'</td></tr>';
+  h+='<tr class="lbl"><td>3. CONTRACT SUM TO DATE (Line 1 ± 2)</td><td class="num">'+fmt$(c.contractToDate)+'</td></tr>';
+  h+='<tr><td>4. TOTAL COMPLETED & STORED TO DATE (Column G on G703)</td><td class="num">'+fmt$(c.sumTotal)+'</td></tr>';
+  h+='<tr><td>5. RETAINAGE ('+c.retPct+'%)</td><td class="num">'+fmt$(c.retainage)+'</td></tr>';
+  h+='<tr class="lbl"><td>6. TOTAL EARNED LESS RETAINAGE (Line 4 − 5)</td><td class="num">'+fmt$(c.earnedLessRet)+'</td></tr>';
+  h+='<tr><td>7. LESS PREVIOUS CERTIFICATES FOR PAYMENT</td><td class="num">'+fmt$(c.priorEarnedLessRet)+'</td></tr>';
+  h+='<tr class="lbl"><td>8. CURRENT PAYMENT DUE</td><td class="num"><strong>'+fmt$(c.currentDue)+'</strong></td></tr>';
+  h+='<tr><td>9. BALANCE TO FINISH, PLUS RETAINAGE (Line 3 − 6)</td><td class="num">'+fmt$(c.contractToDate-c.earnedLessRet)+'</td></tr>';
+  h+='</table>';
+  // CO summary
+  if(c.cumCO!==0){
+    h+='<h2>CHANGE ORDER SUMMARY</h2><table><tr><th>CO #</th><th>Description</th><th class="num">Amount</th></tr>';
+    (job.payApps||[]).filter(a=>a.number<=app.number).forEach(a=>{(a.coAdjustments||[]).forEach(co=>{h+='<tr><td>'+esc(co.number||'')+'</td><td>'+esc(co.description||'')+'</td><td class="num">'+fmt$(co.amount)+'</td></tr>'})});
+    h+='<tr class="lbl"><td colspan="2">NET CHANGE BY CHANGE ORDERS</td><td class="num">'+fmt$(c.cumCO)+'</td></tr></table>';
+  }
+  h+='<div class="sig"><div>Contractor signature / Date</div><div>Architect/Engineer signature / Date</div></div>';
+  // ── G703 Continuation Sheet ──
+  h+='<div style="page-break-before:always;"></div>';
+  h+='<h1>CONTINUATION SHEET</h1>';
+  h+='<div style="text-align:center;font-size:10px;">AIA Document G703 — Application No. '+app.number+' — Period: '+esc(app.periodFrom||'')+' to '+esc(app.periodTo||'')+'</div>';
+  h+='<table style="margin-top:10px;"><thead><tr>';
+  h+='<th>A<br>Item No</th><th>B<br>Description</th><th>C<br>Scheduled Value</th>';
+  h+='<th>D<br>From Previous</th><th>E<br>This Period</th><th>F<br>Materials Stored</th>';
+  h+='<th>G<br>Total Completed & Stored (D+E+F)</th><th>H<br>%<br>(G÷C)</th>';
+  h+='<th>I<br>Balance to Finish (C−G)</th><th>J<br>Retainage</th>';
+  h+='</tr></thead><tbody>';
+  c.rows.forEach(r=>{
+    const ret=r.totalCompletedAndStored*(c.retPct/100);
+    h+='<tr>';
+    h+='<td>'+esc(r.clientItemNo||'')+'</td>';
+    h+='<td>'+esc(r.description||'')+(r._co?' <em>(CO)</em>':'')+'</td>';
+    h+='<td class="num">'+fmt$(r.scheduledValue)+'</td>';
+    h+='<td class="num">'+fmt$(r.fromPrevious)+'</td>';
+    h+='<td class="num">'+fmt$(r.thisPeriod)+'</td>';
+    h+='<td class="num">'+fmt$(r.materialsStored)+'</td>';
+    h+='<td class="num">'+fmt$(r.totalCompletedAndStored)+'</td>';
+    h+='<td class="num">'+r.pctG.toFixed(1)+'%</td>';
+    h+='<td class="num">'+fmt$(r.balance)+'</td>';
+    h+='<td class="num">'+fmt$(ret)+'</td>';
+    h+='</tr>';
+  });
+  h+='<tr class="lbl"><td colspan="2">GRAND TOTAL</td><td class="num">'+fmt$(c.sumSV)+'</td><td class="num">'+fmt$(c.sumPrev)+'</td><td class="num">'+fmt$(c.sumThis)+'</td><td class="num">'+fmt$(c.sumMat)+'</td><td class="num">'+fmt$(c.sumTotal)+'</td><td class="num">'+(c.sumSV>0?(c.sumTotal/c.sumSV*100).toFixed(1):'0.0')+'%</td><td class="num">'+fmt$(c.sumBal)+'</td><td class="num">'+fmt$(c.retainage)+'</td></tr>';
+  h+='</tbody></table>';
+  if(app.notes){h+='<h2>NOTES</h2><div style="font-size:11px;white-space:pre-wrap;">'+esc(app.notes)+'</div>'}
+  h+='</body></html>';
+  return h;
+}
+function renderPayApps(){
+  const el=document.getElementById('payAppsContent');
+  if(!el)return;
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
+  const job=Store.jobs[Store.activeJob];
+  const items=getPayAppLineItems(job);
+  if(!items.length){el.innerHTML='<div class="empty-state"><h2>No Pay Items Yet</h2><p>Build the SOV / Pay Items in <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> before creating pay applications.</p></div>';return}
+  if(!job.payApps)job.payApps=[];
+  // Sort newest first for the list
+  const sorted=job.payApps.slice().sort((a,b)=>b.number-a.number);
+  // Default-select the most recent draft (or most recent overall)
+  if(!Store._payAppActive&&sorted.length){const draft=sorted.find(a=>a.status==='draft')||sorted[0];Store._payAppActive=draft.number}
+  const active=Store._payAppActive?sorted.find(a=>a.number===Store._payAppActive):null;
+
+  let h='';
+  // Header / new app button
+  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;"><span>Pay Applications</span><button class="btn-green btn-sm" onclick="createNewPayApp()">+ New Pay App</button></div>';
+  if(!sorted.length){
+    h+='<div style="padding:24px;text-align:center;color:var(--text-light);font-size:13px;">No pay applications yet. Click "New Pay App" to start your first AIA G702/G703.</div></div>';
+    el.innerHTML=h;return;
+  }
+  // History list
+  h+='<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">';
+  sorted.forEach(a=>{
+    const c=computePayApp(job,a);
+    const isActive=a.number===Store._payAppActive;
+    const statusColor=a.status==='paid'?'#48742C':a.status==='submitted'?'#F26722':'#888';
+    h+=`<div onclick="setPayAppActive(${a.number})" style="cursor:pointer;padding:10px 14px;border:2px solid ${isActive?'var(--orange)':'var(--sand)'};border-radius:6px;background:${isActive?'#FFF8F4':'var(--card)'};min-width:170px;">`;
+    h+=`<div style="font-family:Oswald;font-weight:600;font-size:14px;">App #${a.number} <span style="font-size:10px;color:${statusColor};text-transform:uppercase;">${esc(a.status||'draft')}</span></div>`;
+    h+=`<div style="font-size:11px;color:var(--text-light);">${esc(a.periodFrom||'')} → ${esc(a.periodTo||'')}</div>`;
+    h+=`<div style="font-family:Oswald;font-size:13px;color:var(--orange);margin-top:4px;">$${Math.round(c.currentDue).toLocaleString()} due</div>`;
+    h+=`</div>`;
+  });
+  h+='</div></div>';
+
+  if(!active){el.innerHTML=h;return}
+  const c=computePayApp(job,active);
+  // Editor card
+  h+='<div class="card" style="margin-top:16px;">';
+  h+='<div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;"><span>Pay App #'+active.number+' — Editor</span>';
+  h+='<span><button class="edit-btn" onclick="printPayApp()" style="padding:6px 14px;background:var(--blue);color:#fff;border:none;">📄 Print / Export G702 + G703</button> ';
+  h+='<button class="del-btn" onclick="deletePayApp('+active.number+')" style="padding:6px 12px;">Delete</button></span></div>';
+  // Header fields
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:8px;">';
+  h+='<label style="font-size:12px;">Period From<br><input type="date" value="'+esc(active.periodFrom||'')+'" onchange="updatePayAppField(\'periodFrom\',this.value)" style="width:100%;padding:5px;border:1px solid var(--sand);border-radius:4px;"></label>';
+  h+='<label style="font-size:12px;">Period To<br><input type="date" value="'+esc(active.periodTo||'')+'" onchange="updatePayAppField(\'periodTo\',this.value)" style="width:100%;padding:5px;border:1px solid var(--sand);border-radius:4px;"></label>';
+  h+='<label style="font-size:12px;">Retainage %<br><input type="number" min="0" max="100" step="0.5" value="'+(active.retainagePct||0)+'" onchange="updatePayAppField(\'retainagePct\',this.value)" style="width:100%;padding:5px;border:1px solid var(--sand);border-radius:4px;"></label>';
+  h+='<label style="font-size:12px;">Status<br><select onchange="updatePayAppField(\'status\',this.value)" style="width:100%;padding:5px;border:1px solid var(--sand);border-radius:4px;">';
+  ['draft','submitted','paid'].forEach(s=>{h+='<option value="'+s+'" '+(active.status===s?'selected':'')+'>'+s+'</option>'});
+  h+='</select></label>';
+  h+='</div>';
+  // KPI strip
+  const tile=(label,val,sub)=>`<div style="padding:10px;background:var(--card);border:1px solid var(--sand);border-radius:6px;text-align:center;"><div style="font-family:Oswald;font-size:10px;color:var(--text-light);text-transform:uppercase;">${label}</div><div style="font-family:Oswald;font-size:18px;font-weight:600;margin-top:2px;">${val}</div>${sub?'<div style="font-size:10px;color:var(--text-light);">'+sub+'</div>':''}</div>`;
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:12px;">';
+  h+=tile('Contract to Date',fmtD(c.contractToDate),c.cumCO?'incl. '+fmtD(c.cumCO)+' COs':'');
+  h+=tile('Completed + Stored',fmtD(c.sumTotal));
+  h+=tile('Retainage ('+c.retPct+'%)',fmtD(c.retainage));
+  h+=tile('Earned Less Retainage',fmtD(c.earnedLessRet));
+  h+=tile('Less Previous',fmtD(c.priorEarnedLessRet));
+  h+=tile('Current Due',fmtD(c.currentDue),'this period');
+  h+='</div>';
+  // Line items table
+  h+='<div style="overflow-x:auto;margin-top:14px;"><table style="width:100%;font-size:12px;"><thead><tr style="background:var(--card);">';
+  h+='<th style="text-align:left;padding:6px;">Item</th><th style="text-align:left;padding:6px;">Description</th>';
+  h+='<th class="num">Sched. Value</th><th class="num">Prior %</th>';
+  h+='<th style="text-align:center;">% Comp</th><th class="num">From Prev</th><th class="num">This Period</th>';
+  h+='<th style="text-align:center;">Mat. Stored</th><th class="num">Total + Stored</th><th class="num">% G/C</th><th class="num">Balance</th>';
+  h+='</tr></thead><tbody>';
+  c.rows.forEach(r=>{
+    const isCO=r._co;
+    h+=`<tr${isCO?' style="background:#FFF8E1;"':''}>`;
+    h+=`<td style="padding:6px;">${esc(r.clientItemNo||'')}${isCO?' <em style="color:var(--orange);font-size:10px;">CO</em>':''}</td>`;
+    h+=`<td style="padding:6px;">${esc(r.description||'')}</td>`;
+    h+=`<td class="num">${fmtD(r.scheduledValue)}</td>`;
+    h+=`<td class="num" style="color:var(--text-light);">${r.priorPct.toFixed(1)}%</td>`;
+    h+=`<td style="text-align:center;padding:4px;"><input type="number" min="0" max="100" step="0.5" value="${r.pctComplete}" onchange="updatePayAppLine('${r.id.replace(/'/g,"\\'")}','pctComplete',this.value)" style="width:64px;font-family:Oswald;font-size:12px;text-align:right;padding:3px 6px;border:1px solid var(--sand);border-radius:4px;"></td>`;
+    h+=`<td class="num">${fmtD(r.fromPrevious)}</td>`;
+    h+=`<td class="num"><strong>${fmtD(r.thisPeriod)}</strong></td>`;
+    h+=`<td style="text-align:center;padding:4px;"><input type="number" min="0" step="100" value="${r.materialsStored}" onchange="updatePayAppLine('${r.id.replace(/'/g,"\\'")}','materialsStored',this.value)" style="width:90px;font-family:Oswald;font-size:12px;text-align:right;padding:3px 6px;border:1px solid var(--sand);border-radius:4px;"></td>`;
+    h+=`<td class="num">${fmtD(r.totalCompletedAndStored)}</td>`;
+    h+=`<td class="num">${r.pctG.toFixed(1)}%</td>`;
+    h+=`<td class="num">${fmtD(r.balance)}</td>`;
+    h+=`</tr>`;
+  });
+  h+=`<tr style="background:var(--card);font-weight:600;"><td colspan="2" style="padding:8px;">TOTALS</td><td class="num">${fmtD(c.sumSV)}</td><td></td><td></td><td class="num">${fmtD(c.sumPrev)}</td><td class="num">${fmtD(c.sumThis)}</td><td></td><td class="num">${fmtD(c.sumTotal)}</td><td class="num">${c.sumSV>0?(c.sumTotal/c.sumSV*100).toFixed(1):'0.0'}%</td><td class="num">${fmtD(c.sumBal)}</td></tr>`;
+  h+='</tbody></table></div>';
+  // Change orders this app
+  h+='<div style="margin-top:14px;"><div style="display:flex;justify-content:space-between;align-items:center;"><strong style="font-family:Oswald;font-size:13px;">Change Orders Effective This Period</strong><button class="edit-btn" onclick="addPayAppCO()" style="padding:4px 10px;font-size:11px;">+ Add CO</button></div>';
+  if((active.coAdjustments||[]).length){
+    h+='<table style="width:100%;font-size:12px;margin-top:6px;"><thead><tr style="background:var(--card);"><th style="text-align:left;padding:5px;">CO #</th><th style="text-align:left;padding:5px;">Description</th><th class="num">Amount</th><th></th></tr></thead><tbody>';
+    active.coAdjustments.forEach((co,i)=>{h+=`<tr><td style="padding:5px;">${esc(co.number||'')}</td><td style="padding:5px;">${esc(co.description||'')}</td><td class="num">${fmtD(co.amount)}</td><td><button class="del-btn" onclick="removePayAppCO(${i})" style="padding:2px 8px;font-size:11px;">×</button></td></tr>`});
+    h+='</tbody></table>';
+  }else{h+='<div style="font-size:12px;color:var(--text-light);padding:6px 0;">None</div>'}
+  h+='</div>';
+  // Notes
+  h+='<div style="margin-top:14px;"><label style="font-size:12px;font-weight:600;">Notes (printed on G702)</label><textarea onchange="updatePayAppField(\'notes\',this.value)" rows="3" style="width:100%;font-family:inherit;font-size:12px;padding:6px;border:1px solid var(--sand);border-radius:4px;margin-top:4px;">'+esc(active.notes||'')+'</textarea></div>';
+  h+='</div>';
+
+  el.innerHTML=h;
+}
 
 // ═══════════════════════════════════════════
 // DASHBOARD
