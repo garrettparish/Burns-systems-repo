@@ -1230,6 +1230,12 @@ function parseActualsRaw(rows){
 // - Filters to active job by Job Code matching job.meta.number
 // - Refresh-safe: confirmStaging uses (date+costCode+foreman) as upsert key
 function parseActualsDetailRaw(rows){
+  // Build a map of jobNumber → Store.jobs key so we can match ANY Burns job in the file.
+  const jobByNumber={};
+  Object.entries(Store.jobs).forEach(([key,j])=>{
+    const num=String(j.meta?.number||'').trim();
+    if(num) jobByNumber[num]=key;
+  });
   const activeJob=Store.jobs[Store.activeJob];
   const activeJobCode=activeJob?String(activeJob.meta.number||'').trim():'';
   const out=[];
@@ -1243,8 +1249,9 @@ function parseActualsDetailRaw(rows){
     const jobCode=String(r['Job Code']||'').trim();
     const costCode=String(r['Cost Code']||'').trim();
     if(!costCode){skipped.noCode++;return}
-    // Filter to active job only (unless no active job set)
-    if(activeJobCode&&jobCode&&jobCode!==activeJobCode){skipped.otherJob++;return}
+    // Match to ANY known Burns job (multi-job auto-detect)
+    const targetJobKey=jobByNumber[jobCode];
+    if(!targetJobKey){skipped.otherJob++;return}
     const isoDate=d.toISOString().split('T')[0];
     const actualQty=parseFloat(r['Actual Quantity'])||0;
     const actualLaborHours=parseFloat(r['Actual Labor Hours'])||0;
@@ -1264,6 +1271,7 @@ function parseActualsDetailRaw(rows){
     out.push({
       date:isoDate,
       jobCode,
+      _targetJobKey:targetJobKey,
       costCode,
       costCodeDesc:String(r['Cost Code Description']||''),
       unit:String(r['Unit']||''),
@@ -1388,11 +1396,34 @@ function renderStaging(){
       data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
     }
   }else if(type==='actualsDetail'){
-    // Summary banner — show totals
-    const tot=data.filter(d=>d._selected).reduce((s,d)=>({qty:s.qty+d.actualQty,lab:s.lab+d.actualLaborCost,eq:s.eq+d.actualEquipCost,mat:s.mat+d.actualMatCost,sub:s.sub+d.actualSubCost,hrs:s.hrs+d.actualLaborHours,all:s.all+d.actualAllCost}),{qty:0,lab:0,eq:0,mat:0,sub:0,hrs:0,all:0});
-    const uniqueCodes=new Set(data.filter(d=>d._selected).map(d=>d.costCode)).size;
-    const dateMin=data[0]?data[0].date:'';const dateMax=data[data.length-1]?data[data.length-1].date:'';
-    h=h.replace('<div class="card">','<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:10px 0;padding:12px;background:#F9F9F7;border-radius:6px;font-family:Oswald;"><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Rows</div><div style="font-size:18px;font-weight:600;">'+data.length.toLocaleString()+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Cost Codes</div><div style="font-size:18px;font-weight:600;">'+uniqueCodes+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Date Range</div><div style="font-size:13px;font-weight:600;">'+dateMin+' → '+dateMax+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Labor Hrs</div><div style="font-size:18px;font-weight:600;">'+tot.hrs.toFixed(1)+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Total Cost</div><div style="font-size:18px;font-weight:600;color:var(--orange);">$'+Math.round(tot.all).toLocaleString()+'</div></div></div><div class="card">');
+    // Group by target job for multi-job auto-detect
+    if(!Store.staging.jobFilter) Store.staging.jobFilter={};
+    const jf=Store.staging.jobFilter;
+    const byJob={};
+    data.forEach(d=>{const k=d._targetJobKey;if(!byJob[k])byJob[k]={rows:0,hrs:0,cost:0,codes:new Set(),dates:[]};byJob[k].rows++;byJob[k].hrs+=d.actualLaborHours||0;byJob[k].cost+=d.actualAllCost||0;byJob[k].codes.add(d.costCode);byJob[k].dates.push(d.date)});
+    const jobKeys=Object.keys(byJob);
+    // Default: select all jobs on first render
+    jobKeys.forEach(k=>{if(jf[k]===undefined)jf[k]=true});
+    // Apply filter to _selected
+    data.forEach(d=>{d._selected=jf[d._targetJobKey]!==false});
+    // Multi-job job picker (only show if >1 jobs found)
+    if(jobKeys.length>1){
+      let jp='<div style="margin:10px 0;padding:12px;background:#FFF8E1;border:1px solid var(--sand);border-radius:6px;"><div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">📦 Multi-Job File Detected — '+jobKeys.length+' of your jobs found. Choose which to import:</div>';
+      jobKeys.forEach(k=>{
+        const j=Store.jobs[k];const jb=byJob[k];
+        const dMin=jb.dates.slice().sort()[0];const dMax=jb.dates.slice().sort().reverse()[0];
+        jp+=`<label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer;"><input type="checkbox" ${jf[k]!==false?'checked':''} onchange="Store.staging.jobFilter['${k}']=this.checked;renderStaging();"><span style="flex:1;"><strong>${esc(j.meta.name)} #${esc(j.meta.number||'')}</strong> — ${jb.rows} rows, ${jb.codes.size} codes, ${dMin} → ${dMax}</span><span style="font-family:Oswald;color:var(--orange);font-weight:600;">$${Math.round(jb.cost).toLocaleString()}</span></label>`;
+      });
+      jp+='</div>';
+      h=h.replace('<div class="card">',jp+'<div class="card">');
+    }
+    // Summary banner — show totals (filtered)
+    const selData=data.filter(d=>d._selected);
+    const tot=selData.reduce((s,d)=>({qty:s.qty+d.actualQty,lab:s.lab+d.actualLaborCost,eq:s.eq+d.actualEquipCost,mat:s.mat+d.actualMatCost,sub:s.sub+d.actualSubCost,hrs:s.hrs+d.actualLaborHours,all:s.all+d.actualAllCost}),{qty:0,lab:0,eq:0,mat:0,sub:0,hrs:0,all:0});
+    const uniqueCodes=new Set(selData.map(d=>d.costCode)).size;
+    const sortedDates=selData.map(d=>d.date).sort();
+    const dateMin=sortedDates[0]||'';const dateMax=sortedDates[sortedDates.length-1]||'';
+    h=h.replace('<div class="card">','<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:10px 0;padding:12px;background:#F9F9F7;border-radius:6px;font-family:Oswald;"><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Selected Rows</div><div style="font-size:18px;font-weight:600;">'+selData.length.toLocaleString()+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Cost Codes</div><div style="font-size:18px;font-weight:600;">'+uniqueCodes+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Date Range</div><div style="font-size:13px;font-weight:600;">'+dateMin+' → '+dateMax+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Labor Hrs</div><div style="font-size:18px;font-weight:600;">'+tot.hrs.toFixed(1)+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Total Cost</div><div style="font-size:18px;font-weight:600;color:var(--orange);">$'+Math.round(tot.all).toLocaleString()+'</div></div></div><div class="card">');
     h+='<tr><th></th><th>Date</th><th>Cost Code</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Lab Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Mat $</th><th class="num">Sub $</th><th class="num">Total</th><th>Foreman</th></tr>';
     // Only show first 200 rows in staging for perf
     const showMax=200;
@@ -1469,14 +1500,21 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
   }else if(type==='actuals'){
     job.actuals=sel;
   }else if(type==='actualsDetail'){
-    // Refresh-safe merge: upsert rows by (date+costCode+foreman) key
-    job.actualsDetail=mergeActualsDetail(job.actualsDetail||[],sel);
-    // Auto-regenerate the flat actuals summary so existing dashboards / JCS still work
-    job.actuals=rollupActualsDetail(job.actualsDetail);
-    job.meta.lastActualsImport=new Date().toISOString();
-    const dateRange=job.actualsDetail.length?(job.actualsDetail[0].date+' → '+job.actualsDetail[job.actualsDetail.length-1].date):'';
-    log(`Daily Detail: ${job.actualsDetail.length} total rows (${sel.length} new/updated this import). Range: ${dateRange}`);
-    addEditLog(`Imported ${sel.length} HJ daily detail rows`);
+    // Multi-job dispatch: group selected rows by _targetJobKey, apply to each
+    const byJob={};
+    sel.forEach(d=>{const k=d._targetJobKey;if(!k)return;if(!byJob[k])byJob[k]=[];const c={...d};delete c._targetJobKey;byJob[k].push(c)});
+    const now=new Date().toISOString();
+    const targetKeys=Object.keys(byJob);
+    targetKeys.forEach(jk=>{
+      const tj=Store.jobs[jk];if(!tj)return;
+      tj.actualsDetail=mergeActualsDetail(tj.actualsDetail||[],byJob[jk]);
+      tj.actuals=rollupActualsDetail(tj.actualsDetail);
+      tj.meta.lastActualsImport=now;
+      const dr=tj.actualsDetail.length?(tj.actualsDetail[0].date+' → '+tj.actualsDetail[tj.actualsDetail.length-1].date):'';
+      log(`${tj.meta.name} #${tj.meta.number}: ${tj.actualsDetail.length} total rows (${byJob[jk].length} new/updated). Range: ${dr}`);
+    });
+    addEditLog(`Imported ${sel.length} HJ daily detail rows across ${targetKeys.length} job(s)`);
+    if(Store.staging.jobFilter) Store.staging.jobFilter={};
   }
   log(`${type}: ${sel.length} records confirmed.`);
   addEditLog('Imported '+sel.length+' '+type+' records');
@@ -2196,7 +2234,7 @@ function renderDashboard(){
   if(m.lastActualsImport||(job.actualsDetail&&job.actualsDetail.length)){
     const lastImp=m.lastActualsImport?new Date(m.lastActualsImport):null;
     const daysAgo=lastImp?Math.floor((Date.now()-lastImp.getTime())/86400000):null;
-    const freshCls=daysAgo==null?'':daysAgo<=1?'good':daysAgo<=7?'':'warn';
+    const freshCls=daysAgo==null?'':daysAgo<=1?'good':daysAgo<=3?'':'warn';
     const freshLbl=daysAgo==null?'Never':daysAgo===0?'Today':daysAgo===1?'Yesterday':daysAgo+'d ago';
     const detailCount=(job.actualsDetail||[]).length;
     const latestWorkDate=detailCount?job.actualsDetail[detailCount-1].date:'—';
@@ -2309,6 +2347,44 @@ function renderDashboard(){
       h+=`<td class="num" style="${hrsPct>100?'color:var(--red)':''}">${hrsPct.toFixed(1)}%</td></tr>`;
       h+='</table></div>';
     }
+  }
+
+  // ── Daily Burn Chart (from HJ Detail) ──
+  if(job.actualsDetail&&job.actualsDetail.length){
+    const _burnMode=job._burnMode||'cost';
+    const byDay={};
+    job.actualsDetail.forEach(r=>{
+      if(!byDay[r.date]) byDay[r.date]={hrs:0,cost:0};
+      byDay[r.date].hrs+=(r.actualLaborHours||0)+(r.actualEquipHours||0);
+      byDay[r.date].cost+=(r.actualLaborCost||0)+(r.actualEquipCost||0)+(r.actualMatCost||0)+(r.actualSubCost||0);
+    });
+    const dates=Object.keys(byDay).sort();
+    const vals=dates.map(d=>_burnMode==='hrs'?byDay[d].hrs:byDay[d].cost);
+    const maxV=Math.max(...vals,1);
+    const totalV=vals.reduce((a,b)=>a+b,0);
+    const avgV=totalV/(vals.length||1);
+    const w=900,padL=50,padR=20,padT=20,padB=40,barW=Math.max((w-padL-padR)/dates.length-2,1),chartH=180;
+    const toX=i=>padL+i*((w-padL-padR)/dates.length)+1;
+    const toH=v=>(v/maxV)*(chartH-padT-padB);
+    let svg=`<svg viewBox="0 0 ${w} ${chartH}" style="width:100%;height:auto;font-family:inherit;font-size:10px;">`;
+    // gridlines
+    for(let g=0;g<=4;g++){const y=padT+(g/4)*(chartH-padT-padB);const v=maxV*(1-g/4);svg+=`<line x1="${padL}" y1="${y}" x2="${w-padR}" y2="${y}" stroke="#eee"/><text x="${padL-4}" y="${y+3}" text-anchor="end" fill="#888">${_burnMode==='hrs'?Math.round(v):'$'+(v>=1000?(v/1000).toFixed(0)+'k':Math.round(v))}</text>`;}
+    // bars
+    dates.forEach((d,i)=>{
+      const v=vals[i];const bh=toH(v);const x=toX(i);const y=chartH-padB-bh;
+      svg+=`<rect x="${x}" y="${y}" width="${barW}" height="${bh}" fill="var(--brown,#7A5230)" opacity="0.85"><title>${d}: ${_burnMode==='hrs'?v.toFixed(1)+' hrs':'$'+v.toLocaleString(undefined,{maximumFractionDigits:0})}</title></rect>`;
+    });
+    // avg line
+    const avgY=chartH-padB-toH(avgV);
+    svg+=`<line x1="${padL}" y1="${avgY}" x2="${w-padR}" y2="${avgY}" stroke="var(--orange,#D97706)" stroke-width="1.5" stroke-dasharray="4 4"/>`;
+    svg+=`<text x="${w-padR-2}" y="${avgY-3}" text-anchor="end" fill="var(--orange,#D97706)" font-weight="600">avg ${_burnMode==='hrs'?avgV.toFixed(1):'$'+Math.round(avgV).toLocaleString()}</text>`;
+    // x-axis labels (first, last, every Nth)
+    const step=Math.max(1,Math.floor(dates.length/8));
+    dates.forEach((d,i)=>{if(i===0||i===dates.length-1||i%step===0){const x=toX(i)+barW/2;svg+=`<text x="${x}" y="${chartH-padB+12}" text-anchor="middle" fill="#666">${d.substring(5)}</text>`;}});
+    svg+='</svg>';
+    h+=`<div class="card" style="margin-top:16px;"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Daily Burn — ${_burnMode==='hrs'?'Labor + Equip Hours':'Total Cost'} <span><button class="edit-btn" onclick="Store.jobs[Store.activeJob]._burnMode=${_burnMode==='hrs'?"'cost'":"'hrs'"};renderDashboard();" style="padding:4px 10px;font-size:11px;">Toggle: ${_burnMode==='hrs'?'$ Cost':'Hours'}</button></span></div>`;
+    h+=`<div style="font-size:11px;color:#888;margin-bottom:8px;">${dates.length} days · total ${_burnMode==='hrs'?totalV.toFixed(1)+' hrs':'$'+Math.round(totalV).toLocaleString()} · avg/day ${_burnMode==='hrs'?avgV.toFixed(1)+' hrs':'$'+Math.round(avgV).toLocaleString()}</div>`;
+    h+=svg+'</div>';
   }
 
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">';
