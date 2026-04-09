@@ -2188,6 +2188,7 @@ function evaSetMethod(method){
   saveJob(Store.activeJob);
   renderEVA();
 }
+function toggleEvaHelp(){Store._evaHelpOpen=!Store._evaHelpOpen;renderEVA()}
 function evaSetOverride(code,val){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.eva)job.eva={};
@@ -2222,7 +2223,7 @@ function renderEVA(){
 
   let h='';
   // Header / method picker
-  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"><span>Earned Value — As of '+new Date().toLocaleDateString()+'</span>';
+  h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"><span>Earned Value — As of '+new Date().toLocaleDateString()+' <button onclick="toggleEvaHelp()" title="What is EVA?" style="margin-left:6px;background:none;border:2px solid var(--sand);color:var(--sand);font-family:Oswald,sans-serif;font-size:13px;font-weight:700;width:22px;height:22px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;transition:all .2s;" onmouseover="this.style.borderColor=\'var(--orange)\';this.style.color=\'var(--orange)\'" onmouseout="this.style.borderColor=\'var(--sand)\';this.style.color=\'var(--sand)\'">?</button></span>';
   h+='<span style="font-size:12px;font-weight:400;color:var(--text-light);">EAC Method: ';
   h+=`<select onchange="evaSetMethod(this.value)" style="font-family:Oswald;font-size:12px;padding:4px 8px;border-radius:4px;border:1px solid var(--sand);">`;
   h+=`<option value="cpi" ${method==='cpi'?'selected':''}>BAC ÷ CPI (Recommended)</option>`;
@@ -2246,6 +2247,64 @@ function renderEVA(){
   h+=tile('VAC',fmtD(vacShown),vacCls,vacShown>=0?'under budget':'over budget');
   h+=tile('TCPI',e.tcpi?e.tcpi.toFixed(2):'—','',e.tcpi>1.1?'Aggressive':e.tcpi>1?'Tight':'Achievable');
   h+='</div></div>';
+
+  // Help panel (collapsible)
+  if(Store._evaHelpOpen){
+    h+='<div class="card" style="margin-top:16px;background:#FFF8E1;border:2px solid var(--orange);">';
+    h+='<div class="card-title" style="display:flex;justify-content:space-between;align-items:center;"><span>📘 Earned Value Analysis — Quick Guide</span><button onclick="toggleEvaHelp()" class="edit-btn" style="padding:4px 12px;font-size:11px;">Close</button></div>';
+    h+='<div style="font-size:13px;line-height:1.55;color:var(--text);">';
+
+    h+='<p><strong>What is EVA?</strong><br>Earned Value Analysis answers three questions at once: <em>How much work was supposed to be done by now? How much actually got done? How much did it cost?</em> By comparing those three numbers, EVA tells you whether the job is on track for budget and schedule — and projects where it will land at completion.</p>';
+
+    h+='<p><strong>The three core measurements (in plain English):</strong></p>';
+    h+='<ul style="margin:6px 0 12px 18px;padding:0;">';
+    h+='<li><strong>PV — Planned Value</strong>: The dollar value of work that <em>should</em> be complete by the as-of date based on the schedule. Currently calculated as a linear ramp from job start to job end.</li>';
+    h+='<li><strong>EV — Earned Value</strong>: The dollar value of work <em>actually</em> complete. For each cost code: <code>BAC × % complete</code>. This is the most important number in EVA — it converts physical progress into dollars.</li>';
+    h+='<li><strong>AC — Actual Cost</strong>: What you have actually spent so far (labor + equip + material + sub) from your HeavyJob actuals.</li>';
+    h+='<li><strong>BAC — Budget at Completion</strong>: The total budgeted cost for the job (sum of cost-code budgets).</li>';
+    h+='</ul>';
+
+    h+='<p><strong>Performance indices (the headline KPIs):</strong></p>';
+    h+='<ul style="margin:6px 0 12px 18px;padding:0;">';
+    h+='<li><strong>CPI — Cost Performance Index</strong> = <code>EV ÷ AC</code>. Above 1.0 = under budget. Below 1.0 = over budget. A CPI of 0.90 means you are getting $0.90 of work per $1.00 spent.</li>';
+    h+='<li><strong>SPI — Schedule Performance Index</strong> = <code>EV ÷ PV</code>. Above 1.0 = ahead of schedule. Below 1.0 = behind. SPI of 0.80 means you are 20% behind the planned pace.</li>';
+    h+='<li><strong>CV — Cost Variance</strong> = <code>EV − AC</code>. Negative = over budget by that dollar amount.</li>';
+    h+='<li><strong>SV — Schedule Variance</strong> = <code>EV − PV</code>. Negative = behind schedule (in dollars of work).</li>';
+    h+='</ul>';
+
+    h+='<p><strong>Forecasting at completion:</strong></p>';
+    h+='<ul style="margin:6px 0 12px 18px;padding:0;">';
+    h+='<li><strong>EAC — Estimate at Completion</strong>: Projected total cost when the job is done (see three methods below).</li>';
+    h+='<li><strong>ETC — Estimate to Complete</strong> = <code>EAC − AC</code>. Money still left to spend.</li>';
+    h+='<li><strong>VAC — Variance at Completion</strong> = <code>BAC − EAC</code>. Positive = projected to come in under budget.</li>';
+    h+='<li><strong>TCPI — To-Complete Performance Index</strong> = <code>(BAC − EV) ÷ (BAC − AC)</code>. The CPI you would need to achieve from now until the end to still hit the original budget. Above 1.10 is generally considered unrealistic without major intervention.</li>';
+    h+='</ul>';
+
+    h+='<p><strong>The three EAC methods — when to use which:</strong></p>';
+    h+='<div style="background:#fff;border:1px solid var(--sand);border-radius:6px;padding:10px 14px;margin:8px 0 12px;">';
+    h+='<p style="margin:0 0 8px;"><strong>1. BAC ÷ CPI &nbsp;(Recommended default)</strong><br>Assumes the cost performance you have seen so far (CPI) will continue for the rest of the job. <em>Use when:</em> the work going forward is similar in nature to the work already done (typical for dirt/concrete production work). <em>Most defensible</em> for ongoing production phases.</p>';
+    h+='<p style="margin:0 0 8px;"><strong>2. AC + (BAC − EV)</strong><br>Assumes the remaining work will cost exactly what was originally budgeted, regardless of past performance. <em>Use when:</em> the cost overrun (or underrun) so far was caused by a one-time event that will not repeat — for example, an early weather delay, or a startup learning curve that is now behind you.</p>';
+    h+='<p style="margin:0;"><strong>3. AC + (BAC − EV) ÷ (CPI × SPI) &nbsp;(Composite)</strong><br>Assumes both cost <em>and</em> schedule pressure compound on the remaining work. The most conservative method. <em>Use when:</em> the job is both over budget <em>and</em> behind schedule, and you believe schedule pressure will force overtime / acceleration costs going forward. This is the "worst case" forecast.</p>';
+    h+='</div>';
+
+    h+='<p><strong>How % Complete is calculated (per cost code):</strong></p>';
+    h+='<ol style="margin:6px 0 12px 18px;padding:0;">';
+    h+='<li><strong>PM Manual Override</strong> (if entered in the table below) — always wins.</li>';
+    h+='<li><strong>Quantity-based</strong>: <code>actualQty ÷ budgetQty</code> from HeavyJob — preferred when both are available.</li>';
+    h+='<li><strong>Cost-based fallback</strong>: <code>actualCost ÷ budgetCost</code> — used when no quantity data exists.</li>';
+    h+='</ol>';
+
+    h+='<p><strong>How snapshots and the S-curve work:</strong><br>Every Monday morning (the first time the EVA tab is opened that week), the system automatically captures a snapshot of BAC / PV / EV / AC / CPI / SPI. These snapshots build up the S-curve trend chart. Snapshots also refresh whenever you import new actuals, so the current week always reflects the latest data.</p>';
+
+    h+='<p style="margin-bottom:0;"><strong>Health-check rules of thumb:</strong></p>';
+    h+='<ul style="margin:6px 0 0 18px;padding:0;">';
+    h+='<li>CPI ≥ 1.00 = healthy &nbsp;|&nbsp; 0.95–1.00 = watch &nbsp;|&nbsp; &lt; 0.95 = action needed</li>';
+    h+='<li>SPI ≥ 1.00 = on/ahead &nbsp;|&nbsp; 0.95–1.00 = slipping &nbsp;|&nbsp; &lt; 0.95 = behind</li>';
+    h+='<li>TCPI &gt; 1.10 = recovery plan likely unrealistic — consider revising the budget</li>';
+    h+='</ul>';
+
+    h+='</div></div>';
+  }
 
   // S-curve trend chart from snapshots
   const snaps=job.evaSnapshots||[];
