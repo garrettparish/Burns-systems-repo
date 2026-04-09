@@ -12,6 +12,24 @@ echo "🚀 Burns Systems — Deploy"
 echo "========================="
 echo ""
 
+# Clean up any stale git lock files (from crashed processes or interrupted operations)
+for LOCK in .git/index.lock .git/HEAD.lock .git/config.lock; do
+    if [ -f "$LOCK" ]; then
+        # Only remove if older than 60 seconds (avoid clobbering an active git process)
+        if [ -z "$(find "$LOCK" -newermt '60 seconds ago' 2>/dev/null)" ]; then
+            echo "🧹 Removing stale lock: $LOCK"
+            rm -f "$LOCK"
+        else
+            echo "⚠️  Lock $LOCK is recent — another git process may be running. Aborting."
+            echo "   Wait a moment and try again, or run 'rm $LOCK' manually if you're sure."
+            echo ""
+            echo "Press any key to close..."
+            read -n 1
+            exit 1
+        fi
+    fi
+done
+
 # Show what's changed
 echo "📋 Changes detected:"
 git status --short
@@ -50,7 +68,7 @@ git push origin main
 if [ $? -eq 0 ]; then
     echo ""
     echo "✅ Deployed! Netlify will build your site in ~30 seconds."
-    echo "🌐 Check: https://burns-systems.netlify.app"
+    echo "🌐 Check: https://bdcprojectcontrols.netlify.app"
 else
     echo ""
     echo "❌ Push failed — check your internet connection or GitHub auth."
