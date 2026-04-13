@@ -1553,7 +1553,7 @@ async function hcssLoadIntoActiveJob(){
   }));
   // Merge with any locally-imported rows (XLSX fallback) so the app never loses data
   job.actualsDetail=mergeActualsDetail(job.actualsDetail||[],detail);
-  job.actuals=rollupActualsDetail(job.actualsDetail);
+  job.actuals=rollupActualsDetail(job.actualsDetail,job.actuals);
   job.meta.lastActualsImport=new Date().toISOString();
   if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(job);
   await saveJob(Store.activeJob);
@@ -2228,7 +2228,10 @@ function parseActualsDetailRaw(rows){
 }
 
 // Rollup daily detail rows into cost-code summary (for backward-compat with job.actuals)
-function rollupActualsDetail(detail){
+function rollupActualsDetail(detail,prevActuals){
+  // Preserve budgetQty from any prior cost code summary import
+  const prevBudgetQty={};
+  (prevActuals||[]).forEach(a=>{if(a.budgetQty)prevBudgetQty[a.code]=a.budgetQty});
   const byCode={};
   detail.forEach(d=>{
     if(!byCode[d.costCode]){
@@ -2236,7 +2239,7 @@ function rollupActualsDetail(detail){
         code:d.costCode,
         description:d.costCodeDesc,
         unit:d.unit,
-        budgetQty:0,
+        budgetQty:prevBudgetQty[d.costCode]||0,
         qtyInstalled:0,
         actualHours:0,
         actualEquipHrs:0,
@@ -2440,7 +2443,7 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     targetKeys.forEach(jk=>{
       const tj=Store.jobs[jk];if(!tj)return;
       tj.actualsDetail=mergeActualsDetail(tj.actualsDetail||[],byJob[jk]);
-      tj.actuals=rollupActualsDetail(tj.actualsDetail);
+      tj.actuals=rollupActualsDetail(tj.actualsDetail,tj.actuals);
       tj.meta.lastActualsImport=now;
       // Capture EVA snapshot for each updated job
       if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(tj);
@@ -6625,10 +6628,34 @@ function renderProductionTracker(job){
 
   // Pre-group daily detail by cost code for drill-down
   const detailByCode={};
-  (job.actualsDetail||[]).forEach(d=>{
-    if(!detailByCode[d.costCode])detailByCode[d.costCode]=[];
-    detailByCode[d.costCode].push(d);
-  });
+  const jobDetail=job.actualsDetail||[];
+  if(jobDetail.length){
+    // Primary source: actualsDetail (full HJ daily detail)
+    jobDetail.forEach(d=>{
+      if(!detailByCode[d.costCode])detailByCode[d.costCode]=[];
+      detailByCode[d.costCode].push(d);
+    });
+  }else{
+    // Fallback: crewHistory (populated from all HJ imports, even w/o actualsDetail)
+    const jobNum=String(job.meta?.number||'').trim();
+    if(jobNum){
+      Store.crewHistory.forEach(r=>{
+        if(String(r.jobCode).trim()!==jobNum)return;
+        if(!detailByCode[r.costCode])detailByCode[r.costCode]=[];
+        detailByCode[r.costCode].push({
+          date:r.date,
+          foreman:r.crewId||'',
+          actualQty:r.qty||0,
+          actualLaborHours:r.hours||0,
+          actualLaborCost:0,
+          actualEquipCost:0,
+          actualMatCost:0,
+          actualSubCost:0,
+          actualAllCost:r.cost||0,
+        });
+      });
+    }
+  }
   // Sort each group by date descending
   Object.values(detailByCode).forEach(arr=>arr.sort((a,b)=>b.date.localeCompare(a.date)));
 
