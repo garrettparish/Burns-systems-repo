@@ -982,7 +982,8 @@ function suggestCrewAssignment(crewId,dateISO){
     });
   });
 
-  // 3. HISTORY-BASED FALLBACK: jobs this crew has worked before (uses pre-built index)
+  // 3. HISTORY-BASED FALLBACK: jobs this crew has worked before
+  //    Only include if the job still has active schedule tasks near the target date
   if(suggestions.length<3){
     if(!_histByCrewJob)_buildHistIndex();
     const jobCounts=_histByCrewJob[crewForeman]||{};
@@ -990,10 +991,19 @@ function suggestCrewAssignment(crewId,dateISO){
       .sort((a,b)=>b[1].count-a[1].count)
       .forEach(([jc,data])=>{
         if(seen[jc])return;
+        // Check if this job has schedule tasks that overlap or are near the target date
+        const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==jc);
+        if(jobEntry){
+          const [jk,job]=jobEntry;
+          const hasActiveTasks=(job.schedule||[]).some(t=>{
+            const s=toDate(t.start),f=toDate(t.finish);
+            return s&&f&&s<=targetDate&&f>=targetDate;
+          });
+          if(!hasActiveTasks)return; // Don't suggest jobs with no active work on this date
+        }
         seen[jc]=true;
         const disc=getDiscipline(data.costCode||'');
         const tradeAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
-        const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==jc);
         suggestions.push({
           jobCode:jc,jobName:jobEntry?jobEntry[1].meta?.name||jc:jc,trade:tradeAbbr,tradeAbbr,
           confidence:0.25,
@@ -1005,9 +1015,9 @@ function suggestCrewAssignment(crewId,dateISO){
   return suggestions.sort((a,b)=>b.confidence-a.confidence).slice(0,5);
 }
 
-// Get the effective cell value for a crew on a date (confirmed plan > history > suggestion)
+// Get the effective cell value for a crew on a date
+// HIERARCHY: 1) Confirmed plan (gospel) → 2) History (past) → 3) Schedule assignment → 4) Conservative suggestion (≤3wk)
 function getEffectivePlanCell(crewId,dateISO){
-  // Check render cache first
   const cacheKey=crewId+'|'+dateISO;
   if(_cellCache[cacheKey]!==undefined) return _cellCache[cacheKey];
 
@@ -1015,15 +1025,14 @@ function getEffectivePlanCell(crewId,dateISO){
   const crew=Store.crews[crewId];
   if(!crew){_cellCache[cacheKey]=null;return null}
 
-  // 1. Confirmed plan entry
+  // 1. CONFIRMED PLAN — gospel, user manually set it
   const planned=getCrewPlanCell(crewId,dateISO);
   if(planned&&planned.confirmed){const r={jobCode:planned.jobCode,trade:planned.trade,source:'plan'};_cellCache[cacheKey]=r;return r}
 
-  // 2. Historical data (for past/today) — use dominant trade by hours worked
+  // 2. HISTORY — for past/today, what actually happened (HJ data)
   if(dateISO<=todayISO){
     const dayRecords=_getHistRecords(crew.foreman,dateISO);
     if(dayRecords.length>0){
-      // Find the dominant job (most hours that day)
       const byJob={};
       dayRecords.forEach(r=>{
         if(!byJob[r.jobCode])byJob[r.jobCode]={hours:0,records:[]};
@@ -1032,7 +1041,6 @@ function getEffectivePlanCell(crewId,dateISO){
       });
       const topJob=Object.entries(byJob).sort((a,b)=>b[1].hours-a[1].hours)[0];
       const jobCode=topJob[0];
-      // Within that job, find the dominant trade by hours
       const byTrade={};
       topJob[1].records.forEach(r=>{
         const disc=getDiscipline(r.costCode||'');
@@ -1044,13 +1052,75 @@ function getEffectivePlanCell(crewId,dateISO){
     }
   }
 
-  // 3. Suggestion (for future) — schedule-assigned crews get 'scheduled' source
-  const suggestions=suggestCrewAssignment(crewId,dateISO);
-  if(suggestions.length>0){
-    const top=suggestions[0];
-    if(top.confidence>=0.95){const r={jobCode:top.jobCode,trade:top.tradeAbbr,source:'scheduled',confidence:top.confidence};_cellCache[cacheKey]=r;return r}
-    if(top.confidence>=0.4){const r={jobCode:top.jobCode,trade:top.tradeAbbr,source:'suggested',confidence:top.confidence};_cellCache[cacheKey]=r;return r}
+  // 3. SCHEDULE-ASSIGNED — crew explicitly assigned to a task via crew picker
+  const targetDate=new Date(dateISO+'T00:00:00');
+  let schedMatch=null;
+  Object.entries(Store.jobs).forEach(([jk,job])=>{
+    if(schedMatch)return;
+    const jobCode=String(job.meta?.number||'').trim();
+    if(!jobCode)return;
+    (job.schedule||[]).forEach(task=>{
+      if(schedMatch)return;
+      if(!task.crews||!task.crews.includes(crewId))return;
+      const s=toDate(task.start),f=toDate(task.finish);
+      if(!s||!f||s>targetDate||f<targetDate)return;
+      const disc=getTaskDiscipline(task.name||'');
+      const tradeAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+      schedMatch={jobCode,trade:tradeAbbr,source:'scheduled',taskName:task.name};
+    });
+  });
+  if(schedMatch){_cellCache[cacheKey]=schedMatch;return schedMatch}
+
+  // 4. CONSERVATIVE SUGGESTION — only within 3 weeks of today, and only with strong reasoning
+  const daysOut=Math.floor((targetDate-new Date(todayISO+'T00:00:00'))/86400000);
+  const MAX_SUGGEST_DAYS=21; // 3 weeks max
+
+  if(daysOut>MAX_SUGGEST_DAYS){
+    // Too far out — leave blank, we don't know enough
+    _cellCache[cacheKey]=null;return null;
   }
+
+  // Only suggest if there's continuity AND the job's schedule supports it
+  const crewForeman=crew.foreman;
+  let recentJob=null,recentTrade=null;
+  // Look back up to 14 days for recent work
+  for(let back=1;back<=14;back++){
+    const checkDate=new Date(targetDate);checkDate.setDate(checkDate.getDate()-back);
+    const checkISO=checkDate.toISOString().split('T')[0];
+    const planned2=getCrewPlanCell(crewId,checkISO);
+    if(planned2&&planned2.confirmed){recentJob=planned2.jobCode;recentTrade=planned2.trade;break}
+    const dayHist=_getHistRecords(crewForeman,checkISO);
+    if(dayHist.length>0){
+      const byJob={};
+      dayHist.forEach(r=>{if(!byJob[r.jobCode])byJob[r.jobCode]={hours:0,records:[]};byJob[r.jobCode].hours+=(r.hours||0);byJob[r.jobCode].records.push(r)});
+      const topJob=Object.entries(byJob).sort((a,b)=>b[1].hours-a[1].hours)[0];
+      recentJob=topJob[0];
+      const byTrade={};
+      topJob[1].records.forEach(r=>{const disc=getDiscipline(r.costCode||'');const abbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';byTrade[abbr]=(byTrade[abbr]||0)+(r.hours||0)});
+      recentTrade=Object.entries(byTrade).sort((a,b)=>b[1]-a[1])[0][0];
+      break;
+    }
+  }
+
+  if(recentJob){
+    // Check if the recent job still has active schedule tasks on the target date
+    const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==recentJob);
+    if(jobEntry){
+      const [jk,job]=jobEntry;
+      const activeTasks=(job.schedule||[]).filter(t=>{
+        const s=toDate(t.start),f=toDate(t.finish);
+        return s&&f&&s<=targetDate&&f>=targetDate;
+      });
+      if(activeTasks.length>0){
+        // Good signal: recent work + schedule backs it up
+        const r={jobCode:recentJob,trade:recentTrade||'GN',source:'suggested',confidence:0.7};
+        _cellCache[cacheKey]=r;return r;
+      }
+    }
+    // Recent job has no active tasks on this date — don't suggest, leave blank
+  }
+
+  // No strong signal — blank is better than a bad guess
   _cellCache[cacheKey]=null;
   return null;
 }
