@@ -226,6 +226,35 @@ tr:hover{background:#FAF8F5}
 .help-tag.editable{background:#FFF8F0;color:var(--orange)}
 .help-tag.auto{background:#F0F4FF;color:var(--blue)}
 @media(max-width:768px){.import-grid{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.nav-tab{padding:10px 12px;font-size:11px}.jcs-actions{flex-direction:column}}
+/* Crew & Resource Styles */
+.crew-timeline{overflow-x:auto;margin-bottom:20px}
+.crew-timeline-wrapper{min-width:1000px;display:flex;flex-direction:column}
+.crew-timeline-header{display:flex;gap:0;margin-bottom:8px}
+.crew-timeline-label{width:200px;min-width:200px;font-family:Oswald,sans-serif;font-size:12px;font-weight:600;padding-right:8px}
+.crew-timeline-months{flex:1;display:flex;border-bottom:1px solid var(--border)}
+.crew-timeline-month{flex:1;text-align:center;border-right:1px solid var(--border);padding:6px 0;font-family:Oswald,sans-serif;font-size:11px;color:var(--text-light)}
+.crew-timeline-row{display:flex;align-items:center;gap:0;padding:8px 0;border-bottom:1px solid var(--border)}
+.crew-timeline-name{width:200px;min-width:200px;padding-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.crew-timeline-bars{flex:1;position:relative;height:32px;background:var(--bg);border-radius:2px}
+.crew-timeline-bar{position:absolute;height:100%;border-radius:2px;display:flex;align-items:center;padding:0 4px;font-size:9px;font-family:Oswald,sans-serif;color:var(--white);white-space:nowrap;overflow:hidden;opacity:.9}
+.crew-timeline-bar.actual{background:var(--green);border:1px solid #2E3D2E}
+.crew-timeline-bar.planned{background:repeating-linear-gradient(45deg,var(--orange),var(--orange) 10px,rgba(242,103,34,.5) 10px,rgba(242,103,34,.5) 20px);border:1px solid var(--orange)}
+.crew-timeline-bar.conflict{border:2px solid var(--red);box-shadow:0 0 8px rgba(192,57,43,.3)}
+.crew-today-line{position:absolute;top:0;bottom:0;width:2px;background:var(--orange);opacity:.8}
+.crew-conflict-badge{display:inline-block;background:var(--red);color:white;font-size:10px;font-family:Oswald,sans-serif;padding:1px 6px;border-radius:3px;margin-left:4px}
+.crew-dir-table{width:100%;border-collapse:collapse;font-size:13px}
+.crew-dir-table th{font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;background:var(--green);color:var(--white);padding:10px 12px;text-align:left}
+.crew-dir-table td{padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+.crew-dir-table tr:hover{background:#FAF8F5}
+.crew-edit-form{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:8px}
+.crew-edit-form.full{grid-column:span 2}
+.resource-demand-chart{display:flex;align-items:flex-end;gap:4px;height:200px;padding:20px;background:var(--bg);border-radius:8px;margin-bottom:20px}
+.resource-demand-bar{flex:1;background:var(--green);border-radius:2px 2px 0 0;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:4px 0;min-height:2px}
+.resource-demand-label{font-size:10px;margin-top:4px;color:var(--text-light);white-space:nowrap}
+.unassigned-crews{list-style:none;padding:0;margin:0}
+.unassigned-crew-item{padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.unassigned-crew-name{font-weight:500}
+.unassigned-crew-actions{display:flex;gap:4px}
 </style>
 </head>
 <body>
@@ -242,10 +271,14 @@ tr:hover{background:#FAF8F5}
 <div class="nav">
   <button class="nav-tab" data-tab="global">Global View</button>
   <button class="nav-tab active" data-tab="job">Job Dashboard</button>
+  <button class="nav-tab" data-tab="resources">Resources</button>
 </div>
 
 <!-- GLOBAL VIEW -->
 <div id="panel-global" class="panel"><div id="globalContent"></div></div>
+
+<!-- RESOURCES VIEW -->
+<div id="panel-resources" class="panel"><div id="resourcesContent"></div></div>
 
 <!-- JOB DASHBOARD (with sub-tabs) -->
 <div id="panel-job" class="panel active">
@@ -262,6 +295,7 @@ tr:hover{background:#FAF8F5}
     <button class="sub-tab" data-sub="schedule" onclick="switchSubTab('schedule')">Schedule</button>
     <button class="sub-tab" data-sub="jcs" onclick="switchSubTab('jcs')">Job Cost Schedule</button>
     <button class="sub-tab" data-sub="production" onclick="switchSubTab('production')">Production</button>
+    <button class="sub-tab" data-sub="crews" onclick="switchSubTab('crews')">Crews</button>
     <button class="sub-tab" data-sub="eva" onclick="switchSubTab('eva')">EVA</button>
     <button class="sub-tab" data-sub="forecast" onclick="switchSubTab('forecast')">Forecast</button>
     <button class="sub-tab" data-sub="payapps" onclick="switchSubTab('payapps')">Pay Apps</button>
@@ -297,6 +331,11 @@ tr:hover{background:#FAF8F5}
   <!-- Sub-panel: Production -->
   <div id="sub-production" class="sub-panel">
     <div id="productionContent"></div>
+  </div>
+
+  <!-- Sub-panel: Crews -->
+  <div id="sub-crews" class="sub-panel">
+    <div id="crewsContent"></div>
   </div>
 
   <!-- Sub-panel: EVA -->
@@ -467,6 +506,51 @@ tr:hover{background:#FAF8F5}
   </div>
 </div>
 
+<!-- CREW ASSIGNMENT MODAL -->
+<div class="modal-bg" id="crewAssignModal">
+  <div class="modal">
+    <h3>Assign Crew to Job</h3>
+    <label>Crew</label>
+    <select id="assignCrewSelect"></select>
+    <label>Job</label>
+    <select id="assignJobSelect"></select>
+    <label>Start Date</label>
+    <input type="date" id="assignStart">
+    <label>End Date</label>
+    <input type="date" id="assignEnd">
+    <label>Headcount</label>
+    <input type="number" id="assignHeadcount" value="4" min="1">
+    <label>Note</label>
+    <input type="text" id="assignNote" placeholder="e.g., Grading phase">
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeCrewAssignModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveCrewAssignment()">Assign</button>
+    </div>
+  </div>
+</div>
+
+<!-- CREW EDIT MODAL -->
+<div class="modal-bg" id="crewEditModal">
+  <div class="modal">
+    <h3>Edit Crew</h3>
+    <label>Foreman Name</label>
+    <input type="text" id="editCrewForeman" readonly style="background:var(--bg);cursor:not-allowed;">
+    <label>Default Headcount</label>
+    <input type="number" id="editCrewHeadcount" min="1" value="4">
+    <label>Equipment (comma-separated)</label>
+    <input type="text" id="editCrewEquipment" placeholder="e.g., Excavator, Truck, Dozer">
+    <label>Trades (comma-separated)</label>
+    <input type="text" id="editCrewTrades" placeholder="e.g., Earthwork, Utilities">
+    <label>Hourly Rate ($)</label>
+    <input type="number" id="editCrewRate" min="0" step="0.01">
+    <div class="modal-actions">
+      <button class="del-btn" onclick="deleteCrewConfirm()" style="margin-right:auto;">Delete Crew</button>
+      <button class="btn-secondary" onclick="closeCrewEditModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveCrewEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════
 // DATA STORE
@@ -478,6 +562,8 @@ let _schedSortDir='asc'; // sort direction: asc or desc
 let _cfTimeFrom=0;
 let _cfTimeTo=0; // 0 means "show all" — renderCashFlowProjection will set to months.length-1
 let _prodView='tracker'; // Production tab view: 'tracker' or 'log'
+let _resTimeRange='3m'; // Resource view time range: '1m', '3m', '6m', 'full'
+let _editingCrewId=null; // Currently editing crew ID
 
 // ── Generic table sort system ──
 const _tblSort={};
@@ -583,6 +669,211 @@ function saveAdminPin(){
   localStorage.setItem('bdc_admin_pin',newPin);
   closeAdminPinModal();
   log('Admin password updated.');
+}
+
+// ═══════════════════════════════════════════
+// CREW & RESOURCE HELPERS
+// ═══════════════════════════════════════════
+function slugify(name){
+  // Convert "Andrew Stafford" → "stafford-andrew"
+  if(!name)return '';
+  const parts=name.trim().split(/\s+/);
+  if(parts.length===0)return '';
+  if(parts.length===1)return parts[0].toLowerCase().replace(/[^a-z0-9-]/g,'');
+  // Last-first format
+  const last=parts[parts.length-1].toLowerCase().replace(/[^a-z0-9-]/g,'');
+  const first=parts[0].toLowerCase().replace(/[^a-z0-9-]/g,'');
+  return last+'-'+first
+}
+
+function persistCrews(){
+  localStorage.setItem('bdc_crews',JSON.stringify(Store.crews))
+}
+
+function loadCrews(){
+  const stored=localStorage.getItem('bdc_crews');
+  if(stored){try{Store.crews=JSON.parse(stored)}catch(e){log('Could not load crews from storage')}}
+}
+
+function discoverCrews(job){
+  if(!job)return 0;
+  let discovered=0;
+  // Scan actualsDetail for foreman names
+  if(job.actualsDetail&&Array.isArray(job.actualsDetail)){
+    const foremenSeen={};
+    job.actualsDetail.forEach(row=>{
+      if(row.foreman&&!foremenSeen[row.foreman]){
+        foremenSeen[row.foreman]=true;
+        const slug=slugify(row.foreman);
+        if(!Store.crews[slug]){
+          Store.crews[slug]={
+            id:slug,
+            foreman:row.foreman,
+            defaultHeadcount:4,
+            equipment:[],
+            trades:[],
+            hourlyRate:0,
+            assignments:[]
+          };
+          discovered++;
+        }
+      }
+    });
+  }
+  // Scan activities for crew codes (if no foreman in detail)
+  if(job.activities&&Array.isArray(job.activities)){
+    job.activities.forEach(act=>{
+      if(act.crew&&!Store.crews[act.crew]){
+        Store.crews[act.crew]={
+          id:act.crew,
+          foreman:act.crew,
+          defaultHeadcount:4,
+          equipment:[],
+          trades:act.trades||[],
+          hourlyRate:0,
+          assignments:[]
+        };
+        discovered++;
+      }
+    });
+  }
+  persistCrews();
+  return discovered
+}
+
+function openCrewAssignModal(crewId){
+  const crewSelect=document.getElementById('assignCrewSelect');
+  const jobSelect=document.getElementById('assignJobSelect');
+
+  // Populate crew select
+  crewSelect.innerHTML='';
+  const crewList=Object.entries(Store.crews).sort((a,b)=>(a[1].foreman||'').localeCompare(b[1].foreman||''));
+  crewList.forEach(([id,crew])=>{
+    const opt=document.createElement('option');
+    opt.value=id;
+    opt.text=crew.foreman;
+    if(id===crewId)opt.selected=true;
+    crewSelect.appendChild(opt);
+  });
+
+  // Populate job select
+  jobSelect.innerHTML='';
+  const jobList=Object.entries(Store.jobs).sort((a,b)=>(a[1].meta.name||'').localeCompare(b[1].meta.name||''));
+  jobList.forEach(([id,job])=>{
+    const opt=document.createElement('option');
+    opt.value=id;
+    opt.text=job.meta.name+' #'+job.meta.number;
+    jobSelect.appendChild(opt);
+  });
+
+  // Clear other fields
+  document.getElementById('assignStart').value='';
+  document.getElementById('assignEnd').value='';
+  document.getElementById('assignHeadcount').value='4';
+  document.getElementById('assignNote').value='';
+
+  document.getElementById('crewAssignModal').classList.add('show');
+  setTimeout(()=>crewSelect.focus(),100);
+}
+
+function closeCrewAssignModal(){
+  document.getElementById('crewAssignModal').classList.remove('show');
+}
+
+function saveCrewAssignment(){
+  const crewId=document.getElementById('assignCrewSelect').value;
+  const jobId=document.getElementById('assignJobSelect').value;
+  const startDate=document.getElementById('assignStart').value;
+  const endDate=document.getElementById('assignEnd').value;
+  const headcount=parseInt(document.getElementById('assignHeadcount').value,10)||4;
+  const note=document.getElementById('assignNote').value;
+
+  if(!crewId||!jobId||!startDate||!endDate){
+    alert('Please fill in all required fields.');
+    return;
+  }
+
+  if(!Store.crews[crewId]){
+    alert('Crew not found.');
+    return;
+  }
+
+  // Check for conflicts
+  const s=toDate(startDate),e=toDate(endDate);
+  const crew=Store.crews[crewId];
+  if(!crew.assignments)crew.assignments=[];
+
+  const existing=crew.assignments.filter(a=>a.jobId===jobId);
+  if(existing.length>0){
+    // Update existing
+    existing[0].startDate=startDate;
+    existing[0].endDate=endDate;
+    existing[0].headcount=headcount;
+    existing[0].note=note;
+  }else{
+    // Add new
+    crew.assignments.push({jobId,startDate,endDate,headcount,note});
+  }
+
+  persistCrews();
+  closeCrewAssignModal();
+  // Refresh the active view
+  if(_activeSubTab==='crews')renderCrews();
+  else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
+  log(`Assigned ${crew.foreman} to job from ${startDate} to ${endDate}`);
+}
+
+function openCrewEditModal(crewId){
+  _editingCrewId=crewId;
+  const crew=Store.crews[crewId];
+  if(!crew)return;
+
+  document.getElementById('editCrewForeman').value=crew.foreman;
+  document.getElementById('editCrewHeadcount').value=crew.defaultHeadcount||4;
+  document.getElementById('editCrewEquipment').value=(crew.equipment||[]).join(', ');
+  document.getElementById('editCrewTrades').value=(crew.trades||[]).join(', ');
+  document.getElementById('editCrewRate').value=crew.hourlyRate||0;
+
+  document.getElementById('crewEditModal').classList.add('show');
+  setTimeout(()=>document.getElementById('editCrewHeadcount').focus(),100);
+}
+
+function closeCrewEditModal(){
+  document.getElementById('crewEditModal').classList.remove('show');
+  _editingCrewId=null;
+}
+
+function saveCrewEdit(){
+  if(!_editingCrewId)return;
+  const crew=Store.crews[_editingCrewId];
+  if(!crew)return;
+
+  crew.defaultHeadcount=parseInt(document.getElementById('editCrewHeadcount').value,10)||4;
+  crew.equipment=document.getElementById('editCrewEquipment').value.split(',').map(s=>s.trim()).filter(s=>s);
+  crew.trades=document.getElementById('editCrewTrades').value.split(',').map(s=>s.trim()).filter(s=>s);
+  crew.hourlyRate=parseFloat(document.getElementById('editCrewRate').value)||0;
+
+  persistCrews();
+  closeCrewEditModal();
+  // Refresh
+  if(_activeSubTab==='crews')renderCrews();
+  else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
+  log(`Updated crew: ${crew.foreman}`);
+}
+
+function deleteCrewConfirm(){
+  if(!_editingCrewId)return;
+  const crew=Store.crews[_editingCrewId];
+  if(!crew)return;
+  if(!confirm(`Delete crew "${crew.foreman}" and all their assignments?`))return;
+
+  delete Store.crews[_editingCrewId];
+  persistCrews();
+  closeCrewEditModal();
+  // Refresh
+  if(_activeSubTab==='crews')renderCrews();
+  else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
+  log(`Deleted crew: ${crew.foreman}`);
 }
 
 // ═══════════════════════════════════════════
@@ -1106,6 +1397,7 @@ document.querySelectorAll('.nav-tab').forEach(tab=>{
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
     document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
     if(tab.dataset.tab==='global')renderGlobalView();
+    if(tab.dataset.tab==='resources')renderResources();
     if(tab.dataset.tab==='job'){if(Store.activeJob){document.getElementById('subNav').style.display='flex';document.getElementById('noJobMsg').style.display='none';document.getElementById('editJobBtn').style.display='inline-block'}renderActiveSubTab()}
   });
 });
@@ -1142,6 +1434,7 @@ function renderActiveSubTab(){
     schedule:renderSchedule,
     jcs:renderJobCostSchedule,
     production:renderProduction,
+    crews:renderCrews,
     eva:renderEVA,
     forecast:renderForecast,
     payapps:renderPayApps,
@@ -1153,6 +1446,8 @@ function renderActiveSubTab(){
 
 // Load saved jobs on startup
 loadJobs();
+// Load crews from local storage
+loadCrews();
 // Init user label
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // Poll HCSS sync status once on startup (non-blocking)
@@ -1674,6 +1969,9 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
       tj.meta.lastActualsImport=now;
       // Capture EVA snapshot for each updated job
       if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(tj);
+      // Auto-discover crews from actualsDetail
+      const crewsFound=discoverCrews(tj);
+      if(crewsFound>0)log(`Discovered ${crewsFound} new crew(s) from daily detail`);
       const dr=tj.actualsDetail.length?(tj.actualsDetail[0].date+' → '+tj.actualsDetail[tj.actualsDetail.length-1].date):'';
       log(`${tj.meta.name} #${tj.meta.number}: ${tj.actualsDetail.length} total rows (${byJob[jk].length} new/updated). Range: ${dr}`);
     });
@@ -3680,6 +3978,183 @@ function renderGantt(tasks,meta,baselineSchedule){
 }
 
 // ═══════════════════════════════════════════
+// RESOURCES VIEW
+// ═══════════════════════════════════════════
+const JOB_COLORS=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090'];
+
+function renderResources(){
+  const el=document.getElementById('resourcesContent');
+  const crewList=Object.values(Store.crews);
+  if(crewList.length===0){
+    el.innerHTML='<div class="empty-state"><h2>No Crews</h2><p>Import HeavyJob daily detail to auto-discover crews from your projects.</p></div>';
+    return;
+  }
+
+  let h='';
+
+  // KPI Row
+  const activeCrewsThisWeek=new Set();
+  const now=new Date(),weekStart=new Date(now),weekEnd=new Date(now);
+  weekStart.setDate(now.getDate()-now.getDay());
+  weekEnd.setTime(weekStart.getTime()+7*86400000);
+  let totalHeadcountThisWeek=0;
+
+  crewList.forEach(crew=>{
+    const hasWork=crew.assignments?.some(a=>{
+      const s=toDate(a.startDate),e=toDate(a.endDate);
+      return s<=weekEnd&&e>=weekStart;
+    });
+    if(hasWork){activeCrewsThisWeek.add(crew.id);totalHeadcountThisWeek+=crew.defaultHeadcount}
+  });
+
+  // Count conflicts (crews assigned to 2+ jobs on overlapping dates)
+  let conflictCount=0;
+  crewList.forEach(crew=>{
+    const assignments=(crew.assignments||[]);
+    for(let i=0;i<assignments.length-1;i++){
+      for(let j=i+1;j<assignments.length;j++){
+        const s1=toDate(assignments[i].startDate),e1=toDate(assignments[i].endDate);
+        const s2=toDate(assignments[j].startDate),e2=toDate(assignments[j].endDate);
+        if(s1<=e2&&s2<=e1){conflictCount++;break}
+      }
+    }
+  });
+
+  h+='<div class="kpi-row">';
+  h+=`<div class="kpi"><div class="kpi-value">${crewList.length}</div><div class="kpi-label">Total Crews</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${activeCrewsThisWeek.size}</div><div class="kpi-label">Active This Week</div></div>`;
+  h+=`<div class="kpi"><div class="kpi-value">${totalHeadcountThisWeek}</div><div class="kpi-label">Headcount (this week)</div></div>`;
+  if(conflictCount>0)h+=`<div class="kpi warn"><div class="kpi-value">${conflictCount}</div><div class="kpi-label">Conflicts</div></div>`;
+  h+='</div>';
+
+  // Time range buttons
+  h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">';
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='1m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='1m'?'white':'var(--text)'};" onclick="_resTimeRange='1m';renderResources();">1 Month</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='3m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='3m'?'white':'var(--text)'};" onclick="_resTimeRange='3m';renderResources();">3 Months</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='6m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='6m'?'white':'var(--text)'};" onclick="_resTimeRange='6m';renderResources();">6 Months</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='full'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='full'?'white':'var(--text)'};" onclick="_resTimeRange='full';renderResources();">Full Lifecycle</button>`;
+  h+='</div>';
+
+  // Resource Loading Gantt
+  const allAssignments=[];
+  crewList.forEach(crew=>{
+    (crew.assignments||[]).forEach(a=>{
+      const s=toDate(a.startDate),e=toDate(a.endDate);
+      if(s&&e){allAssignments.push({crewId:crew.id,crewName:crew.foreman,jobId:a.jobId,jobName:(Store.jobs[a.jobId]?.meta?.name||'Unknown'),s,e,headcount:a.headcount})}
+    });
+  });
+
+  if(allAssignments.length>0){
+    // Determine time range
+    let minDate=Math.min(...allAssignments.map(a=>a.s));
+    let maxDate=Math.max(...allAssignments.map(a=>a.e));
+    const now=new Date();
+    const rangeMonths=_resTimeRange==='1m'?1:_resTimeRange==='3m'?3:_resTimeRange==='6m'?6:999;
+    if(_resTimeRange!=='full'){
+      maxDate=Math.min(maxDate,now.getTime()+rangeMonths*30*86400000);
+    }
+    minDate=Math.min(minDate,now.getTime());
+
+    const timelineDays=Math.max((maxDate-minDate)/86400000,1);
+    const crewGanttList=crewList.filter(c=>(c.assignments||[]).some(a=>{const s=toDate(a.startDate),e=toDate(a.endDate);return s<=new Date(maxDate)&&e>=new Date(minDate)})).sort((a,b)=>(a.foreman||'').localeCompare(b.foreman||''));
+
+    h+='<div class="card"><div class="card-title">Resource Loading (Gantt)</div>';
+    h+='<div class="crew-timeline"><div class="crew-timeline-wrapper">';
+
+    // Month headers
+    let months='';const c=new Date(minDate);c.setDate(1);
+    while(c<=maxDate){
+      const ms=Math.max(0,(c-minDate)/86400000);
+      const nm=new Date(c);nm.setMonth(nm.getMonth()+1);
+      const me=Math.min(timelineDays,(nm-minDate)/86400000);
+      months+=`<div class="crew-timeline-month">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;
+      c.setMonth(c.getMonth()+1);
+    }
+    h+=`<div style="display:flex;"><div class="crew-timeline-label"></div><div style="flex:1;display:flex;border-bottom:2px solid var(--border);">${months}</div></div>`;
+
+    // Crew rows
+    crewGanttList.forEach(crew=>{
+      h+=`<div class="crew-timeline-row">`;
+      h+=`<div class="crew-timeline-name">${esc(crew.foreman)}</div>`;
+      h+=`<div class="crew-timeline-bars" style="display:flex;align-items:center;position:relative;">`;
+
+      // Each assignment as a bar
+      const crewAssignments=(crew.assignments||[]).filter(a=>{const s=toDate(a.startDate),e=toDate(a.endDate);return s&&e&&s<=new Date(maxDate)&&e>=new Date(minDate)});
+      crewAssignments.forEach((a,idx)=>{
+        const s=toDate(a.startDate),e=toDate(a.endDate);
+        const jobIdx=Object.keys(Store.jobs).indexOf(a.jobId);
+        const color=JOB_COLORS[jobIdx%JOB_COLORS.length];
+        const l=Math.max(0,(s-minDate)/86400000)/timelineDays*100;
+        const w=Math.max(((e-s)/86400000)/timelineDays*100,.5);
+        h+=`<div class="crew-timeline-bar" style="left:${l}%;width:${w}%;background:${color};border:1px solid ${color};opacity:.85;" title="${a.jobName}: ${a.headcount} HC · ${fmtDate(s)} to ${fmtDate(e)}"></div>`;
+      });
+
+      // Today line
+      if(now>=minDate&&now<=maxDate){
+        const todayPct=(now-minDate)/86400000/timelineDays*100;
+        h+=`<div class="crew-today-line" style="left:${todayPct}%;"></div>`;
+      }
+      h+='</div></div>';
+    });
+
+    h+='</div></div></div>';
+  }
+
+  // Resource Demand Curve (stacked by week)
+  const weekBuckets={};
+  let minWeekStart=null;
+  let maxWeekStart=null;
+  allAssignments.forEach(a=>{
+    const ws=new Date(a.s);ws.setDate(ws.getDate()-ws.getDay());
+    let we=new Date(ws.getTime()+7*86400000);
+    if(!minWeekStart||ws<minWeekStart)minWeekStart=ws;
+    if(!maxWeekStart||ws>maxWeekStart)maxWeekStart=ws;
+
+    while(ws<a.e){
+      const wk=ws.toISOString().split('T')[0];
+      if(!weekBuckets[wk])weekBuckets[wk]={week:ws,byJob:{}};
+      const jobKey=a.jobId;
+      if(!weekBuckets[wk].byJob[jobKey])weekBuckets[wk].byJob[jobKey]=0;
+      weekBuckets[wk].byJob[jobKey]+=a.headcount;
+      ws.setDate(ws.getDate()+7);
+    }
+  });
+
+  if(Object.keys(weekBuckets).length>0){
+    const weeks=Object.keys(weekBuckets).sort().map(k=>weekBuckets[k]);
+    const maxDemand=Math.max(...weeks.map(w=>Object.values(w.byJob).reduce((a,b)=>a+b,0)));
+
+    h+='<div class="card"><div class="card-title">Resource Demand by Week</div>';
+    h+='<div class="resource-demand-chart">';
+    weeks.forEach(w=>{
+      const total=Object.values(w.byJob).reduce((a,b)=>a+b,0);
+      const pct=maxDemand>0?total/maxDemand*100:0;
+      h+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">`;
+      h+=`<div style="width:100%;background:var(--green);height:${pct}%;border-radius:2px;opacity:.85;" title="${total} HC"></div>`;
+      h+=`<div class="resource-demand-label">${w.week.toLocaleDateString('en-US',{month:'numeric',day:'numeric'})}</div>`;
+      h+='</div>';
+    });
+    h+='</div></div>';
+  }
+
+  // Unassigned Crews
+  const unassigned=crewList.filter(c=>(!c.assignments||c.assignments.length===0));
+  if(unassigned.length>0){
+    h+='<div class="card"><div class="card-title">Unassigned Crews</div>';
+    h+='<ul class="unassigned-crews">';
+    unassigned.forEach(c=>{
+      h+=`<li class="unassigned-crew-item">`;
+      h+=`<span class="unassigned-crew-name">${esc(c.foreman)}</span>`;
+      h+=`<div class="unassigned-crew-actions"><button class="edit-btn" onclick="openCrewAssignModal('${esc(c.id)}')">Assign</button><button class="edit-btn" onclick="openCrewEditModal('${esc(c.id)}')">Edit</button></div>`;
+      h+='</li>';
+    });
+    h+='</ul></div>';
+  }
+
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
 // GLOBAL VIEW
 // ═══════════════════════════════════════════
 function renderGlobalView(){
@@ -3828,6 +4303,29 @@ function renderGlobalView(){
     h+=`</div></div>`;
   });
   h+='</div>';
+
+  // ─── Resource Loading Summary ───
+  const allCrews=Object.values(Store.crews);
+  if(allCrews.length>0){
+    h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Resource Loading Summary</span><button class="edit-btn" onclick="document.querySelector(\'[data-tab=resources]\').click();return false;" style="border:1px solid var(--orange);color:var(--orange);">View Full Resources →</button></div>';
+    h+='<div class="table-wrap"><table>';
+    h+='<tr><th>Crew</th><th>Current Job</th><th>Until</th><th>Next Job</th><th>Starts</th><th>Headcount</th></tr>';
+    allCrews.forEach(crew=>{
+      const now=new Date();
+      let currentJob=null,currentEnd=null,nextJob=null,nextStart=null;
+      const assignments=(crew.assignments||[]).sort((a,b)=>toDate(a.startDate)-toDate(b.startDate));
+      assignments.forEach(a=>{
+        const s=toDate(a.startDate),e=toDate(a.endDate);
+        if(s<=now&&e>=now){currentJob=a;currentEnd=e}
+        else if(s>now&&!nextJob){nextJob=a;nextStart=s}
+      });
+      const cj=currentJob?(Store.jobs[currentJob.jobId]?.meta?.name||'Unknown'):null;
+      const nj=nextJob?(Store.jobs[nextJob.jobId]?.meta?.name||'Unknown'):null;
+      const hc=currentJob?currentJob.headcount:(nextJob?nextJob.headcount:crew.defaultHeadcount);
+      h+=`<tr><td>${esc(crew.foreman)}</td><td>${cj||'—'}</td><td>${currentEnd?fmtDate(currentEnd):'—'}</td><td>${nj||'—'}</td><td>${nextStart?fmtDate(nextStart):'—'}</td><td class="num">${hc}</td></tr>`;
+    });
+    h+='</table></div></div>';
+  }
 
   el.innerHTML=h;
 }
@@ -5764,6 +6262,216 @@ function renderProductionLog(job){
 
 // ═══════════════════════════════════════════
 // DISCIPLINE EDITOR
+// ═══════════════════════════════════════════
+// CREWS TAB
+// ═══════════════════════════════════════════
+function renderCrews(){
+  const el=document.getElementById('crewsContent');
+  const job=Store.jobs[Store.activeJob];
+  if(!job){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
+
+  let h='';
+
+  // ── Crew Assignment Timeline (Gantt) ──
+  const actualsStartEnd=getJobActualsDateRange(job);
+  const schedStart=job.meta.startDate?toDate(job.meta.startDate):null;
+  const schedEnd=job.meta.endDate?toDate(job.meta.endDate):null;
+  const timelineStart=Math.min(...[actualsStartEnd[0],schedStart].filter(Boolean));
+  const timelineEnd=Math.max(...[actualsStartEnd[1],schedEnd].filter(Boolean));
+
+  if(timelineStart&&timelineEnd&&timelineEnd>timelineStart){
+    const timelineDays=Math.max((timelineEnd-timelineStart)/86400000,1);
+    const today=new Date();today.setHours(0,0,0,0);
+
+    // Build crew assignment data for this job
+    const crewsInJob={};
+    const crewsList=[];
+
+    // Add crews with actual work on this job
+    if(job.actualsDetail&&Array.isArray(job.actualsDetail)){
+      const foremanDates={};
+      job.actualsDetail.forEach(row=>{
+        if(row.foreman&&row.date){
+          if(!foremanDates[row.foreman]){foremanDates[row.foreman]=[null,null]}
+          const d=toDate(row.date);
+          if(!foremanDates[row.foreman][0]||d<foremanDates[row.foreman][0])foremanDates[row.foreman][0]=d;
+          if(!foremanDates[row.foreman][1]||d>foremanDates[row.foreman][1])foremanDates[row.foreman][1]=d;
+        }
+      });
+      Object.entries(foremanDates).forEach(([foreman,[start,end]])=>{
+        const slug=slugify(foreman);
+        const crew=Store.crews[slug];
+        if(crew){
+          crewsInJob[slug]={crew:crew,workStart:start,workEnd:end,assignments:(crew.assignments||[]).filter(a=>a.jobId===Store.activeJob)};
+          if(!crewsList.find(c=>c.id===slug))crewsList.push({id:slug,name:foreman});
+        }
+      });
+    }
+
+    // Add crews with planned assignments to this job
+    Object.entries(Store.crews).forEach(([crewId,crew])=>{
+      const jobAssignments=(crew.assignments||[]).filter(a=>a.jobId===Store.activeJob);
+      if(jobAssignments.length>0){
+        if(!crewsInJob[crewId]){
+          crewsInJob[crewId]={crew:crew,workStart:null,workEnd:null,assignments:jobAssignments};
+          if(!crewsList.find(c=>c.id===crewId))crewsList.push({id:crewId,name:crew.foreman});
+        }else{
+          crewsInJob[crewId].assignments=jobAssignments;
+        }
+      }
+    });
+
+    if(crewsList.length>0){
+      h+='<div class="card"><div class="card-title">Crew Assignment Timeline</div>';
+      h+='<div class="crew-timeline"><div class="crew-timeline-wrapper">';
+
+      // Month headers
+      let months='';const c=new Date(timelineStart);c.setDate(1);
+      while(c<=timelineEnd){
+        const ms=Math.max(0,(c-timelineStart)/86400000);
+        const nm=new Date(c);nm.setMonth(nm.getMonth()+1);
+        const me=Math.min(timelineDays,(nm-timelineStart)/86400000);
+        months+=`<div class="crew-timeline-month">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;
+        c.setMonth(c.getMonth()+1);
+      }
+      h+=`<div style="display:flex;"><div class="crew-timeline-label"></div><div style="flex:1;display:flex;border-bottom:2px solid var(--border);">${months}</div></div>`;
+
+      // Crew rows with bars
+      crewsList.forEach(({id,name})=>{
+        const data=crewsInJob[id];
+        if(!data)return;
+        const {crew,workStart,workEnd,assignments}=data;
+        let hasConflict=false;
+        if(assignments.length>1){
+          // Check for overlaps among assignments
+          for(let i=0;i<assignments.length-1;i++){
+            for(let j=i+1;j<assignments.length;j++){
+              const s1=toDate(assignments[i].startDate),e1=toDate(assignments[i].endDate);
+              const s2=toDate(assignments[j].startDate),e2=toDate(assignments[j].endDate);
+              if(s1<=e2&&s2<=e1){hasConflict=true}
+            }
+          }
+        }
+        h+=`<div class="crew-timeline-row">`;
+        h+=`<div class="crew-timeline-name">${name}${hasConflict?' <span class="crew-conflict-badge">Conflict</span>':''}</div>`;
+        h+=`<div class="crew-timeline-bars" style="display:flex;align-items:center;position:relative;">`;
+
+        // Actual work period
+        if(workStart&&workEnd){
+          const l=Math.max(0,(workStart-timelineStart)/86400000)/timelineDays*100;
+          const w=Math.max(((workEnd-workStart)/86400000)/timelineDays*100,.5);
+          h+=`<div class="crew-timeline-bar actual" style="left:${l}%;width:${w}%;"></div>`;
+        }
+
+        // Planned assignments
+        assignments.forEach(a=>{
+          const s=toDate(a.startDate),e=toDate(a.endDate);
+          if(s&&e){
+            const l=Math.max(0,(s-timelineStart)/86400000)/timelineDays*100;
+            const w=Math.max(((e-s)/86400000)/timelineDays*100,.5);
+            const conflictClass=hasConflict?' conflict':'';
+            h+=`<div class="crew-timeline-bar planned${conflictClass}" style="left:${l}%;width:${w}%;" title="Job: ${Store.jobs[a.jobId]?.meta?.name} · HC: ${a.headcount}"></div>`;
+          }
+        });
+
+        // Today line
+        if(today>=timelineStart&&today<=timelineEnd){
+          const todayPct=(today-timelineStart)/86400000/timelineDays*100;
+          h+=`<div class="crew-today-line" style="left:${todayPct}%;"></div>`;
+        }
+        h+='</div></div>';
+      });
+
+      h+='</div></div></div>';
+    }
+  }
+
+  // ── Crew Performance Table ──
+  if(job.actualsDetail&&job.actualsDetail.length>0){
+    const perfData={};
+    job.actualsDetail.forEach(row=>{
+      if(!row.foreman)return;
+      if(!perfData[row.foreman]){
+        perfData[row.foreman]={foreman:row.foreman,datesWorked:new Set(),totalHours:0,totalQty:0,totalCost:0,lastDate:null};
+      }
+      const d=toDate(row.date);
+      if(d)perfData[row.foreman].datesWorked.add(d.toDateString());
+      perfData[row.foreman].totalHours+=(row.hours||0);
+      perfData[row.foreman].totalQty+=(row.quantity||0);
+      perfData[row.foreman].totalCost+=(row.cost||0);
+      if(!perfData[row.foreman].lastDate||(d&&d>perfData[row.foreman].lastDate))perfData[row.foreman].lastDate=d;
+    });
+
+    const perfRows=Object.entries(perfData).map(([f,data])=>({
+      foreman:data.foreman,
+      daysWorked:data.datesWorked.size,
+      totalHours:Math.round(data.totalHours*10)/10,
+      avgHrsPerDay:data.datesWorked.size>0?Math.round(data.totalHours/data.datesWorked.size*10)/10:0,
+      totalQty:Math.round(data.totalQty*100)/100,
+      totalCost:data.totalCost,
+      avgCostPerDay:data.datesWorked.size>0?data.totalCost/data.datesWorked.size:0,
+      lastActive:data.lastDate?fmtDate(data.lastDate):''
+    }));
+
+    const sorted=doSort(perfRows,'crew-perf',{
+      foreman:(a,b)=>(a.foreman||'').localeCompare(b.foreman||''),
+      daysWorked:(a,b)=>a.daysWorked-b.daysWorked,
+      totalHours:(a,b)=>a.totalHours-b.totalHours,
+      avgHrsPerDay:(a,b)=>a.avgHrsPerDay-b.avgHrsPerDay,
+      totalQty:(a,b)=>a.totalQty-b.totalQty,
+      totalCost:(a,b)=>a.totalCost-b.totalCost,
+      avgCostPerDay:(a,b)=>a.avgCostPerDay-b.avgCostPerDay,
+      lastActive:(a,b)=>a.lastActive.localeCompare(b.lastActive)
+    });
+
+    h+='<div class="card"><div class="card-title">Crew Performance</div><div class="table-wrap"><table>';
+    h+='<tr>';
+    h+=sortHdrL('crew-perf','foreman','Foreman','renderCrews');
+    h+=sortHdr('crew-perf','daysWorked','Days Worked','renderCrews');
+    h+=sortHdr('crew-perf','totalHours','Total Hours','renderCrews');
+    h+=sortHdr('crew-perf','avgHrsPerDay','Avg Hrs/Day','renderCrews');
+    h+=sortHdr('crew-perf','totalQty','Total Qty','renderCrews');
+    h+=sortHdr('crew-perf','totalCost','Total Cost','renderCrews');
+    h+=sortHdr('crew-perf','avgCostPerDay','Avg Cost/Day','renderCrews');
+    h+=sortHdrL('crew-perf','lastActive','Last Active','renderCrews');
+    h+='</tr>';
+    sorted.forEach(r=>{
+      h+=`<tr><td>${esc(r.foreman)}</td><td class="num">${r.daysWorked}</td><td class="num">${fmt(r.totalHours)}</td><td class="num">${fmt(r.avgHrsPerDay)}</td><td class="num">${fmt(r.totalQty)}</td><td class="num">${fmtD(r.totalCost)}</td><td class="num">${fmtD(r.avgCostPerDay)}</td><td>${r.lastActive}</td></tr>`;
+    });
+    h+='</table></div></div>';
+  }
+
+  // ── Crew Directory ──
+  const allCrews=Object.values(Store.crews).sort((a,b)=>(a.foreman||'').localeCompare(b.foreman||''));
+  h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Crew Directory</span><button class="btn-primary btn-sm" onclick="openCrewAssignModal()">+ Assign to Job</button></div>';
+
+  if(allCrews.length===0){
+    h+='<div style="padding:20px;text-align:center;color:var(--text-light);">No crews discovered yet. Import HeavyJob daily detail to auto-discover crews.</div>';
+  }else{
+    h+='<div class="table-wrap"><table class="crew-dir-table">';
+    h+='<tr><th>Foreman</th><th>Headcount</th><th>Equipment</th><th>Trades</th><th>Rate</th><th></th></tr>';
+    allCrews.forEach(crew=>{
+      const eq=(crew.equipment||[]).join(', ')||'—';
+      const tr=(crew.trades||[]).join(', ')||'—';
+      h+=`<tr><td>${esc(crew.foreman)}</td><td class="num">${crew.defaultHeadcount}</td><td>${eq}</td><td>${tr}</td><td class="num">${crew.hourlyRate>0?'$'+fmt(crew.hourlyRate)+'/hr':'—'}</td><td><button class="edit-btn" onclick="openCrewEditModal('${esc(crew.id)}')">Edit</button></td></tr>`;
+    });
+    h+='</table></div>';
+  }
+  h+='</div>';
+
+  el.innerHTML=h;
+}
+
+function getJobActualsDateRange(job){
+  // Returns [minDate, maxDate] from actualsDetail, or [null, null]
+  if(!job.actualsDetail||!Array.isArray(job.actualsDetail)||job.actualsDetail.length===0)return [null,null];
+  let min=null,max=null;
+  job.actualsDetail.forEach(row=>{
+    if(row.date){const d=toDate(row.date);if(!min||d<min)min=d;if(!max||d>max)max=d}
+  });
+  return [min,max];
+}
+
 // ═══════════════════════════════════════════
 let _discOpen=false;
 
