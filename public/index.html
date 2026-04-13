@@ -261,6 +261,7 @@ tr:hover{background:#FAF8F5}
     <button class="sub-tab" data-sub="biditems" onclick="switchSubTab('biditems')">Pay Items</button>
     <button class="sub-tab" data-sub="schedule" onclick="switchSubTab('schedule')">Schedule</button>
     <button class="sub-tab" data-sub="jcs" onclick="switchSubTab('jcs')">Job Cost Schedule</button>
+    <button class="sub-tab" data-sub="production" onclick="switchSubTab('production')">Production</button>
     <button class="sub-tab" data-sub="eva" onclick="switchSubTab('eva')">EVA</button>
     <button class="sub-tab" data-sub="forecast" onclick="switchSubTab('forecast')">Forecast</button>
     <button class="sub-tab" data-sub="payapps" onclick="switchSubTab('payapps')">Pay Apps</button>
@@ -291,6 +292,11 @@ tr:hover{background:#FAF8F5}
   <!-- Sub-panel: JCS -->
   <div id="sub-jcs" class="sub-panel">
     <div id="jcsContent"></div>
+  </div>
+
+  <!-- Sub-panel: Production -->
+  <div id="sub-production" class="sub-panel">
+    <div id="productionContent"></div>
   </div>
 
   <!-- Sub-panel: EVA -->
@@ -346,6 +352,14 @@ tr:hover{background:#FAF8F5}
         <p>Day-by-day cost code actuals — refresh-safe, auto-matches active job</p>
         <div class="status pending" id="status-actualsDetail">Drop .xlsx or click</div>
         <input type="file" id="file-actualsDetail" accept=".xlsx,.xls,.csv" onchange="handleImport(event,'actualsDetail')">
+      </div>
+    </div>
+    <div id="hcssSyncBanner" style="margin-top:12px;padding:10px 14px;background:#F1F7E6;border:1px solid var(--olive);border-radius:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;font-family:Oswald,sans-serif;font-size:12px;">
+      <div><strong style="color:var(--olive);">HCSS Auto-Sync</strong> <span id="hcssSyncStatus" style="color:var(--text-light);">Loading…</span></div>
+      <div style="display:flex;gap:6px;">
+        <button class="edit-btn" onclick="hcssSyncNow()" style="padding:5px 12px;">Sync Now</button>
+        <button class="edit-btn" onclick="hcssBackfill()" style="padding:5px 12px;" title="Pull full history (use once on first deployment)">Backfill All</button>
+        <button class="edit-btn" onclick="hcssSyncDiscover()" style="padding:5px 12px;" title="List HCSS business units (use once to find your BU code)">Discover BU</button>
       </div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -463,6 +477,7 @@ let _schedSort='pred'; // default sort: predecessor order
 let _schedSortDir='asc'; // sort direction: asc or desc
 let _cfTimeFrom=0;
 let _cfTimeTo=0; // 0 means "show all" — renderCashFlowProjection will set to months.length-1
+let _prodView='tracker'; // Production tab view: 'tracker' or 'log'
 
 // ── Generic table sort system ──
 const _tblSort={};
@@ -872,6 +887,127 @@ async function loadJobs(){
   }
 }
 
+// ═══════════════════════════════════════════
+// HCSS SYNC — front-end glue
+// ═══════════════════════════════════════════
+// Reads the sync_status view for the banner, and POSTs to the Edge Function
+// for on-demand sync / BU discovery. Does NOT hold the service_role key —
+// instead it calls the deployed function using the anon key, which works
+// because we deploy with --no-verify-jwt so pg_cron can dispatch.
+// If you later want to lock the function down, swap this for a signed user JWT.
+const HCSS_FN_URL = SUPABASE_URL.replace('.supabase.co','.functions.supabase.co') + '/hcss-sync-actuals';
+
+async function hcssLoadSyncStatus(){
+  const el=document.getElementById('hcssSyncStatus');
+  if(!el)return;
+  try{
+    const {data,error}=await sb.from('sync_status').select('*').single();
+    if(error)throw error;
+    if(!data||!data.last_run_at){el.textContent='Not configured yet — run Discover BU, then Sync Now.';return}
+    const when=new Date(data.last_run_at).toLocaleString();
+    const st=data.last_run_status==='success'?'✓':data.last_run_status==='partial'?'⚠':'✗';
+    el.innerHTML=`${st} Last sync: <strong>${when}</strong> · ${data.total_rows||0} rows across ${data.jobs_covered||0} job(s)`+
+      (data.last_error?` · <span style="color:var(--red);">${esc(String(data.last_error).slice(0,120))}</span>`:'');
+  }catch(e){
+    el.textContent='Sync table not found — run the SQL migration first.';
+  }
+}
+async function hcssCallFn(body){
+  const res=await fetch(HCSS_FN_URL,{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPABASE_ANON},
+    body:JSON.stringify(body||{trigger:'manual'}),
+  });
+  const j=await res.json().catch(()=>({ok:false,error:'Non-JSON response'}));
+  if(!res.ok||!j.ok)throw new Error(j.error||('HTTP '+res.status));
+  return j;
+}
+async function hcssSyncNow(){
+  const el=document.getElementById('hcssSyncStatus');
+  if(el)el.textContent='Syncing…';
+  try{
+    const j=await hcssCallFn({trigger:'manual'});
+    log(`HCSS sync: ${j.status} · ${j.jobsSynced} jobs · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s`);
+    if(j.errors&&j.errors.length)log('HCSS sync had '+j.errors.length+' per-job errors (see sync_log)');
+    // After syncing, refresh front-end actuals for every loaded job
+    await hcssLoadIntoActiveJob();
+    await hcssLoadSyncStatus();
+  }catch(e){
+    log('HCSS sync failed: '+e.message);
+    if(el)el.textContent='Error: '+e.message;
+  }
+}
+async function hcssBackfill(){
+  if(!confirm('Backfill will pull FULL history from HCSS for every active job. This may take several minutes and will overwrite any overlapping synced rows. Continue?'))return;
+  const el=document.getElementById('hcssSyncStatus');
+  if(el)el.textContent='Backfilling full history — this may take several minutes…';
+  try{
+    const j=await hcssCallFn({trigger:'manual',fullHistory:true});
+    log(`HCSS BACKFILL: ${j.status} · ${j.jobsSynced} jobs · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s`);
+    if(j.errors&&j.errors.length)log('Backfill had '+j.errors.length+' per-job errors (see sync_log)');
+    await hcssLoadIntoActiveJob();
+    await hcssLoadSyncStatus();
+    alert(`Backfill complete.\n${j.jobsSynced} jobs · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s\n\nFrom now on the daily 5am cron will only pull the last 14 days.`);
+  }catch(e){
+    log('HCSS backfill failed: '+e.message);
+    if(el)el.textContent='Backfill error: '+e.message;
+  }
+}
+async function hcssSyncDiscover(){
+  const el=document.getElementById('hcssSyncStatus');
+  if(el)el.textContent='Discovering business units…';
+  try{
+    const j=await hcssCallFn({discover:true});
+    const bus=(j.businessUnits||[]).map(b=>`${b.code} — ${b.name}`).join('\n');
+    alert('HCSS Business Units:\n\n'+(bus||'(none found)')+'\n\nNext step:\nsupabase secrets set HCSS_BUSINESS_UNIT_CODE=<code>');
+    await hcssLoadSyncStatus();
+  }catch(e){
+    alert('Discovery failed: '+e.message);
+  }
+}
+// Load synced actuals into the active job's in-memory Store.
+// Reads from actuals_detail_sync where job_number matches job.meta.number,
+// converts to the shape parseActualsDetailRaw() produces, and runs rollupActualsDetail.
+async function hcssLoadIntoActiveJob(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job||!job.meta||!job.meta.number)return;
+  const{data,error}=await sb.from('actuals_detail_sync').select('*').eq('job_number',String(job.meta.number));
+  if(error){console.warn('hcssLoadIntoActiveJob:',error);return}
+  if(!data||!data.length)return;
+  // Convert DB row → front-end row shape (camelCase keys that the rest of the app expects)
+  const detail=data.map(r=>({
+    date:r.date,
+    jobCode:r.job_number,
+    costCode:r.cost_code,
+    costCodeDesc:r.cost_code_desc||'',
+    unit:r.unit||'',
+    foreman:r.foreman||'',
+    linkedPCO:'',
+    actualQty:Number(r.actual_qty)||0,
+    actualLaborHours:Number(r.actual_labor_hours)||0,
+    actualEquipHours:Number(r.actual_equip_hours)||0,
+    actualLaborCost:Number(r.actual_labor_cost)||0,
+    actualEquipCost:Number(r.actual_equip_cost)||0,
+    actualMatCost:Number(r.actual_mat_cost)||0,
+    actualSubCost:Number(r.actual_sub_cost)||0,
+    actualAllCost:(Number(r.actual_labor_cost)||0)+(Number(r.actual_equip_cost)||0)+(Number(r.actual_mat_cost)||0)+(Number(r.actual_sub_cost)||0),
+    expectedLaborHours:Number(r.expected_labor_hours)||0,
+    expectedLaborCost:Number(r.expected_labor_cost)||0,
+    expectedEquipCost:Number(r.expected_equip_cost)||0,
+    expectedMatCost:Number(r.expected_mat_cost)||0,
+    expectedSubCost:Number(r.expected_sub_cost)||0,
+    _key:r.date+'|'+r.cost_code+'|'+(r.foreman||''),
+  }));
+  // Merge with any locally-imported rows (XLSX fallback) so the app never loses data
+  job.actualsDetail=mergeActualsDetail(job.actualsDetail||[],detail);
+  job.actuals=rollupActualsDetail(job.actualsDetail);
+  job.meta.lastActualsImport=new Date().toISOString();
+  if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(job);
+  await saveJob(Store.activeJob);
+  if(typeof renderActiveSubTab==='function')renderActiveSubTab();
+  log(`HCSS → ${job.meta.name}: ${detail.length} synced rows merged into actuals.`);
+}
+
 // Delete a job from Supabase
 async function deleteJob(jobId){
   const { error } = await sb.from('jobs').delete().eq('id', jobId);
@@ -1005,6 +1141,7 @@ function renderActiveSubTab(){
     biditems:renderBidItems,
     schedule:renderSchedule,
     jcs:renderJobCostSchedule,
+    production:renderProduction,
     eva:renderEVA,
     forecast:renderForecast,
     payapps:renderPayApps,
@@ -1018,6 +1155,8 @@ function renderActiveSubTab(){
 loadJobs();
 // Init user label
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
+// Poll HCSS sync status once on startup (non-blocking)
+setTimeout(()=>{try{hcssLoadSyncStatus()}catch(e){}},500);
 
 // ═══════════════════════════════════════════
 // JOB MANAGEMENT
@@ -2152,9 +2291,27 @@ function computeEVA(job,asOf){
   // Build BAC map from HeavyBid activities (authoritative source)
   const bacMap=evaBuildBACMap(job);
   const haveActivities=Object.keys(bacMap.bac).length>0;
-  // Build a lookup of actuals by cost code for easy join
+  // Build a lookup of actuals by cost code for easy join.
+  // DEFENSIVE: if multiple rows share the same code (e.g. legacy parser was
+  // run on a daily-detail file), aggregate instead of overwriting — otherwise
+  // we silently keep only the last row's AC and the job AC under-reports.
   const actualsByCode={};
-  acts.forEach(a=>{actualsByCode[String(a.code||'').trim()]=a});
+  acts.forEach(a=>{
+    const k=String(a.code||'').trim();
+    if(!k)return;
+    if(!actualsByCode[k]){actualsByCode[k]={...a,code:k}}
+    else{
+      const ex=actualsByCode[k];
+      ex.actualCost=(ex.actualCost||0)+(a.actualCost||0);
+      ex.budgetCost=(ex.budgetCost||0)+(a.budgetCost||0);
+      ex.actualLabor=(ex.actualLabor||0)+(a.actualLabor||0);
+      ex.actualEquip=(ex.actualEquip||0)+(a.actualEquip||0);
+      ex.actualMat=(ex.actualMat||0)+(a.actualMat||0);
+      ex.actualSub=(ex.actualSub||0)+(a.actualSub||0);
+      ex.qtyInstalled=(ex.qtyInstalled||0)+(a.qtyInstalled||0);
+      if(!ex.budgetQty&&a.budgetQty)ex.budgetQty=a.budgetQty;
+    }
+  });
   // Phase universe = union of activities cost codes AND actuals cost codes
   // (so phases that haven't started yet still count toward BAC, and orphan actuals
   // codes still appear so the user can see them)
@@ -2269,7 +2426,7 @@ function renderEVA(){
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:12px;">';
   h+=tile('BAC',fmtD(e.bac));
   h+=tile('EV (Earned)',fmtD(e.ev),'',fmtPct(e.bac>0?e.ev/e.bac:0)+' complete');
-  h+=tile('AC (Actual)',fmtD(e.ac));
+  h+=tile('AC (Actual)',fmtD(e.ac),'',(job.actuals||[]).length+' codes loaded');
   h+=tile('PV (Planned)',fmtD(e.pv),'',fmtPct(e.plannedPct)+' planned');
   h+=tile('CPI',e.cpi.toFixed(2),cpiCls,e.cpi>=1?'On/under budget':'Over budget');
   h+=tile('SPI',e.spi.toFixed(2),spiCls,e.spi>=1?'On/ahead of schedule':'Behind schedule');
@@ -2521,6 +2678,33 @@ function renderForecast(){
 //   lines: { [sovItemId]: { pctComplete, materialsStored } },
 //   coAdjustments: [{number, description, amount}]  // change orders effective this period
 // }
+// Resolve the set of HJ cost codes a SOV item or bid item maps to.
+// Used by pay app suggestion engine to look up EVA % complete per cost code.
+function resolvePayItemCostCodes(job,sovItem,bidItemKey){
+  const codes=new Set();
+  if(sovItem){
+    // Direct phase code references on the SOV item
+    (sovItem.phaseCodes||[]).forEach(p=>{const c=String(p&&p.code||'').trim();if(c)codes.add(c)});
+    // Indirect via mapped HeavyBid activities
+    (sovItem.activityIds||[]).forEach(actCode=>{
+      const act=(job.activities||[]).find(a=>a.code===actCode);
+      if(act){
+        const c=String(act.phaseCode||act.code||'').trim();
+        if(c)codes.add(c);
+      }
+    });
+  }
+  if(bidItemKey){
+    // Fallback path: walk activities by bid item key
+    (job.activities||[]).forEach(a=>{
+      if(String(a.biditem||'')===String(bidItemKey)){
+        const c=String(a.phaseCode||a.code||'').trim();
+        if(c)codes.add(c);
+      }
+    });
+  }
+  return Array.from(codes);
+}
 function getPayAppLineItems(job){
   // Prefer SOV items (proper schedule of values), fall back to bid items
   if(job.sovItems&&job.sovItems.length){
@@ -2529,7 +2713,8 @@ function getPayAppLineItems(job){
       clientItemNo:String(s.clientItemNo||s.id||''),
       description:s.description||'',
       scheduledValue:(Number(s.contractQty)||0)*(Number(s.unitPrice)||0),
-      _co:!!s._changeOrder
+      _co:!!s._changeOrder,
+      costCodes:resolvePayItemCostCodes(job,s,null)
     }));
   }
   if(job.bidItems&&job.bidItems.length){
@@ -2538,10 +2723,62 @@ function getPayAppLineItems(job){
       clientItemNo:String(b.biditem||''),
       description:b.description||'',
       scheduledValue:Number(b.takeoffTotal)||(Number(b.bidQuantity)||0)*(Number(b.unitPrice)||0),
-      _co:false
+      _co:false,
+      costCodes:resolvePayItemCostCodes(job,null,b.biditem)
     }));
   }
   return[];
+}
+// Suggested cumulative % complete for one pay app line, derived from EVA phases.
+// Returns {pct, source, mappedCodes, totalBAC} or null if no mapping/data.
+function suggestPayAppPctForItem(job,item){
+  if(!item.costCodes||!item.costCodes.length)return null;
+  const e=computeEVA(job,new Date());
+  const phaseByCode={};
+  e.phases.forEach(p=>{phaseByCode[String(p.code).trim()]=p});
+  let totBAC=0,totEV=0,matched=0;
+  item.costCodes.forEach(c=>{
+    const p=phaseByCode[c];
+    if(p){totBAC+=p.bac;totEV+=p.ev;matched++}
+  });
+  if(matched===0||totBAC<=0)return null;
+  return{
+    pct:Math.round((totEV/totBAC)*1000)/10,
+    mappedCodes:matched,
+    totalCodes:item.costCodes.length,
+    totalBAC:totBAC,
+    totalEV:totEV
+  };
+}
+function suggestAllPayAppLines(){
+  const job=Store.jobs[Store.activeJob];if(!job||!job.payApps)return;
+  const app=job.payApps.find(a=>a.number===Store._payAppActive);if(!app)return;
+  const items=getPayAppLineItems(job);
+  let applied=0,skipped=0,skippedReasons={};
+  if(!app.lines)app.lines={};
+  items.forEach(it=>{
+    const sug=suggestPayAppPctForItem(job,it);
+    if(!sug){skipped++;skippedReasons[it.id]=it.costCodes&&it.costCodes.length?'no actuals':'unmapped';return}
+    if(!app.lines[it.id])app.lines[it.id]={pctComplete:0,materialsStored:0};
+    app.lines[it.id].pctComplete=sug.pct;
+    applied++;
+  });
+  saveJob(Store.activeJob);
+  addEditLog(`Pay App #${app.number}: auto-suggested ${applied} line${applied===1?'':'s'} from EVA actuals (${skipped} skipped)`);
+  renderPayApps();
+  setTimeout(()=>alert(`Suggested ${applied} of ${items.length} lines from EVA actuals.\n\n${skipped?skipped+' skipped (no mapping or no actuals yet — see "Suggest" column for details).':''}`),50);
+}
+function suggestSinglePayAppLine(itemId){
+  const job=Store.jobs[Store.activeJob];if(!job||!job.payApps)return;
+  const app=job.payApps.find(a=>a.number===Store._payAppActive);if(!app)return;
+  const items=getPayAppLineItems(job);
+  const it=items.find(i=>i.id===itemId);if(!it)return;
+  const sug=suggestPayAppPctForItem(job,it);
+  if(!sug){alert('No EVA data available for this line. Either no cost codes are mapped to it, or no actuals exist for those codes yet.');return}
+  if(!app.lines)app.lines={};
+  if(!app.lines[itemId])app.lines[itemId]={pctComplete:0,materialsStored:0};
+  app.lines[itemId].pctComplete=sug.pct;
+  saveJob(Store.activeJob);renderPayApps();
 }
 function priorPctComplete(job,uptoNumber,itemId){
   // Sum the % complete for itemId up through (but NOT including) uptoNumber.
@@ -2782,7 +3019,8 @@ function renderPayApps(){
   // Editor card
   h+='<div class="card" style="margin-top:16px;">';
   h+='<div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;"><span>Pay App #'+active.number+' — Editor</span>';
-  h+='<span><button class="edit-btn" onclick="printPayApp()" style="padding:6px 14px;background:var(--blue);color:#fff;border:none;">📄 Print / Export G702 + G703</button> ';
+  h+='<span><button class="edit-btn" onclick="if(confirm(\'Replace all line % complete values with EVA-based suggestions from actuals?\\n\\nThis will overwrite any manual entries on this pay app.\'))suggestAllPayAppLines()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;" title="Auto-fill % complete from EVA actuals">✨ Suggest from Actuals</button> ';
+  h+='<button class="edit-btn" onclick="printPayApp()" style="padding:6px 14px;background:var(--blue);color:#fff;border:none;">📄 Print / Export G702 + G703</button> ';
   h+='<button class="del-btn" onclick="deletePayApp('+active.number+')" style="padding:6px 12px;">Delete</button></span></div>';
   // Header fields
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:8px;">';
@@ -2804,19 +3042,36 @@ function renderPayApps(){
   h+=tile('Current Due',fmtD(c.currentDue),'this period');
   h+='</div>';
   // Line items table
+  // Pre-compute suggestions for every line so the column can show them
+  const itemsForSug=getPayAppLineItems(job);
+  const sugByItem={};
+  itemsForSug.forEach(it=>{sugByItem[it.id]={item:it,sug:suggestPayAppPctForItem(job,it)}});
   h+='<div style="overflow-x:auto;margin-top:14px;"><table style="width:100%;font-size:12px;"><thead><tr style="background:var(--card);">';
   h+='<th style="text-align:left;padding:6px;">Item</th><th style="text-align:left;padding:6px;">Description</th>';
   h+='<th class="num">Sched. Value</th><th class="num">Prior %</th>';
+  h+='<th style="text-align:center;" title="EVA-based suggestion from actuals">Suggested %</th>';
   h+='<th style="text-align:center;">% Comp</th><th class="num">From Prev</th><th class="num">This Period</th>';
   h+='<th style="text-align:center;">Mat. Stored</th><th class="num">Total + Stored</th><th class="num">% G/C</th><th class="num">Balance</th>';
   h+='</tr></thead><tbody>';
   c.rows.forEach(r=>{
     const isCO=r._co;
+    const sugEntry=sugByItem[r.id];
+    const sug=sugEntry?sugEntry.sug:null;
     h+=`<tr${isCO?' style="background:#FFF8E1;"':''}>`;
     h+=`<td style="padding:6px;">${esc(r.clientItemNo||'')}${isCO?' <em style="color:var(--orange);font-size:10px;">CO</em>':''}</td>`;
     h+=`<td style="padding:6px;">${esc(r.description||'')}</td>`;
     h+=`<td class="num">${fmtD(r.scheduledValue)}</td>`;
     h+=`<td class="num" style="color:var(--text-light);">${r.priorPct.toFixed(1)}%</td>`;
+    // Suggested column
+    if(sug){
+      const matchInfo=sug.mappedCodes===sug.totalCodes?sug.mappedCodes+' code'+(sug.mappedCodes===1?'':'s'):sug.mappedCodes+'/'+sug.totalCodes+' codes';
+      const diff=sug.pct-r.pctComplete;
+      const diffColor=Math.abs(diff)<0.1?'var(--text-light)':diff>0?'var(--green)':'var(--orange)';
+      h+=`<td style="text-align:center;padding:4px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;color:${diffColor};">${sug.pct.toFixed(1)}%</div><div style="font-size:9px;color:var(--text-light);">${matchInfo}</div><button class="edit-btn" onclick="suggestSinglePayAppLine('${r.id.replace(/'/g,"\\'")}')" style="padding:2px 6px;font-size:10px;margin-top:2px;" title="Apply suggestion to this line">↻ Apply</button></td>`;
+    }else{
+      const reason=sugEntry&&sugEntry.item.costCodes&&sugEntry.item.costCodes.length?'no actuals yet':'unmapped';
+      h+=`<td style="text-align:center;padding:4px;color:var(--text-light);font-size:11px;font-style:italic;">${reason}</td>`;
+    }
     h+=`<td style="text-align:center;padding:4px;"><input type="number" min="0" max="100" step="0.5" value="${r.pctComplete}" onchange="updatePayAppLine('${r.id.replace(/'/g,"\\'")}','pctComplete',this.value)" style="width:64px;font-family:Oswald;font-size:12px;text-align:right;padding:3px 6px;border:1px solid var(--sand);border-radius:4px;"></td>`;
     h+=`<td class="num">${fmtD(r.fromPrevious)}</td>`;
     h+=`<td class="num"><strong>${fmtD(r.thisPeriod)}</strong></td>`;
@@ -2826,7 +3081,7 @@ function renderPayApps(){
     h+=`<td class="num">${fmtD(r.balance)}</td>`;
     h+=`</tr>`;
   });
-  h+=`<tr style="background:var(--card);font-weight:600;"><td colspan="2" style="padding:8px;">TOTALS</td><td class="num">${fmtD(c.sumSV)}</td><td></td><td></td><td class="num">${fmtD(c.sumPrev)}</td><td class="num">${fmtD(c.sumThis)}</td><td></td><td class="num">${fmtD(c.sumTotal)}</td><td class="num">${c.sumSV>0?(c.sumTotal/c.sumSV*100).toFixed(1):'0.0'}%</td><td class="num">${fmtD(c.sumBal)}</td></tr>`;
+  h+=`<tr style="background:var(--card);font-weight:600;"><td colspan="2" style="padding:8px;">TOTALS</td><td class="num">${fmtD(c.sumSV)}</td><td></td><td></td><td></td><td></td><td class="num">${fmtD(c.sumPrev)}</td><td class="num">${fmtD(c.sumThis)}</td><td></td><td class="num">${fmtD(c.sumTotal)}</td><td class="num">${c.sumSV>0?(c.sumTotal/c.sumSV*100).toFixed(1):'0.0'}%</td><td class="num">${fmtD(c.sumBal)}</td></tr>`;
   h+='</tbody></table></div>';
   // Change orders this app
   h+='<div style="margin-top:14px;"><div style="display:flex;justify-content:space-between;align-items:center;"><strong style="font-family:Oswald;font-size:13px;">Change Orders Effective This Period</strong><button class="edit-btn" onclick="addPayAppCO()" style="padding:4px 10px;font-size:11px;">+ Add CO</button></div>';
@@ -5229,6 +5484,282 @@ function renderJobCostSchedule(){
   h+='</div>';
 
   el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// PRODUCTION TRACKING
+// ═══════════════════════════════════════════
+function computeProductionRates(job){
+  const byCode={};
+  (job.actualsDetail||[]).forEach(d=>{
+    if(!byCode[d.costCode]){
+      byCode[d.costCode]={uniqueDates:new Set(),totalQty:0,firstDate:null,lastDate:null}
+    }
+    const b=byCode[d.costCode];
+    if(d.date)b.uniqueDates.add(d.date);
+    b.totalQty+=d.actualQty||0;
+    if(!b.firstDate||d.date<b.firstDate)b.firstDate=d.date;
+    if(!b.lastDate||d.date>b.lastDate)b.lastDate=d.date;
+  });
+  const result={};
+  Object.entries(byCode).forEach(([code,data])=>{
+    const uniqueDays=data.uniqueDates.size;
+    result[code]={
+      uniqueDays,
+      totalQty:data.totalQty,
+      ratePerDay:uniqueDays>0?data.totalQty/uniqueDays:0,
+      firstDate:data.firstDate,
+      lastDate:data.lastDate
+    };
+  });
+  return result;
+}
+
+function renderProduction(){
+  const el=document.getElementById('productionContent');
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){
+    el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2><p>Select a job above to view production data.</p></div>';
+    return;
+  }
+  const job=Store.jobs[Store.activeJob];
+  if(!job.actuals||!job.actuals.length){
+    el.innerHTML='<div class="empty-state"><h2>No Production Data Yet</h2><p>Import HeavyJob actuals from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> to see production tracking.</p></div>';
+    return;
+  }
+
+  let h='';
+  // View toggle
+  h+='<div style="display:flex;gap:8px;margin-bottom:16px;">';
+  h+=`<button class="edit-btn ${_prodView==='tracker'?'active':''}" onclick="_prodView='tracker';renderProduction()" style="border-color:${_prodView==='tracker'?'var(--orange)':'var(--sand)'};color:${_prodView==='tracker'?'var(--orange)':'var(--text-light)'};"><strong>Tracker</strong></button>`;
+  h+=`<button class="edit-btn ${_prodView==='log'?'active':''}" onclick="_prodView='log';renderProduction()" style="border-color:${_prodView==='log'?'var(--orange)':'var(--sand)'};color:${_prodView==='log'?'var(--orange)':'var(--text-light)'};"><strong>Daily Log</strong></button>`;
+  h+='</div>';
+
+  if(_prodView==='tracker'){
+    h+=renderProductionTracker(job);
+  }else{
+    h+=renderProductionLog(job);
+  }
+
+  el.innerHTML=h;
+}
+
+function renderProductionTracker(job){
+  const acts=(job.actuals||[]);
+  const activityMap={};
+  (job.activities||[]).forEach(a=>{
+    activityMap[a.code]={description:a.description,quantity:a.quantity||0,units:a.units||''};
+  });
+
+  // Compute KPI totals
+  let totalBudget=0,totalActual=0;
+  acts.forEach(a=>{
+    totalBudget+=(a.budgetCost||0);
+    totalActual+=(a.actualCost||0);
+  });
+  const totalVar=totalBudget-totalActual;
+  const completePct=totalBudget>0?(totalActual/totalBudget*100):0;
+
+  // Unique production days and average burn
+  const uniqueDates=new Set();
+  (job.actualsDetail||[]).forEach(d=>{
+    if(d.date)uniqueDates.add(d.date);
+  });
+  const prodDays=uniqueDates.size;
+  const avgDailyBurn=prodDays>0?(totalActual/prodDays):0;
+
+  // Get production rates helper
+  const prodRates=computeProductionRates(job);
+
+  let h='';
+
+  // KPI row
+  const tile=(label,val,cls,sub)=>`<div class="kpi" style="padding:12px;background:var(--card);border:1px solid var(--sand);border-radius:8px;text-align:center;"><div style="font-family:Oswald;font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.6px;">${label}</div><div class="${cls||''}" style="font-family:Oswald;font-size:22px;font-weight:600;margin-top:4px;">${val}</div>${sub?'<div style="font-size:11px;color:var(--text-light);margin-top:2px;">'+sub+'</div>':''}</div>`;
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">';
+  h+=tile('Total Budget',fmtD(totalBudget));
+  h+=tile('Total Actual',fmtD(totalActual));
+  h+=tile('Cost Variance',fmtD(totalVar),totalVar>=0?'good':'warn',totalVar>=0?'Under budget':'Over budget');
+  h+=tile('% Complete',fmtPct(completePct),'',completePct.toFixed(0)+'%');
+  h+=tile('Production Days',String(prodDays),'','unique work dates');
+  h+=tile('Avg Daily Burn',fmtD(avgDailyBurn),'','per day');
+  h+='</div>';
+
+  // Main tracker table
+  const trackerData=acts.map(a=>{
+    const budgetQty=a.budgetQty||(activityMap[a.code]?.quantity||0);
+    const actualQty=a.qtyInstalled||0;
+    const remainingQty=Math.max(0,budgetQty-actualQty);
+    const qtyCompletePct=budgetQty>0?(actualQty/budgetQty*100):0;
+    const costVar=a.budgetCost-a.actualCost;
+    const costCompletePct=a.budgetCost>0?(a.actualCost/a.budgetCost*100):0;
+    const pr=prodRates[a.code];
+    const prodRate=pr?(pr.ratePerDay||0):0;
+    const daysLeft=prodRate>0?(remainingQty/prodRate):Infinity;
+
+    return {
+      code:a.code,
+      description:a.description||'',
+      unit:a.unit||'',
+      budgetQty,
+      actualQty,
+      qtyCompletePct,
+      remainingQty,
+      budgetCost:a.budgetCost||0,
+      actualCost:a.actualCost||0,
+      costVar,
+      costCompletePct,
+      prodRate,
+      daysLeft
+    };
+  });
+
+  // Sort tracker table
+  let sorted=trackerData;
+  const s=_tblSort['prod-tracker'];
+  if(s&&s.col){
+    const defs={
+      'code':(a,b)=>String(a.code).localeCompare(String(b.code)),
+      'description':(a,b)=>String(a.description).localeCompare(String(b.description)),
+      'budgetQty':(a,b)=>a.budgetQty-b.budgetQty,
+      'actualQty':(a,b)=>a.actualQty-b.actualQty,
+      'qtyCompletePct':(a,b)=>a.qtyCompletePct-b.qtyCompletePct,
+      'remainingQty':(a,b)=>a.remainingQty-b.remainingQty,
+      'budgetCost':(a,b)=>a.budgetCost-b.budgetCost,
+      'actualCost':(a,b)=>a.actualCost-b.actualCost,
+      'costVar':(a,b)=>a.costVar-b.costVar,
+      'costCompletePct':(a,b)=>a.costCompletePct-b.costCompletePct,
+      'prodRate':(a,b)=>a.prodRate-b.prodRate,
+      'daysLeft':(a,b)=>a.daysLeft-b.daysLeft
+    };
+    const fn=defs[s.col];
+    if(fn){
+      sorted=[...sorted].sort(fn);
+      if(s.dir==='desc')sorted.reverse();
+    }
+  }
+
+  h+='<div class="card"><div class="card-title">Production Tracker</div><div class="table-wrap"><table>';
+  h+='<thead><tr>';
+  h+=sortHdrL('prod-tracker','code','Cost Code','renderProduction');
+  h+=sortHdrL('prod-tracker','description','Description','renderProduction');
+  h+=sortHdrL('prod-tracker','unit','Unit','renderProduction');
+  h+=sortHdr('prod-tracker','budgetQty','Budget Qty','renderProduction');
+  h+=sortHdr('prod-tracker','actualQty','Actual Qty','renderProduction');
+  h+=sortHdr('prod-tracker','qtyCompletePct','% Qty Complete','renderProduction');
+  h+=sortHdr('prod-tracker','remainingQty','Remaining Qty','renderProduction');
+  h+=sortHdr('prod-tracker','budgetCost','Budget Cost','renderProduction');
+  h+=sortHdr('prod-tracker','actualCost','Actual Cost','renderProduction');
+  h+=sortHdr('prod-tracker','costVar','Cost Variance','renderProduction');
+  h+=sortHdr('prod-tracker','costCompletePct','% Cost Complete','renderProduction');
+  h+=sortHdr('prod-tracker','prodRate','Prod Rate (qty/day)','renderProduction');
+  h+=sortHdr('prod-tracker','daysLeft','Days Left','renderProduction');
+  h+='</tr></thead><tbody>';
+
+  sorted.forEach(row=>{
+    const qtyBadge=row.qtyCompletePct>=90?'good':(row.qtyCompletePct<80?'warn':'');
+    const costVarBadge=row.costVar>=0?'good':'warn';
+    const daysLeftBadge=row.daysLeft>30?'warn':'';
+
+    h+='<tr>';
+    h+=`<td>${esc(row.code)}</td>`;
+    h+=`<td>${esc(row.description)}</td>`;
+    h+=`<td>${esc(row.unit)}</td>`;
+    h+=`<td class="num">${fmt(row.budgetQty)}</td>`;
+    h+=`<td class="num">${fmt(row.actualQty)}</td>`;
+    h+=`<td class="num ${qtyBadge}">${fmtPct(row.qtyCompletePct)}</td>`;
+    h+=`<td class="num">${fmt(row.remainingQty)}</td>`;
+    h+=`<td class="num">${fmtD(row.budgetCost)}</td>`;
+    h+=`<td class="num">${fmtD(row.actualCost)}</td>`;
+    h+=`<td class="num ${costVarBadge}">${fmtD(row.costVar)}</td>`;
+    h+=`<td class="num">${fmtPct(row.costCompletePct)}</td>`;
+    h+=`<td class="num">${row.prodRate>0?fmt(row.prodRate):'—'}</td>`;
+    h+=`<td class="num ${daysLeftBadge}">${row.daysLeft!==Infinity&&row.daysLeft>=0?Math.ceil(row.daysLeft):'—'}</td>`;
+    h+='</tr>';
+  });
+
+  h+='</tbody></table></div></div>';
+
+  return h;
+}
+
+function renderProductionLog(job){
+  const detail=(job.actualsDetail||[]);
+  if(!detail.length)return '<div class="empty-state"><h2>No Daily Detail</h2><p>No actuals detail records found.</p></div>';
+
+  // Group by date (reverse chronological)
+  const byDate={};
+  detail.forEach(d=>{
+    if(!byDate[d.date])byDate[d.date]=[];
+    byDate[d.date].push(d);
+  });
+  const sortedDates=Object.keys(byDate).sort().reverse();
+
+  let h='<div class="card" style="padding:0;border:none;background:none;box-shadow:none;">';
+
+  sortedDates.forEach(dateStr=>{
+    const rows=byDate[dateStr];
+    const date=toDate(dateStr);
+    const dateLabel=date?date.toLocaleString('default',{weekday:'long',month:'long',day:'numeric',year:'numeric'}):'Unknown Date';
+
+    let dayTotalHrs=0,dayTotalCost=0,dayTotalQty=0;
+    rows.forEach(r=>{
+      dayTotalHrs+=(r.actualLaborHours||0)+(r.actualEquipHours||0);
+      dayTotalCost+=(r.actualLaborCost||0)+(r.actualEquipCost||0)+(r.actualMatCost||0)+(r.actualSubCost||0);
+      dayTotalQty+=(r.actualQty||0);
+    });
+
+    h+=`<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;">`;
+    h+=`<div style="background:var(--green);color:var(--white);padding:12px 16px;font-family:Oswald;font-size:14px;font-weight:600;">${dateLabel}</div>`;
+    h+=`<div style="padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-light);display:flex;gap:20px;flex-wrap:wrap;">`;
+    h+=`<span><strong>Hours:</strong> ${fmt(dayTotalHrs)}</span>`;
+    h+=`<span><strong>Cost:</strong> ${fmtD(dayTotalCost)}</span>`;
+    h+=`<span><strong>Qty:</strong> ${fmt(dayTotalQty)}</span>`;
+    h+=`</div>`;
+
+    h+=`<div class="table-wrap"><table style="margin:0;">`;
+    h+=`<thead><tr style="background:var(--ash);"><th>${sortHdrL('log-'+dateStr,'code','Cost Code','renderProduction').replace(/<th /,'<th style="background:var(--ash);" ')}</th><th>Description</th><th>Foreman</th><th class="num">Qty</th><th class="num">Labor Hrs</th><th class="num">Equip Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Material $</th><th class="num">Sub $</th><th class="num">Total $</th></tr></thead>`;
+    h+=`<tbody>`;
+
+    rows.forEach(r=>{
+      const total=(r.actualLaborCost||0)+(r.actualEquipCost||0)+(r.actualMatCost||0)+(r.actualSubCost||0);
+      h+=`<tr>`;
+      h+=`<td>${esc(r.costCode)}</td>`;
+      h+=`<td>${esc(r.costCodeDesc||'')}</td>`;
+      h+=`<td>${esc(r.foreman||'')}</td>`;
+      h+=`<td class="num">${fmt(r.actualQty||0)}</td>`;
+      h+=`<td class="num">${fmt(r.actualLaborHours||0)}</td>`;
+      h+=`<td class="num">${fmt(r.actualEquipHours||0)}</td>`;
+      h+=`<td class="num">${fmtD(r.actualLaborCost||0)}</td>`;
+      h+=`<td class="num">${fmtD(r.actualEquipCost||0)}</td>`;
+      h+=`<td class="num">${fmtD(r.actualMatCost||0)}</td>`;
+      h+=`<td class="num">${fmtD(r.actualSubCost||0)}</td>`;
+      h+=`<td class="num" style="font-weight:600;">${fmtD(total)}</td>`;
+      h+=`</tr>`;
+    });
+
+    h+=`<tr style="background:var(--ash);border-top:2px solid var(--border);font-weight:600;">`;
+    h+=`<td colspan="3">Daily Total</td>`;
+    h+=`<td class="num">${fmt(dayTotalQty)}</td>`;
+    const labHrs=rows.reduce((s,r)=>s+(r.actualLaborHours||0),0);
+    const equipHrs=rows.reduce((s,r)=>s+(r.actualEquipHours||0),0);
+    const labCost=rows.reduce((s,r)=>s+(r.actualLaborCost||0),0);
+    const equipCost=rows.reduce((s,r)=>s+(r.actualEquipCost||0),0);
+    const matCost=rows.reduce((s,r)=>s+(r.actualMatCost||0),0);
+    const subCost=rows.reduce((s,r)=>s+(r.actualSubCost||0),0);
+    h+=`<td class="num">${fmt(labHrs)}</td>`;
+    h+=`<td class="num">${fmt(equipHrs)}</td>`;
+    h+=`<td class="num">${fmtD(labCost)}</td>`;
+    h+=`<td class="num">${fmtD(equipCost)}</td>`;
+    h+=`<td class="num">${fmtD(matCost)}</td>`;
+    h+=`<td class="num">${fmtD(subCost)}</td>`;
+    h+=`<td class="num">${fmtD(dayTotalCost)}</td>`;
+    h+=`</tr>`;
+
+    h+=`</tbody></table></div>`;
+    h+=`</div>`;
+  });
+
+  h+='</div>';
+  return h;
 }
 
 // ═══════════════════════════════════════════

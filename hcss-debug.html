@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>HCSS API Debug Tester</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 16px; color: #222 }
+  h1 { font-size: 20px; margin-bottom: 4px }
+  h2 { font-size: 14px; color: #666; font-weight: normal; margin-top: 0 }
+  label { display: block; font-size: 12px; color: #555; margin: 10px 0 2px }
+  input[type=text], input[type=password] { width: 100%; padding: 8px; font-family: monospace; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box }
+  button { background: #1f6feb; color: white; border: 0; padding: 10px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; margin-top: 12px }
+  button:hover { background: #1558c7 }
+  pre { background: #0d1117; color: #c9d1d9; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all }
+  .pass { color: #2ea043 }
+  .fail { color: #cf222e }
+  .muted { color: #666; font-size: 12px; margin-top: 8px }
+  section { border: 1px solid #e5e7eb; padding: 14px 16px; border-radius: 8px; margin-top: 14px }
+</style>
+</head>
+<body>
+<h1>HCSS API Debug Tester</h1>
+<h2>Runs from your browser IP. Nothing leaves this page.</h2>
+
+<section>
+  <label>Client ID</label>
+  <input type="text" id="cid" value="scb6qwyeu6czkthd1mxqlmqhtpvmib0d">
+
+  <label>Client Secret</label>
+  <input type="password" id="csec" placeholder="paste your client secret here">
+
+  <label>Scopes (space-separated)</label>
+  <input type="text" id="scopes" value="heavyjob:read setups:read timecards:read">
+
+  <button onclick="runTest()">Run test</button>
+  <div class="muted">This will (1) mint an OAuth token, then (2) call <code>GET /setups/api/v1/BusinessUnit</code>, then (3) show the raw response.</div>
+</section>
+
+<section id="out" style="display:none">
+  <h3 style="margin-top:0">Results</h3>
+  <div id="log"></div>
+</section>
+
+<script>
+async function runTest() {
+  const cid = document.getElementById('cid').value.trim();
+  const csec = document.getElementById('csec').value.trim();
+  const scopes = document.getElementById('scopes').value.trim();
+  const out = document.getElementById('out');
+  const log = document.getElementById('log');
+  out.style.display = 'block';
+  log.innerHTML = '';
+
+  function write(label, content, cls) {
+    const block = document.createElement('div');
+    block.innerHTML = `<strong class="${cls || ''}">${label}</strong><pre>${content}</pre>`;
+    log.appendChild(block);
+  }
+
+  if (!cid || !csec) { write('Error', 'Client ID and Secret required', 'fail'); return; }
+
+  // Step 1: Token mint
+  write('Step 1: POST https://api.hcssapps.com/identity/connect/token', 'Sending...');
+  let token;
+  try {
+    const body = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: cid,
+      client_secret: csec,
+      scope: scopes,
+    });
+    const res = await fetch('https://api.hcssapps.com/identity/connect/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const txt = await res.text();
+    write(`Step 1 response: ${res.status} ${res.statusText}`, txt, res.ok ? 'pass' : 'fail');
+    if (!res.ok) return;
+    const json = JSON.parse(txt);
+    token = json.access_token;
+    write('Step 1: granted scope', json.scope || '(none)', 'pass');
+  } catch (e) {
+    write('Step 1 error', String(e) + '\n\nThis is likely a CORS error. Your browser blocked the request because api.hcssapps.com does not allow cross-origin calls from file:// pages. If this happened, open your browser DevTools console (F12 -> Console) and paste any red errors here.', 'fail');
+    return;
+  }
+
+  // Step 2: BusinessUnit call
+  write('Step 2: GET https://api.hcssapps.com/setups/api/v1/BusinessUnit', 'Sending...');
+  try {
+    const res = await fetch('https://api.hcssapps.com/setups/api/v1/BusinessUnit', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'accept': 'application/json',
+      },
+    });
+    const txt = await res.text();
+    const hdrs = [];
+    res.headers.forEach((v, k) => hdrs.push(`${k}: ${v}`));
+    write(`Step 2 response: ${res.status} ${res.statusText}`, `Response headers:\n${hdrs.join('\n')}\n\nResponse body:\n${txt}`, res.ok ? 'pass' : 'fail');
+  } catch (e) {
+    write('Step 2 error', String(e) + '\n\nThis might be a CORS error. Open DevTools (F12 -> Console) and paste any red errors here.', 'fail');
+  }
+}
+</script>
+</body>
+</html>
