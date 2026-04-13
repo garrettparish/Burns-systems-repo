@@ -2731,6 +2731,9 @@ function renderMapping(){
   h+=sortHdrL('mapTbl','status','Status','renderMapping');
   h+='<th style="min-width:280px;">Pay Item Assignment</th></tr>';
 
+  // Build set of ALL bid items already assigned to ANY task — so they disappear from other dropdowns
+  const allMappedBIs=new Set(Object.values(job.taskMap).flat());
+
   _mapTasks.forEach(t=>{
     const currentBIs=getTaskBidItems(job.taskMap,t.id);
     const isMapped=currentBIs.length>0;
@@ -2756,10 +2759,13 @@ function renderMapping(){
     ddHtml+=`<div style="padding:4px;border-bottom:1px solid var(--border);position:sticky;top:0;background:white;z-index:1;"><input type="text" placeholder="Search pay items..." onclick="event.stopPropagation()" oninput="filterMapDD(this)" style="width:100%;box-sizing:border-box;padding:4px 8px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-family:'Source Serif 4',serif;"></div>`;
     ddHtml+=`<div style="overflow-y:auto;max-height:250px;">`;
     sortedGroups.forEach(g=>{
-      ddHtml+=`<div class="map-dd-group" style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${g.name}</div>`;
-      g.items.forEach(b=>{
+      // Filter to only show items not yet assigned to OTHER tasks
+      const availableItems=g.items.filter(b=>currentBIs.includes(b.biditem)||!allMappedBIs.has(b.biditem));
+      if(availableItems.length===0) return; // Skip empty groups entirely
+      ddHtml+=`<div class="map-dd-group" style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${g.name} <span style="font-weight:400;font-size:10px;">(${availableItems.length})</span></div>`;
+      availableItems.forEach(b=>{
         const isChecked=currentBIs.includes(b.biditem);
-        if(isChecked) return; // Already assigned — shown as tag above, hide from list
+        if(isChecked) return; // Already assigned to THIS task — shown as tag above
         const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
         const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
         const pcLabel=pcCount?` (${pcCount} phases)`:'';
