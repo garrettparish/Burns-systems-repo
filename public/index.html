@@ -6698,8 +6698,13 @@ function renderProductionTracker(job){
     const qtyBadge=row.qtyCompletePct>=90?'good':(row.qtyCompletePct<80?'warn':'');
     const costVarBadge=row.costVar>=0?'good':'warn';
     const daysLeftBadge=row.daysLeft>30?'warn':'';
+    // Flag row if cost variance exceeds 10% of budget OR % cost complete > 110%
+    const varPct=row.budgetCost>0?Math.abs(row.costVar)/row.budgetCost:0;
+    const isOverBudget=row.costVar<0&&varPct>0.10;
+    const isCostHigh=row.costCompletePct>110;
+    const rowFlag=isOverBudget||isCostHigh;
 
-    h+='<tr>';
+    h+=`<tr style="${rowFlag?'background:rgba(242,103,34,0.08);border-left:3px solid var(--orange);':''}">`;
     h+=`<td>${esc(row.code)}</td>`;
     h+=`<td>${esc(row.description)}</td>`;
     h+=`<td>${esc(row.unit)}</td>`;
@@ -6709,8 +6714,8 @@ function renderProductionTracker(job){
     h+=`<td class="num">${fmt(row.remainingQty)}</td>`;
     h+=`<td class="num">${fmtD(row.budgetCost)}</td>`;
     h+=`<td class="num">${fmtD(row.actualCost)}</td>`;
-    h+=`<td class="num ${costVarBadge}">${fmtD(row.costVar)}</td>`;
-    h+=`<td class="num">${fmtPct(row.costCompletePct)}</td>`;
+    h+=`<td class="num ${costVarBadge}" style="${isOverBudget?'font-weight:700;color:var(--orange);':''}">${fmtD(row.costVar)}</td>`;
+    h+=`<td class="num" style="${isCostHigh?'font-weight:700;color:var(--orange);':''}">${fmtPct(row.costCompletePct)}</td>`;
     h+=`<td class="num">${row.prodRate>0?fmt(row.prodRate):'—'}</td>`;
     h+=`<td class="num ${daysLeftBadge}">${row.daysLeft!==Infinity&&row.daysLeft>=0?Math.ceil(row.daysLeft):'—'}</td>`;
     h+='</tr>';
