@@ -788,12 +788,24 @@ function suggestCrewAssignment(crewId,dateISO){
     if(planned&&planned.confirmed){
       recentJob=planned.jobCode;recentTrade=planned.trade;recentDate=checkISO;break;
     }
-    // Then check history
-    const hist=Store.crewHistory.find(h=>h.crewId===crewForeman&&h.date===checkISO);
-    if(hist){
-      recentJob=hist.jobCode;
-      const disc=getDiscipline(hist.costCode||'');
-      recentTrade=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+    // Then check history — use dominant job+trade by hours
+    const dayHist=Store.crewHistory.filter(h=>h.crewId===crewForeman&&h.date===checkISO);
+    if(dayHist.length>0){
+      const byJob={};
+      dayHist.forEach(r=>{
+        if(!byJob[r.jobCode])byJob[r.jobCode]={hours:0,records:[]};
+        byJob[r.jobCode].hours+=(r.hours||0);
+        byJob[r.jobCode].records.push(r);
+      });
+      const topJob=Object.entries(byJob).sort((a,b)=>b[1].hours-a[1].hours)[0];
+      recentJob=topJob[0];
+      const byTrade={};
+      topJob[1].records.forEach(r=>{
+        const disc=getDiscipline(r.costCode||'');
+        const abbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+        byTrade[abbr]=(byTrade[abbr]||0)+(r.hours||0);
+      });
+      recentTrade=Object.entries(byTrade).sort((a,b)=>b[1]-a[1])[0][0];
       recentDate=checkISO;
       break;
     }
@@ -896,13 +908,28 @@ function getEffectivePlanCell(crewId,dateISO){
   const planned=getCrewPlanCell(crewId,dateISO);
   if(planned&&planned.confirmed) return {jobCode:planned.jobCode,trade:planned.trade,source:'plan'};
 
-  // 2. Historical data (for past/today)
+  // 2. Historical data (for past/today) — use dominant trade by hours worked
   if(dateISO<=todayISO){
-    const hist=Store.crewHistory.find(h=>h.crewId===crew.foreman&&h.date===dateISO);
-    if(hist){
-      const disc=getDiscipline(hist.costCode||'');
-      const tradeAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
-      return {jobCode:hist.jobCode,trade:tradeAbbr,source:'history'};
+    const dayRecords=Store.crewHistory.filter(h=>h.crewId===crew.foreman&&h.date===dateISO);
+    if(dayRecords.length>0){
+      // Find the dominant job (most hours that day)
+      const byJob={};
+      dayRecords.forEach(r=>{
+        if(!byJob[r.jobCode])byJob[r.jobCode]={hours:0,records:[]};
+        byJob[r.jobCode].hours+=(r.hours||0);
+        byJob[r.jobCode].records.push(r);
+      });
+      const topJob=Object.entries(byJob).sort((a,b)=>b[1].hours-a[1].hours)[0];
+      const jobCode=topJob[0];
+      // Within that job, find the dominant trade by hours
+      const byTrade={};
+      topJob[1].records.forEach(r=>{
+        const disc=getDiscipline(r.costCode||'');
+        const abbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+        byTrade[abbr]=(byTrade[abbr]||0)+(r.hours||0);
+      });
+      const topTrade=Object.entries(byTrade).sort((a,b)=>b[1]-a[1])[0][0];
+      return {jobCode,trade:topTrade,source:'history'};
     }
   }
 
@@ -2057,7 +2084,14 @@ function parseActualsDetailRaw(rows){
   const _histSeen={};
   const _histExisting={};
   Store.crewHistory.forEach(h=>{_histExisting[h.date+'|'+h.crewId+'|'+h.jobCode+'|'+h.costCode]=true});
+  // Helper: detect HJ summary/total rows — "Name: xxx" in any key column
+  function _isHJSummaryRow(r){
+    const vals=Object.values(r);
+    return vals.some(v=>typeof v==='string'&&/^(Name|Total|Grand Total)\s*:/i.test(v.trim()));
+  }
+
   rows.forEach(r=>{
+    if(_isHJSummaryRow(r))return; // Skip "Name: xxx" and "Total:" summary rows
     const dateRaw=r['Date'];
     if(!dateRaw)return;
     let d=dateRaw instanceof Date?dateRaw:new Date(dateRaw);
@@ -2103,6 +2137,7 @@ function parseActualsDetailRaw(rows){
   const out=[];
   const skipped={noDate:0,otherJob:0,noCode:0};
   rows.forEach(r=>{
+    if(_isHJSummaryRow(r))return; // Skip "Name: xxx" and "Total:" summary rows
     // Date column must be a real date (skips group/summary headers)
     const dateRaw=r['Date'];
     if(!dateRaw){skipped.noDate++;return}
@@ -6704,6 +6739,9 @@ function renderPlanning(){
   }
   const todayISO=new Date().toISOString().split('T')[0];
   let h='';
+  // Job color palette — consistent colors per job across both views
+  const _PLAN_PALETTE=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22'];
+  const _planJobColors={};let _planColorIdx=0;
 
   // ── WEEKLY CREW PLANNER ──
   const weekStart=new Date(_weekPlannerDate);
@@ -6739,14 +6777,12 @@ function renderPlanning(){
       const dateISO=dayDate.toISOString().split('T')[0];
       const cell=getEffectivePlanCell(crew.id,dateISO);
       if(cell){
-        const tradeAbbr=cell.trade||'GN';
-        const color=TRADE_COLORS[tradeAbbr]||'#7F8C8D';
+        if(!_planJobColors[cell.jobCode]){_planJobColors[cell.jobCode]=_PLAN_PALETTE[_planColorIdx%_PLAN_PALETTE.length];_planColorIdx++}
+        const color=_planJobColors[cell.jobCode];
         const isPast=dateISO<todayISO;
         const isSuggested=cell.source==='suggested';
         const borderStyle=isSuggested?'2px dashed '+color:'4px solid '+color;
-        const bgAlpha=isSuggested?'18':'';
-        const opacity=isSuggested?'opacity:0.75;':'';
-        h+=`<td class="plan-cell" data-crew="${esc(crew.id)}" data-date="${dateISO}" style="padding:6px 10px;border-bottom:1px solid var(--border);background-color:${color}${bgAlpha||( isPast?'':'44')};border-left:${borderStyle};text-align:center;cursor:pointer;font-weight:${isSuggested?'400':'600'};font-size:13px;${opacity}${isSuggested?'font-style:italic;':''}" onclick="openPlanPopover('${esc(crew.id)}','${dateISO}',event)" title="${isSuggested?'Suggested — click to confirm or change':'Click to change assignment'}">${cell.jobCode} ${tradeAbbr}${isSuggested?' ?':''}</td>`;
+        h+=`<td class="plan-cell" data-crew="${esc(crew.id)}" data-date="${dateISO}" style="padding:6px 10px;border-bottom:1px solid var(--border);background-color:${color}${isSuggested?'18':(isPast?'':'44')};border-left:${borderStyle};text-align:center;cursor:pointer;font-weight:${isSuggested?'400':'600'};font-size:13px;${isSuggested?'opacity:0.75;font-style:italic;':''}" onclick="openPlanPopover('${esc(crew.id)}','${dateISO}',event)" title="${isSuggested?'Suggested — click to confirm or change':'Click to change assignment'}">${cell.jobCode}${isSuggested?' ?':''}</td>`;
       }else{
         h+=`<td class="plan-cell" data-crew="${esc(crew.id)}" data-date="${dateISO}" style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);cursor:pointer;" onclick="openPlanPopover('${esc(crew.id)}','${dateISO}',event)" title="Click to assign">—</td>`;
       }
@@ -6756,12 +6792,11 @@ function renderPlanning(){
 
   h+=`</table></div>`;
 
-  // Trade legend
+  // Legend — job colors + suggested vs confirmed
   h+=`<div style="margin-top:12px;padding:10px 12px;background:var(--bg);border-radius:6px;display:flex;gap:16px;flex-wrap:wrap;font-size:11px;align-items:center;">`;
   h+=`<span style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--green);font-weight:600;">LEGEND:</span>`;
-  Object.entries(TRADE_ABBR).forEach(([trade,abbr])=>{
-    const color=TRADE_COLORS[abbr];
-    h+=`<span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:${color};border-radius:2px;display:inline-block;"></span><strong>${abbr}</strong>=${trade}</span>`;
+  Object.entries(_planJobColors).forEach(([jc,color])=>{
+    h+=`<span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:${color};border-radius:2px;display:inline-block;"></span>${jc}</span>`;
   });
   h+=`<span style="display:flex;align-items:center;gap:4px;margin-left:12px;"><span style="width:14px;border-top:2px dashed var(--text-light);display:inline-block;"></span>= Suggested</span>`;
   h+=`<span style="display:flex;align-items:center;gap:4px;"><span style="width:14px;border-top:3px solid var(--text-light);display:inline-block;"></span>= Confirmed</span>`;
@@ -6793,9 +6828,6 @@ function renderPlanning(){
   }
   h+=`</tr>`;
 
-  const JOB_PALETTE=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22'];
-  const jobColors={};let colorIdx=0;
-
   crewList.forEach(crew=>{
     h+=`<tr><td style="padding:6px 12px;border-bottom:1px solid var(--border);font-weight:500;background:var(--bg);font-size:12px;">${esc(crewDisplayName(crew.id))}</td>`;
     weeks.forEach(week=>{
@@ -6816,8 +6848,8 @@ function renderPlanning(){
       const dominant=Object.entries(weekJobs).sort((a,b)=>b[1].count-a[1].count)[0];
       if(dominant){
         const [jc,data]=dominant;
-        if(!jobColors[jc]){jobColors[jc]=JOB_PALETTE[colorIdx%JOB_PALETTE.length];colorIdx++}
-        const color=jobColors[jc];
+        if(!_planJobColors[jc]){_planJobColors[jc]=_PLAN_PALETTE[_planColorIdx%_PLAN_PALETTE.length];_planColorIdx++}
+        const color=_planJobColors[jc];
         const isSuggested=data.source==='suggested';
         const jobLabel=getJobNumber(jc);
         h+=`<td class="res-cell" data-crew="${esc(crew.id)}" data-week="${weekISO}" style="padding:4px 6px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;cursor:pointer;font-size:11px;${isSuggested?'opacity:0.55;border:2px dashed rgba(255,255,255,0.6);':''}" onclick="openPlanPopover('${esc(crew.id)}','${weekISO}',event,true)" title="${isSuggested?'Suggested — click to confirm':'Click to change'}">${jobLabel}${isSuggested?' ?':''}</td>`;
