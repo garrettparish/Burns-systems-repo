@@ -15,18 +15,22 @@ body{font-family:'Source Serif 4',Georgia,serif;background:var(--bg);color:var(-
 .topbar-brand{font-family:Oswald,sans-serif;font-weight:700;font-size:20px;letter-spacing:1px;text-transform:uppercase}
 .topbar-brand span{color:var(--orange)}
 .topbar-phase{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:2px;text-transform:uppercase;opacity:.7}
-.nav{background:var(--midnight);display:flex;gap:0;padding:0 24px;border-bottom:3px solid var(--orange)}
+.nav{position:relative;z-index:100;background:var(--midnight);display:flex;gap:0;padding:0 24px;border-bottom:3px solid var(--orange)}
+.nav-group{position:relative;display:inline-block}
+.nav-group .nav-tab{position:relative}
 .nav-tab{font-family:Oswald,sans-serif;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--sand);padding:12px 20px;cursor:pointer;border:none;background:none;transition:all .2s;position:relative}
 .nav-tab:hover{color:var(--white)}
 .nav-tab.active{color:var(--white);background:rgba(255,255,255,.08)}
 .nav-tab.active::after{content:'';position:absolute;bottom:-3px;left:0;right:0;height:3px;background:var(--orange)}
 .nav-tab .badge{background:var(--orange);color:var(--white);font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px}
+.nav-tab .tab-crumb{font-size:10px;font-weight:400;opacity:0.7;margin-left:4px;letter-spacing:0.5px}
+.nav-dropdown{display:none;position:absolute;top:100%;left:0;background:#363636;border:1px solid rgba(255,255,255,0.1);border-top:none;border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);min-width:200px;z-index:200;padding:4px 0}
+.nav-group.open .nav-dropdown{display:block}
+.nav-dropdown-item{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--sand);padding:10px 20px;cursor:pointer;transition:all .2s;display:block;border:none;background:none;width:100%;text-align:left}
+.nav-dropdown-item:hover{color:var(--white);background:rgba(255,255,255,0.06)}
+.nav-dropdown-item.active{color:var(--orange);font-weight:600}
 .panel{display:none;padding:24px;max-width:1400px;margin:0 auto}
 .panel.active{display:block}
-.sub-nav{display:flex;gap:0;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:3px;margin-bottom:16px;overflow-x:auto}
-.sub-tab{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--text-light);padding:8px 16px;cursor:pointer;border:none;background:none;border-radius:6px;transition:all .2s;white-space:nowrap}
-.sub-tab:hover{color:var(--text);background:var(--white)}
-.sub-tab.active{background:var(--green);color:var(--white);font-weight:600}
 .sub-panel{display:none}
 .sub-panel.active{display:block}
 .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
@@ -268,10 +272,37 @@ tr:hover{background:#FAF8F5}
   </div>
 </div>
 
-<div class="nav">
-  <button class="nav-tab" data-tab="global">Global View</button>
-  <button class="nav-tab active" data-tab="job">Job Dashboard</button>
-  <button class="nav-tab" data-tab="resources">Resources</button>
+<div class="nav" id="mainNav">
+  <button class="nav-tab" data-tab="global" onclick="navDirect('global')">Global View</button>
+
+  <div class="nav-group" id="navGroup-financials">
+    <button class="nav-tab" data-tab="financials" onclick="navToggleGroup('financials')">
+      Schedule & Financials<span class="tab-crumb" id="crumb-financials"></span>
+    </button>
+    <div class="nav-dropdown">
+      <button class="nav-dropdown-item" data-sub="overview" onclick="navGroupSub('financials','overview','Overview')">Overview</button>
+      <button class="nav-dropdown-item" data-sub="biditems" onclick="navGroupSub('financials','biditems','Pay Items')">Pay Items</button>
+      <button class="nav-dropdown-item" data-sub="eva" onclick="navGroupSub('financials','eva','EVA')">EVA</button>
+      <button class="nav-dropdown-item" data-sub="forecast" onclick="navGroupSub('financials','forecast','Forecast')">Forecast</button>
+      <button class="nav-dropdown-item" data-sub="payapps" onclick="navGroupSub('financials','payapps','Pay Apps')">Pay Apps</button>
+      <button class="nav-dropdown-item" data-sub="cashflow" onclick="navGroupSub('financials','cashflow','Cash Flow')">Cash Flow</button>
+    </div>
+  </div>
+
+  <div class="nav-group" id="navGroup-production">
+    <button class="nav-tab" data-tab="production-group" onclick="navToggleGroup('production')">
+      Production<span class="tab-crumb" id="crumb-production"></span>
+    </button>
+    <div class="nav-dropdown">
+      <button class="nav-dropdown-item" data-sub="schedule" onclick="navGroupSub('production','schedule','Schedule')">Schedule</button>
+      <button class="nav-dropdown-item" data-sub="jcs" onclick="navGroupSub('production','jcs','Job Cost Schedule')">Job Cost Schedule</button>
+      <button class="nav-dropdown-item" data-sub="production" onclick="navGroupSub('production','production','Production Tracker')">Production Tracker</button>
+      <button class="nav-dropdown-item" data-sub="crews" onclick="navGroupSub('production','crews','Crews')">Crews</button>
+    </div>
+  </div>
+
+  <button class="nav-tab" data-tab="resources" onclick="navDirect('resources')">Resources</button>
+  <button class="nav-tab" data-tab="setup" onclick="navSetup()">Set Up</button>
 </div>
 
 <!-- GLOBAL VIEW -->
@@ -287,21 +318,6 @@ tr:hover{background:#FAF8F5}
     <select class="job-select" id="jobSelect" onchange="switchJob()"><option value="">— Create or select a job —</option></select>
     <button class="btn-green btn-sm" onclick="showNewJobModal()">+ New Job</button>
     <button class="edit-btn" id="editJobBtn" onclick="showEditJobModal()" style="display:none;">Edit Job</button>
-  </div>
-  <!-- Sub-tab nav -->
-  <div class="sub-nav" id="subNav" style="display:none;">
-    <button class="sub-tab active" data-sub="overview" onclick="switchSubTab('overview')">Overview</button>
-    <button class="sub-tab" data-sub="biditems" onclick="switchSubTab('biditems')">Pay Items</button>
-    <button class="sub-tab" data-sub="schedule" onclick="switchSubTab('schedule')">Schedule</button>
-    <button class="sub-tab" data-sub="jcs" onclick="switchSubTab('jcs')">Job Cost Schedule</button>
-    <button class="sub-tab" data-sub="production" onclick="switchSubTab('production')">Production</button>
-    <button class="sub-tab" data-sub="crews" onclick="switchSubTab('crews')">Crews</button>
-    <button class="sub-tab" data-sub="eva" onclick="switchSubTab('eva')">EVA</button>
-    <button class="sub-tab" data-sub="forecast" onclick="switchSubTab('forecast')">Forecast</button>
-    <button class="sub-tab" data-sub="payapps" onclick="switchSubTab('payapps')">Pay Apps</button>
-    <button class="sub-tab" data-sub="cashflow" onclick="switchSubTab('cashflow')">Cash Flow</button>
-    <button class="sub-tab" data-sub="setup" onclick="switchSubTab('setup')">Project Set Up</button>
-    <button onclick="showTabHelp()" style="background:none;border:2px solid var(--sand);color:var(--sand);font-family:Oswald,sans-serif;font-size:13px;font-weight:700;width:26px;height:26px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-left:auto;transition:all .2s;" title="Tab Info &amp; Help" onmouseover="this.style.borderColor='var(--orange)';this.style.color='var(--orange)'" onmouseout="this.style.borderColor='var(--sand)';this.style.color='var(--sand)'">?</button>
   </div>
 
   <!-- Sub-panel: Overview -->
@@ -1390,40 +1406,121 @@ const fmtDate=d=>{if(!d)return'—';const dt=d instanceof Date?d:new Date(d);ret
 // ═══════════════════════════════════════════
 let _activeSubTab='overview';
 
-document.querySelectorAll('.nav-tab').forEach(tab=>{
-  tab.addEventListener('click',()=>{
-    document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
-    tab.classList.add('active');
-    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-    document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
-    if(tab.dataset.tab==='global')renderGlobalView();
-    if(tab.dataset.tab==='resources')renderResources();
-    if(tab.dataset.tab==='job'){if(Store.activeJob){document.getElementById('subNav').style.display='flex';document.getElementById('noJobMsg').style.display='none';document.getElementById('editJobBtn').style.display='inline-block'}renderActiveSubTab()}
-  });
-});
+// Track which nav group is currently open and which top tab is highlighted
+let _activeNavGroup=null;
+let _activeNavTab='financials'; // which top tab is highlighted
 
-function switchSubTab(sub){
+function navDirect(tab){
+  // Direct nav tabs (Global View, Resources) — no dropdown
+  closeAllDropdowns();
+  _activeNavGroup=null;
+  _activeNavTab=tab;
+  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+
+  if(tab==='global'){
+    document.querySelector('[data-tab="global"]').classList.add('active');
+    document.getElementById('panel-global').classList.add('active');
+    renderGlobalView();
+  }else if(tab==='resources'){
+    document.querySelector('[data-tab="resources"]').classList.add('active');
+    document.getElementById('panel-resources').classList.add('active');
+    renderResources();
+  }
+}
+
+function navToggleGroup(group){
+  // Toggle dropdown for a group (Schedule & Financials, Production)
+  const el=document.getElementById('navGroup-'+group);
+  const wasOpen=el.classList.contains('open');
+  closeAllDropdowns();
+  if(!wasOpen){
+    el.classList.add('open');
+  }
+}
+
+function navGroupSub(group,sub,label){
+  // Clicked a sub-tab inside a dropdown
+  closeAllDropdowns();
+  _activeNavGroup=group;
+  _activeNavTab=group;
   _activeSubTab=sub;
-  document.querySelectorAll('.sub-tab').forEach(t=>t.classList.remove('active'));
-  document.querySelector('.sub-tab[data-sub="'+sub+'"]')?.classList.add('active');
+
+  // Highlight the right top tab
+  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+  const groupBtn=document.querySelector('#navGroup-'+group+' .nav-tab');
+  if(groupBtn)groupBtn.classList.add('active');
+
+  // Update breadcrumb
+  const crumb=document.getElementById('crumb-'+group);
+  if(crumb)crumb.textContent=' > '+label;
+  // Clear other group crumbs
+  document.querySelectorAll('.tab-crumb').forEach(c=>{
+    if(c.id!=='crumb-'+group)c.textContent='';
+  });
+
+  // Show job panel
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('panel-job').classList.add('active');
+
+  // Activate the sub-panel
   document.querySelectorAll('.sub-panel').forEach(p=>p.classList.remove('active'));
   const panel=document.getElementById('sub-'+sub);
   if(panel)panel.classList.add('active');
+
+  // Highlight active dropdown item
+  document.querySelectorAll('.nav-dropdown-item').forEach(i=>i.classList.remove('active'));
+  const item=document.querySelector('#navGroup-'+group+' [data-sub="'+sub+'"]');
+  if(item)item.classList.add('active');
+
+  // Show job bar
+  if(Store.activeJob){
+    document.getElementById('noJobMsg')?.style&&(document.getElementById('noJobMsg').style.display='none');
+    document.getElementById('editJobBtn')?.style&&(document.getElementById('editJobBtn').style.display='inline-block');
+  }
+
   renderActiveSubTab();
 }
 
-function switchToSubTab(sub){
-  // Navigate to Job Dashboard tab, then to a specific sub-tab
+function navSetup(){
+  // Set Up is a direct link that goes to the setup sub-tab
+  navGroupSub('financials','setup','');
+  // But highlight Set Up tab instead of Financials
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
-  document.querySelector('.nav-tab[data-tab="job"]')?.classList.add('active');
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  document.getElementById('panel-job').classList.add('active');
-  // Ensure sub-nav is visible when a job is active
-  if(Store.activeJob){
-    document.getElementById('subNav').style.display='flex';
-    document.getElementById('noJobMsg').style.display='none';
-    document.getElementById('editJobBtn').style.display='inline-block';
+  document.querySelector('[data-tab="setup"]').classList.add('active');
+  document.querySelectorAll('.tab-crumb').forEach(c=>c.textContent='');
+  _activeNavTab='setup';
+}
+
+function closeAllDropdowns(){
+  document.querySelectorAll('.nav-group').forEach(g=>g.classList.remove('open'));
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click',function(e){
+  if(!e.target.closest('.nav-group')&&!e.target.closest('.nav-tab')){
+    closeAllDropdowns();
   }
+});
+
+function switchSubTab(sub){
+  // Determine which group this sub belongs to and navigate via the new system
+  const financialsSubs=['overview','biditems','eva','forecast','payapps','cashflow'];
+  const productionSubs=['schedule','jcs','production','crews'];
+  let group='financials';
+  let label=sub;
+  if(productionSubs.includes(sub))group='production';
+  const labels={overview:'Overview',biditems:'Pay Items',eva:'EVA',forecast:'Forecast',payapps:'Pay Apps',cashflow:'Cash Flow',schedule:'Schedule',jcs:'Job Cost Schedule',production:'Production Tracker',crews:'Crews',setup:'Set Up'};
+  label=labels[sub]||sub;
+  if(sub==='setup'){
+    navSetup();
+  }else{
+    navGroupSub(group,sub,label);
+  }
+}
+
+function switchToSubTab(sub){
+  // Navigate to a specific sub-tab (used by internal links, etc.)
   switchSubTab(sub);
 }
 
@@ -1450,6 +1547,8 @@ loadJobs();
 loadCrews();
 // Init user label
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
+// Initialize nav to default: Schedule & Financials > Overview
+navGroupSub('financials','overview','Overview');
 // Poll HCSS sync status once on startup (non-blocking)
 setTimeout(()=>{try{hcssLoadSyncStatus()}catch(e){}},500);
 
@@ -1467,7 +1566,6 @@ function createJob(){const num=document.getElementById('newJobNum').value.trim()
 function switchJob(){
   Store.activeJob=document.getElementById('jobSelect').value||null;
   const has=!!Store.activeJob;
-  document.getElementById('subNav').style.display=has?'flex':'none';
   document.getElementById('noJobMsg').style.display=has?'none':'block';
   document.getElementById('editJobBtn').style.display=has?'inline-block':'none';
   // Hide all sub-panels when no job
