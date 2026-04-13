@@ -273,7 +273,6 @@ tr:hover{background:#FAF8F5}
   <button class="nav-tab" data-tab="global" onclick="navSwitch('global')">Global View</button>
   <button class="nav-tab active" data-tab="financials" onclick="navSwitch('financials')">Schedule & Financials</button>
   <button class="nav-tab" data-tab="production-group" onclick="navSwitch('production')">Production</button>
-  <button class="nav-tab" data-tab="resources" onclick="navSwitch('resources')">Resources</button>
   <button class="nav-tab" data-tab="setup" onclick="navSwitch('setup')">Set Up</button>
 </div>
 
@@ -287,7 +286,7 @@ tr:hover{background:#FAF8F5}
   <button class="sub-tab" data-sub="cashflow" onclick="navSub('financials','cashflow')">Cash Flow</button>
 </div>
 <div class="sub-nav" id="subNav-production">
-  <button class="sub-tab" data-sub="weekplanner" onclick="navSub('production','weekplanner')">Weekly Planner</button>
+  <button class="sub-tab" data-sub="planning" onclick="navSub('production','planning')">Planning</button>
   <button class="sub-tab" data-sub="schedule" onclick="navSub('production','schedule')">Schedule</button>
   <button class="sub-tab" data-sub="jcs" onclick="navSub('production','jcs')">Job Cost Schedule</button>
   <button class="sub-tab" data-sub="production" onclick="navSub('production','production')">Production Tracker</button>
@@ -296,9 +295,6 @@ tr:hover{background:#FAF8F5}
 
 <!-- GLOBAL VIEW -->
 <div id="panel-global" class="panel"><div id="globalContent"></div></div>
-
-<!-- RESOURCES VIEW -->
-<div id="panel-resources" class="panel"><div id="resourcesContent"></div></div>
 
 <!-- JOB DASHBOARD (with sub-tabs) -->
 <div id="panel-job" class="panel active">
@@ -323,9 +319,9 @@ tr:hover{background:#FAF8F5}
     <div id="bidContent"></div>
   </div>
 
-  <!-- Sub-panel: Weekly Planner -->
-  <div id="sub-weekplanner" class="sub-panel">
-    <div id="weekPlannerContent"></div>
+  <!-- Sub-panel: Planning (Weekly Planner + Resource View) -->
+  <div id="sub-planning" class="sub-panel">
+    <div id="planningContent"></div>
   </div>
 
   <!-- Sub-panel: Schedule -->
@@ -563,7 +559,7 @@ tr:hover{background:#FAF8F5}
 // ═══════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════
-const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], staging:{type:null,data:[]}, _pinAuth:{} };
+const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], crewPlan:{}, staging:{type:null,data:[]}, _pinAuth:{} };
 let _globalSchedByDisc=false;
 let _schedSort='pred'; // default sort: predecessor order
 let _schedSortDir='asc'; // sort direction: asc or desc
@@ -724,6 +720,200 @@ function saveCrewName(id,name){
   persistCrews();
   renderCrews();
 }
+function deleteCrew(id){
+  if(!confirm('Delete this crew? This removes the crew and its name mapping. Crew history records will be kept.'))return;
+  delete Store.crews[id];
+  delete Store.crewNameMap[id];
+  persistCrews();
+  renderCrews();
+}
+
+// ═══════════════════════════════════════════
+// CREW PLAN — day-level confirmed assignments
+// Key format: "crewId|YYYY-MM-DD" → { jobCode, trade, confirmed:true }
+// ═══════════════════════════════════════════
+function persistCrewPlan(){
+  localStorage.setItem('bdc_crew_plan',JSON.stringify(Store.crewPlan));
+}
+function loadCrewPlan(){
+  const stored=localStorage.getItem('bdc_crew_plan');
+  if(stored){try{Store.crewPlan=JSON.parse(stored)}catch(e){log('Could not load crew plan')}}
+}
+
+function setCrewPlan(crewId,dateISO,jobCode,trade){
+  const key=crewId+'|'+dateISO;
+  Store.crewPlan[key]={jobCode,trade,confirmed:true,ts:Date.now()};
+  persistCrewPlan();
+}
+function clearCrewPlanCell(crewId,dateISO){
+  delete Store.crewPlan[crewId+'|'+dateISO];
+  persistCrewPlan();
+}
+function getCrewPlanCell(crewId,dateISO){
+  return Store.crewPlan[crewId+'|'+dateISO]||null;
+}
+
+// Set a week of plan entries at once (for Resource View)
+function setCrewPlanWeek(crewId,weekStartISO,jobCode,trade){
+  const ws=new Date(weekStartISO+'T00:00:00');
+  for(let i=0;i<5;i++){
+    const d=new Date(ws);d.setDate(d.getDate()+i);
+    const iso=d.toISOString().split('T')[0];
+    setCrewPlan(crewId,iso,jobCode,trade);
+  }
+  persistCrewPlan();
+}
+
+// ═══════════════════════════════════════════
+// SUGGESTION ENGINE — combines schedule + history
+// ═══════════════════════════════════════════
+function suggestCrewAssignment(crewId,dateISO){
+  // Returns array of { jobCode, jobName, trade, tradeAbbr, confidence, reason }
+  const crew=Store.crews[crewId];
+  if(!crew) return [];
+  const suggestions=[];
+  const seen={};
+
+  // 1. CONTINUITY: What was this crew doing yesterday / recently?
+  const targetDate=new Date(dateISO+'T00:00:00');
+  const crewForeman=crew.foreman;
+  // Check last 7 days of history + plan for continuity
+  let recentJob=null, recentTrade=null, recentDate=null;
+  for(let back=1;back<=7;back++){
+    const checkDate=new Date(targetDate);
+    checkDate.setDate(checkDate.getDate()-back);
+    const checkISO=checkDate.toISOString().split('T')[0];
+    // Check confirmed plan first
+    const planned=getCrewPlanCell(crewId,checkISO);
+    if(planned&&planned.confirmed){
+      recentJob=planned.jobCode;recentTrade=planned.trade;recentDate=checkISO;break;
+    }
+    // Then check history
+    const hist=Store.crewHistory.find(h=>h.crewId===crewForeman&&h.date===checkISO);
+    if(hist){
+      recentJob=hist.jobCode;
+      const disc=getDiscipline(hist.costCode||'');
+      recentTrade=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+      recentDate=checkISO;
+      break;
+    }
+  }
+  if(recentJob&&!seen[recentJob]){
+    seen[recentJob]=true;
+    // Check if this job still has schedule tasks active on target date
+    const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==recentJob);
+    let stillActive=true;
+    let confidence=0.85;
+    let reason='Worked '+recentJob+' recently ('+recentDate+')';
+    if(jobEntry){
+      const [jk,job]=jobEntry;
+      const activeTasks=(job.schedule||[]).filter(t=>{
+        const s=toDate(t.start),f=toDate(t.finish);
+        return s&&f&&s<=targetDate&&f>=targetDate;
+      });
+      if(activeTasks.length>0){
+        confidence=0.95;
+        reason='Continuity — '+recentJob+' has '+activeTasks.length+' active task(s) on this date';
+      }else{
+        // Job may be done — lower confidence
+        confidence=0.5;
+        reason=recentJob+' — no active tasks scheduled; may need reassignment';
+      }
+    }
+    const jName=jobEntry?jobEntry[1].meta?.name||recentJob:recentJob;
+    suggestions.push({jobCode:recentJob,jobName:jName,trade:recentTrade||'GN',tradeAbbr:recentTrade||'GN',confidence,reason});
+  }
+
+  // 2. SCHEDULE-BASED: Which jobs have tasks active on this date that match crew trades?
+  const crewTrades=crew.trades||[];
+  Object.entries(Store.jobs).forEach(([jk,job])=>{
+    const jobCode=String(job.meta?.number||'').trim();
+    if(!jobCode||seen[jobCode])return;
+    const activeTasks=(job.schedule||[]).filter(t=>{
+      const s=toDate(t.start),f=toDate(t.finish);
+      return s&&f&&s<=targetDate&&f>=targetDate;
+    });
+    if(activeTasks.length===0)return;
+    // Check trade match
+    activeTasks.forEach(task=>{
+      const disc=getTaskDiscipline(task.taskName||task.name||'');
+      const tradeAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+      if(crewTrades.length===0||crewTrades.some(ct=>{
+        const ctAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===ct)?.[1];
+        return ctAbbr===tradeAbbr;
+      })){
+        if(!seen[jobCode]){
+          seen[jobCode]=true;
+          // Check if this crew has history on this job (bonus)
+          const hasHistory=Store.crewHistory.some(h=>h.crewId===crewForeman&&h.jobCode===jobCode);
+          const conf=hasHistory?0.7:0.4;
+          suggestions.push({
+            jobCode,jobName:job.meta?.name||jobCode,trade:tradeAbbr,tradeAbbr,
+            confidence:conf,
+            reason:hasHistory?
+              'Schedule match + previous crew history on '+jobCode:
+              'Schedule has active '+disc.name+' task on '+jobCode
+          });
+        }
+      }
+    });
+  });
+
+  // 3. HISTORY-BASED FALLBACK: jobs this crew has worked before
+  if(suggestions.length<3){
+    const jobCounts={};
+    Store.crewHistory.filter(h=>h.crewId===crewForeman).forEach(h=>{
+      if(!jobCounts[h.jobCode])jobCounts[h.jobCode]={count:0,lastDate:'',costCode:''};
+      jobCounts[h.jobCode].count++;
+      if(h.date>jobCounts[h.jobCode].lastDate){jobCounts[h.jobCode].lastDate=h.date;jobCounts[h.jobCode].costCode=h.costCode}
+    });
+    Object.entries(jobCounts)
+      .sort((a,b)=>b[1].count-a[1].count)
+      .forEach(([jc,data])=>{
+        if(seen[jc])return;
+        seen[jc]=true;
+        const disc=getDiscipline(data.costCode||'');
+        const tradeAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+        const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==jc);
+        suggestions.push({
+          jobCode:jc,jobName:jobEntry?jobEntry[1].meta?.name||jc:jc,trade:tradeAbbr,tradeAbbr,
+          confidence:0.25,
+          reason:'History — worked '+jc+' '+data.count+' times (last: '+data.lastDate+')'
+        });
+      });
+  }
+
+  return suggestions.sort((a,b)=>b.confidence-a.confidence).slice(0,5);
+}
+
+// Get the effective cell value for a crew on a date (confirmed plan > history > suggestion)
+function getEffectivePlanCell(crewId,dateISO){
+  const todayISO=new Date().toISOString().split('T')[0];
+  const crew=Store.crews[crewId];
+  if(!crew) return null;
+
+  // 1. Confirmed plan entry
+  const planned=getCrewPlanCell(crewId,dateISO);
+  if(planned&&planned.confirmed) return {jobCode:planned.jobCode,trade:planned.trade,source:'plan'};
+
+  // 2. Historical data (for past/today)
+  if(dateISO<=todayISO){
+    const hist=Store.crewHistory.find(h=>h.crewId===crew.foreman&&h.date===dateISO);
+    if(hist){
+      const disc=getDiscipline(hist.costCode||'');
+      const tradeAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+      return {jobCode:hist.jobCode,trade:tradeAbbr,source:'history'};
+    }
+  }
+
+  // 3. Suggestion (for future)
+  const suggestions=suggestCrewAssignment(crewId,dateISO);
+  if(suggestions.length>0){
+    const top=suggestions[0];
+    if(top.confidence>=0.4) return {jobCode:top.jobCode,trade:top.tradeAbbr,source:'suggested',confidence:top.confidence};
+  }
+  return null;
+}
 
 function discoverCrews(job){
   if(!job)return 0;
@@ -834,7 +1024,7 @@ function saveCrewAssignment(){
   closeCrewAssignModal();
   // Refresh the active view
   if(_activeSubTab==='crews')renderCrews();
-  else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
+  else if(_activeSubTab==='planning')renderPlanning();
   log(`Assigned ${crewDisplayName(crewId)} to job from ${startDate} to ${endDate}`);
 }
 
@@ -870,7 +1060,7 @@ function saveCrewEdit(){
   closeCrewEditModal();
   // Refresh
   if(_activeSubTab==='crews')renderCrews();
-  else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
+  else if(_activeSubTab==='planning')renderPlanning();
   log(`Updated crew: ${crewDisplayName(_editingCrewId)}`);
 }
 
@@ -885,7 +1075,7 @@ function deleteCrewConfirm(){
   closeCrewEditModal();
   // Refresh
   if(_activeSubTab==='crews')renderCrews();
-  else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
+  else if(_activeSubTab==='planning')renderPlanning();
   log(`Deleted crew: ${crewDisplayName(_editingCrewId)}`);
 }
 
@@ -1445,7 +1635,7 @@ function clearCrewHistory(){
   Store.crewHistory=[];
   persistCrewHistory();
   if(_activeSubTab==='crews')renderCrews();
-  else renderResources();
+  else if(_activeSubTab==='planning')renderPlanning();
 }
 
 // ═══════════════════════════════════════════
@@ -1468,7 +1658,7 @@ let _activeNavTab='financials';
 // Group definitions — which sub-tabs belong to each top tab
 const NAV_GROUPS={
   financials:['overview','biditems','eva','forecast','payapps','cashflow'],
-  production:['weekplanner','schedule','jcs','production','crews']
+  production:['planning','schedule','jcs','production','crews']
 };
 
 // Trade abbreviations and colors
@@ -1478,11 +1668,18 @@ const TRADE_COLORS={EW:'#D4A017',ER:'#27AE60',DE:'#8E44AD',SA:'#16A085',WA:'#349
 // Weekly planner state
 let _weekPlannerDate=new Date();
 _weekPlannerDate.setDate(_weekPlannerDate.getDate()-_weekPlannerDate.getDay());
+let _tradeFilter=new Set(); // empty = show all trades; non-empty = show only these
+
+function toggleTradeFilter(trade){
+  if(_tradeFilter.has(trade))_tradeFilter.delete(trade);
+  else _tradeFilter.add(trade);
+  renderGlobalView();
+}
 
 function navSwitch(tab){
   // Highlight the top tab
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
-  document.querySelector('[data-tab="'+({financials:'financials',production:'production-group',global:'global',resources:'resources',setup:'setup'}[tab]||tab)+'"]')?.classList.add('active');
+  document.querySelector('[data-tab="'+({financials:'financials',production:'production-group',global:'global',setup:'setup'}[tab]||tab)+'"]')?.classList.add('active');
   _activeNavTab=tab;
 
   // Hide all sub-nav rows
@@ -1494,9 +1691,6 @@ function navSwitch(tab){
   if(tab==='global'){
     document.getElementById('panel-global').classList.add('active');
     renderGlobalView();
-  }else if(tab==='resources'){
-    document.getElementById('panel-resources').classList.add('active');
-    renderResources();
   }else if(tab==='setup'){
     // Set Up shows the job panel with setup sub-tab, no sub-nav row
     document.getElementById('panel-job').classList.add('active');
@@ -1538,6 +1732,11 @@ function navSub(group,sub){
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
   document.querySelector('[data-tab="'+({financials:'financials',production:'production-group'}[group]||group)+'"]')?.classList.add('active');
 
+  // Show correct sub-nav row
+  document.querySelectorAll('.sub-nav').forEach(s=>s.classList.remove('visible'));
+  const subNavEl=document.getElementById('subNav-'+group);
+  if(subNavEl)subNavEl.classList.add('visible');
+
   // Highlight sub-tab
   _highlightSubTab(group,sub);
 
@@ -1549,7 +1748,6 @@ function navSub(group,sub){
   // Show job panel
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-job').classList.add('active');
-
   // Show job bar if job selected
   if(Store.activeJob){
     document.getElementById('noJobMsg')?.style&&(document.getElementById('noJobMsg').style.display='none');
@@ -1568,7 +1766,7 @@ function _highlightSubTab(group,sub){
 
 function switchSubTab(sub){
   // Determine which group this sub belongs to
-  const productionSubs=['schedule','jcs','production','crews'];
+  const productionSubs=['planning','schedule','jcs','production','crews'];
   if(sub==='setup'){
     navSwitch('setup');
   }else{
@@ -1586,7 +1784,7 @@ function renderActiveSubTab(){
   const renderers={
     overview:renderDashboard,
     biditems:renderBidItems,
-    weekplanner:renderWeekPlanner,
+    planning:renderPlanning,
     schedule:renderSchedule,
     jcs:renderJobCostSchedule,
     production:renderProduction,
@@ -1606,6 +1804,8 @@ loadJobs();
 loadCrews();
 // Load crew history from local storage
 loadCrewHistory();
+// Load crew plan from local storage
+loadCrewPlan();
 // Init user label
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // Initialize nav to default: Schedule & Financials > Overview
@@ -4500,6 +4700,34 @@ function renderGlobalView(){
   }
   h+='</table></div></div>';
 
+  // ─── Global Schedule by Trade ───
+  h+=`<div class="card"><div class="card-title">Global Schedule — By Trade</div>`;
+  h+=renderProjectTradeView();
+  h+=`</div>`;
+
+  // ─── Resource Loading Summary ───
+  const allCrews=Object.values(Store.crews);
+  if(allCrews.length>0){
+    h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Resource Loading Summary</span><button class="edit-btn" onclick="switchSubTab(\'planning\');return false;" style="border:1px solid var(--orange);color:var(--orange);">View Planning →</button></div>';
+    h+='<div class="table-wrap"><table>';
+    h+='<tr><th>Crew</th><th>Current Job</th><th>Until</th><th>Next Job</th><th>Starts</th><th>Headcount</th></tr>';
+    allCrews.forEach(crew=>{
+      const now=new Date();
+      let currentJob=null,currentEnd=null,nextJob=null,nextStart=null;
+      const assignments=(crew.assignments||[]).sort((a,b)=>toDate(a.startDate)-toDate(b.startDate));
+      assignments.forEach(a=>{
+        const s=toDate(a.startDate),e=toDate(a.endDate);
+        if(s<=now&&e>=now){currentJob=a;currentEnd=e}
+        else if(s>now&&!nextJob){nextJob=a;nextStart=s}
+      });
+      const cj=currentJob?(Store.jobs[currentJob.jobId]?.meta?.name||'Unknown'):null;
+      const nj=nextJob?(Store.jobs[nextJob.jobId]?.meta?.name||'Unknown'):null;
+      const hc=currentJob?currentJob.headcount:(nextJob?nextJob.headcount:crew.defaultHeadcount);
+      h+=`<tr><td>${esc(crewDisplayName(crew.id))}</td><td>${cj||'—'}</td><td>${currentEnd?fmtDate(currentEnd):'—'}</td><td>${nj||'—'}</td><td>${nextStart?fmtDate(nextStart):'—'}</td><td class="num">${hc}</td></tr>`;
+    });
+    h+='</table></div></div>';
+  }
+
   // ─── Product Roadmap ───
   h+='<div class="card"><div class="card-title">Product Roadmap</div>';
   const phases=[
@@ -4521,34 +4749,6 @@ function renderGlobalView(){
     h+=`</div></div>`;
   });
   h+='</div>';
-
-  // ─── Global Schedule by Trade ───
-  h+=`<div class="card"><div class="card-title">Global Schedule — By Trade</div>`;
-  h+=renderProjectTradeView();
-  h+=`</div>`;
-
-  // ─── Resource Loading Summary ───
-  const allCrews=Object.values(Store.crews);
-  if(allCrews.length>0){
-    h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Resource Loading Summary</span><button class="edit-btn" onclick="document.querySelector(\'[data-tab=resources]\').click();return false;" style="border:1px solid var(--orange);color:var(--orange);">View Full Resources →</button></div>';
-    h+='<div class="table-wrap"><table>';
-    h+='<tr><th>Crew</th><th>Current Job</th><th>Until</th><th>Next Job</th><th>Starts</th><th>Headcount</th></tr>';
-    allCrews.forEach(crew=>{
-      const now=new Date();
-      let currentJob=null,currentEnd=null,nextJob=null,nextStart=null;
-      const assignments=(crew.assignments||[]).sort((a,b)=>toDate(a.startDate)-toDate(b.startDate));
-      assignments.forEach(a=>{
-        const s=toDate(a.startDate),e=toDate(a.endDate);
-        if(s<=now&&e>=now){currentJob=a;currentEnd=e}
-        else if(s>now&&!nextJob){nextJob=a;nextStart=s}
-      });
-      const cj=currentJob?(Store.jobs[currentJob.jobId]?.meta?.name||'Unknown'):null;
-      const nj=nextJob?(Store.jobs[nextJob.jobId]?.meta?.name||'Unknown'):null;
-      const hc=currentJob?currentJob.headcount:(nextJob?nextJob.headcount:crew.defaultHeadcount);
-      h+=`<tr><td>${esc(crewDisplayName(crew.id))}</td><td>${cj||'—'}</td><td>${currentEnd?fmtDate(currentEnd):'—'}</td><td>${nj||'—'}</td><td>${nextStart?fmtDate(nextStart):'—'}</td><td class="num">${hc}</td></tr>`;
-    });
-    h+='</table></div></div>';
-  }
 
   el.innerHTML=h;
 }
@@ -6485,78 +6685,329 @@ function renderProductionLog(job){
 }
 
 // ═══════════════════════════════════════════
-// VIEW 1: WEEKLY CREW PLANNER
+// PLANNING VIEW — Interactive Weekly Planner + Resource View
 // ═══════════════════════════════════════════
-function renderWeekPlanner(){
-  const el=document.getElementById('weekPlannerContent');
-  const crewList=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
-  if(crewList.length===0){el.innerHTML='<div class="empty-state"><h2>No Crews</h2></div>';return}
+let _planPopover=null; // {crewId, dateISO, isWeek, weekStartISO}
 
+function renderPlanning(){
+  const el=document.getElementById('planningContent');
+  const crewList=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
+  if(crewList.length===0){
+    el.innerHTML='<div class="empty-state"><h2>No Crews</h2><p>Import HeavyJob daily detail to auto-discover crews.</p></div>';
+    return;
+  }
+  const todayISO=new Date().toISOString().split('T')[0];
+  let h='';
+
+  // ── WEEKLY CREW PLANNER ──
   const weekStart=new Date(_weekPlannerDate);
   weekStart.setDate(weekStart.getDate()-weekStart.getDay());
   weekStart.setHours(0,0,0,0);
   const weekLabel=weekStart.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 
-  let h='<div class="card"><div class="card-title">Weekly Planner</div>';
+  h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Weekly Crew Planner</span>';
+  h+=`<div style="display:flex;gap:6px;align-items:center;">`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="acceptAllSuggestions('week');renderPlanning();">Accept All Suggestions</button>`;
+  h+=`</div></div>`;
   h+=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_weekPlannerDate);d.setDate(d.getDate()-7);_weekPlannerDate=d;renderWeekPlanner();">← Prev Week</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_weekPlannerDate);d.setDate(d.getDate()-7);_weekPlannerDate=d;renderPlanning();">← Prev Week</button>`;
   h+=`<span style="font-family:Oswald;font-size:14px;font-weight:600;min-width:180px;">Week of ${weekLabel}</span>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_weekPlannerDate);d.setDate(d.getDate()+7);_weekPlannerDate=d;renderWeekPlanner();">Next Week →</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_weekPlannerDate);d.setDate(d.getDate()+7);_weekPlannerDate=d;renderPlanning();">Next Week →</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:var(--bg);" onclick="_weekPlannerDate=new Date();renderPlanning();">Today</button>`;
   h+=`</div>`;
 
-  h+=`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">`;
-  h+=`<tr><th style="background:var(--green);color:var(--white);padding:10px 12px;text-align:left;min-width:150px;">CREW</th>`;
+  h+=`<div style="overflow-x:auto;position:relative;"><table style="width:100%;border-collapse:collapse;" id="weekPlannerTable">`;
+  h+=`<tr><th style="background:var(--green);color:var(--white);padding:10px 12px;text-align:left;min-width:140px;">CREW</th>`;
   const daysOfWeek=['MON','TUE','WED','THU','FRI'];
   for(let i=0;i<5;i++){
-    const d=new Date(weekStart);
-    d.setDate(d.getDate()+i);
-    h+=`<th style="background:var(--green);color:var(--white);padding:10px 12px;text-align:center;min-width:100px;">${daysOfWeek[i]}<br><span style="font-size:11px;font-weight:400;">${d.getMonth()+1}/${d.getDate()}</span></th>`;
+    const d=new Date(weekStart);d.setDate(d.getDate()+i);
+    const isToday=d.toISOString().split('T')[0]===todayISO;
+    h+=`<th style="background:${isToday?'var(--orange)':'var(--green)'};color:var(--white);padding:10px 12px;text-align:center;min-width:110px;">${daysOfWeek[i]}<br><span style="font-size:11px;font-weight:400;">${d.getMonth()+1}/${d.getDate()}</span></th>`;
   }
   h+=`</tr>`;
 
   crewList.forEach(crew=>{
-    h+=`<tr><td style="padding:8px 12px;border-bottom:1px solid var(--border);font-weight:500;">${esc(crewDisplayName(crew.id))}</td>`;
+    h+=`<tr><td style="padding:8px 12px;border-bottom:1px solid var(--border);font-weight:500;background:var(--bg);">${esc(crewDisplayName(crew.id))}</td>`;
     for(let i=0;i<5;i++){
-      const dayDate=new Date(weekStart);
-      dayDate.setDate(dayDate.getDate()+i);
+      const dayDate=new Date(weekStart);dayDate.setDate(dayDate.getDate()+i);
       const dateISO=dayDate.toISOString().split('T')[0];
-      const jobCode=getCrewJobForDate(crew.foreman,dateISO);
-      if(jobCode){
-        const tradeAbbr=getCrewTradeForDate(crew.foreman,dateISO,jobCode)||'GN';
-        const disc=getDiscipline(Store.crewHistory.find(h=>h.crewId===crew.foreman&&h.date===dateISO&&h.jobCode===jobCode)?.costCode||'');
-        const cellColor=disc.color;
-        const isPast=dateISO<=new Date().toISOString().split('T')[0];
-        h+=`<td style="padding:6px 12px;border-bottom:1px solid var(--border);background-color:${cellColor}${isPast?'':'66'};border-left:4px solid ${cellColor};text-align:center;cursor:pointer;font-weight:500;${!isPast?'opacity:0.7;':''}font-style:${!isPast?'italic':''}" onclick="Store.activeJob='${jobCode}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job">${jobCode} ${tradeAbbr}</td>`;
+      const cell=getEffectivePlanCell(crew.id,dateISO);
+      if(cell){
+        const tradeAbbr=cell.trade||'GN';
+        const color=TRADE_COLORS[tradeAbbr]||'#7F8C8D';
+        const isPast=dateISO<todayISO;
+        const isSuggested=cell.source==='suggested';
+        const borderStyle=isSuggested?'2px dashed '+color:'4px solid '+color;
+        const bgAlpha=isSuggested?'18':'';
+        const opacity=isSuggested?'opacity:0.75;':'';
+        h+=`<td class="plan-cell" data-crew="${esc(crew.id)}" data-date="${dateISO}" style="padding:6px 10px;border-bottom:1px solid var(--border);background-color:${color}${bgAlpha||( isPast?'':'44')};border-left:${borderStyle};text-align:center;cursor:pointer;font-weight:${isSuggested?'400':'600'};font-size:13px;${opacity}${isSuggested?'font-style:italic;':''}" onclick="openPlanPopover('${esc(crew.id)}','${dateISO}',event)" title="${isSuggested?'Suggested — click to confirm or change':'Click to change assignment'}">${cell.jobCode} ${tradeAbbr}${isSuggested?' ?':''}</td>`;
       }else{
-        const assignment=crew.assignments?.find(a=>{const s=toDate(a.startDate),e=toDate(a.endDate);return s<=dayDate&&e>=dayDate});
-        if(assignment){
-          const job=Store.jobs[assignment.jobId];
-          const jobNum=job?.meta?.number||'?';
-          const disc=getTaskDiscipline(assignment.note||'');
-          const tradeAbbr=Object.entries(TRADE_ABBR).find(([name,abbr])=>disc.name===name)?.[1]||'GN';
-          const cellColor=disc.color;
-          h+=`<td style="padding:6px 12px;border-bottom:1px solid var(--border);background-color:${cellColor}22;border-left:4px solid ${cellColor};text-align:center;cursor:pointer;font-weight:500;opacity:0.7;" onclick="Store.activeJob='${assignment.jobId}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job">${jobNum} ${tradeAbbr}</td>`;
-        }else{
-          h+=`<td style="padding:6px 12px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);">—</td>`;
-        }
+        h+=`<td class="plan-cell" data-crew="${esc(crew.id)}" data-date="${dateISO}" style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);cursor:pointer;" onclick="openPlanPopover('${esc(crew.id)}','${dateISO}',event)" title="Click to assign">—</td>`;
       }
     }
     h+=`</tr>`;
   });
 
   h+=`</table></div>`;
-  h+=`<div style="margin-top:16px;padding:12px;background:var(--bg);border-radius:6px;">`;
-  h+=`<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;color:var(--green);font-weight:600;">TRADE LEGEND</div>`;
-  h+=`<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;">`;
+
+  // Trade legend
+  h+=`<div style="margin-top:12px;padding:10px 12px;background:var(--bg);border-radius:6px;display:flex;gap:16px;flex-wrap:wrap;font-size:11px;align-items:center;">`;
+  h+=`<span style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--green);font-weight:600;">LEGEND:</span>`;
   Object.entries(TRADE_ABBR).forEach(([trade,abbr])=>{
     const color=TRADE_COLORS[abbr];
-    h+=`<div style="display:flex;align-items:center;gap:6px;"><div style="width:10px;height:10px;background:${color};border-radius:2px;"></div><strong>${abbr}</strong> = ${trade}</div>`;
+    h+=`<span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:${color};border-radius:2px;display:inline-block;"></span><strong>${abbr}</strong>=${trade}</span>`;
   });
+  h+=`<span style="display:flex;align-items:center;gap:4px;margin-left:12px;"><span style="width:14px;border-top:2px dashed var(--text-light);display:inline-block;"></span>= Suggested</span>`;
+  h+=`<span style="display:flex;align-items:center;gap:4px;"><span style="width:14px;border-top:3px solid var(--text-light);display:inline-block;"></span>= Confirmed</span>`;
   h+=`</div></div>`;
-  h+=`</div>`;
+
+  // ── RESOURCE VIEW (26-week) ──
+  const now=new Date();now.setHours(0,0,0,0);
+  const resWeekStart=new Date(now);
+  resWeekStart.setDate(resWeekStart.getDate()-resWeekStart.getDay()+_resViewWeekOffset*7);
+  const weeksToShow=16;
+
+  h+='<div class="card" style="margin-top:24px;"><div class="card-title" style="justify-content:space-between;"><span>Resource View — 16 Week Outlook</span>';
+  h+=`<div style="display:flex;gap:6px;">`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_resViewWeekOffset=Math.max(-8,_resViewWeekOffset-4);renderPlanning();">← Earlier</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_resViewWeekOffset=0;renderPlanning();">This Week</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_resViewWeekOffset+=4;renderPlanning();">Later →</button>`;
+  h+=`</div></div>`;
+
+  h+=`<div style="overflow-x:auto;position:relative;"><table style="width:100%;border-collapse:collapse;" id="resViewTable">`;
+  h+=`<tr><th style="background:var(--green);color:var(--white);padding:8px 12px;text-align:left;min-width:140px;">CREW</th>`;
+
+  const weeks=[];
+  for(let w=0;w<weeksToShow;w++){
+    const wd=new Date(resWeekStart);wd.setDate(wd.getDate()+w*7);
+    const wn=getISOWeekNumber(wd);
+    const isCurrentWeek=wd.toISOString().split('T')[0]<=todayISO&&new Date(wd.getTime()+6*86400000).toISOString().split('T')[0]>=todayISO;
+    h+=`<th style="background:${isCurrentWeek?'var(--orange)':'var(--green)'};color:var(--white);padding:6px 8px;text-align:center;min-width:52px;font-size:11px;">W${wn}<br><span style="font-weight:400;font-size:10px;">${wd.getMonth()+1}/${wd.getDate()}</span></th>`;
+    weeks.push(wd);
+  }
+  h+=`</tr>`;
+
+  const JOB_PALETTE=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22'];
+  const jobColors={};let colorIdx=0;
+
+  crewList.forEach(crew=>{
+    h+=`<tr><td style="padding:6px 12px;border-bottom:1px solid var(--border);font-weight:500;background:var(--bg);font-size:12px;">${esc(crewDisplayName(crew.id))}</td>`;
+    weeks.forEach(week=>{
+      const weekISO=week.toISOString().split('T')[0];
+      // Get the dominant job for this week using plan + history + suggestions
+      const weekJobs={};
+      for(let d=0;d<5;d++){
+        const dd=new Date(week);dd.setDate(dd.getDate()+d);
+        const dISO=dd.toISOString().split('T')[0];
+        const cell=getEffectivePlanCell(crew.id,dISO);
+        if(cell){
+          const k=cell.jobCode;
+          if(!weekJobs[k])weekJobs[k]={count:0,trade:cell.trade,source:cell.source};
+          weekJobs[k].count++;
+          if(cell.source!=='suggested')weekJobs[k].source=cell.source;
+        }
+      }
+      const dominant=Object.entries(weekJobs).sort((a,b)=>b[1].count-a[1].count)[0];
+      if(dominant){
+        const [jc,data]=dominant;
+        if(!jobColors[jc]){jobColors[jc]=JOB_PALETTE[colorIdx%JOB_PALETTE.length];colorIdx++}
+        const color=jobColors[jc];
+        const isSuggested=data.source==='suggested';
+        const jobLabel=getJobNumber(jc);
+        h+=`<td class="res-cell" data-crew="${esc(crew.id)}" data-week="${weekISO}" style="padding:4px 6px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;cursor:pointer;font-size:11px;${isSuggested?'opacity:0.55;border:2px dashed rgba(255,255,255,0.6);':''}" onclick="openPlanPopover('${esc(crew.id)}','${weekISO}',event,true)" title="${isSuggested?'Suggested — click to confirm':'Click to change'}">${jobLabel}${isSuggested?' ?':''}</td>`;
+      }else{
+        h+=`<td class="res-cell" data-crew="${esc(crew.id)}" data-week="${weekISO}" style="padding:4px 6px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);cursor:pointer;font-size:11px;" onclick="openPlanPopover('${esc(crew.id)}','${weekISO}',event,true)" title="Click to assign">—</td>`;
+      }
+    });
+    h+=`</tr>`;
+  });
+
+  // Available row
+  h+=`<tr style="background:var(--ash);font-weight:600;border-top:2px solid var(--border);">`;
+  h+=`<td style="padding:6px 12px;font-size:12px;">Available</td>`;
+  weeks.forEach(week=>{
+    let assigned=0;
+    crewList.forEach(crew=>{
+      const midISO=new Date(week.getTime()+2*86400000).toISOString().split('T')[0];
+      const cell=getEffectivePlanCell(crew.id,midISO);
+      if(cell)assigned++;
+    });
+    const available=crewList.length-assigned;
+    h+=`<td style="padding:6px 8px;text-align:center;font-size:12px;color:${available>0?'var(--orange)':'var(--green)'};">${available}</td>`;
+  });
+  h+=`</tr></table></div></div>`;
+
+  // Popover container (positioned absolutely)
+  h+=`<div id="planPopover" style="display:none;position:fixed;z-index:1000;background:var(--white);border:2px solid var(--green);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.18);min-width:260px;max-width:340px;font-size:13px;"></div>`;
 
   el.innerHTML=h;
 }
+
+function getISOWeekNumber(d){
+  const date=new Date(d);date.setHours(0,0,0,0);
+  date.setDate(date.getDate()+3-(date.getDay()+6)%7);
+  const week1=new Date(date.getFullYear(),0,4);
+  return 1+Math.round(((date.getTime()-week1.getTime())/86400000-3+(week1.getDay()+6)%7)/7);
+}
+
+function getJobNumber(jobCode){
+  // Returns short job number for display in planning cells
+  const jobEntry=Object.entries(Store.jobs).find(([k,j])=>k===jobCode||String(j.meta?.number||'')==jobCode);
+  if(jobEntry) return String(jobEntry[1].meta?.number||jobEntry[0]).replace(/^0+/,'');
+  return String(jobCode).replace(/^0+/,'');
+}
+
+// ── POPOVER LOGIC ──
+function openPlanPopover(crewId,dateISO,event,isWeek){
+  event.stopPropagation();
+  closePlanPopover();
+  _planPopover={crewId,dateISO,isWeek:!!isWeek};
+  const suggestions=suggestCrewAssignment(crewId,dateISO);
+  const current=isWeek?null:getEffectivePlanCell(crewId,dateISO);
+  const crew=Store.crews[crewId];
+  const displayName=crewDisplayName(crewId);
+
+  let h=`<div style="padding:12px 14px;">`;
+  h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">`;
+  h+=`<div style="font-family:Oswald;font-size:14px;font-weight:600;">${esc(displayName)}</div>`;
+  h+=`<div style="font-size:11px;color:var(--text-light);">${isWeek?'Week of ':''} ${new Date(dateISO+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`;
+  h+=`</div>`;
+
+  if(current&&current.source!=='suggested'){
+    h+=`<div style="padding:6px 10px;background:var(--ash);border-radius:4px;margin-bottom:10px;font-size:12px;">Current: <strong>${current.jobCode} ${current.trade||''}</strong> (${current.source})</div>`;
+  }
+
+  // Suggestions
+  if(suggestions.length>0){
+    h+=`<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:4px;font-family:Oswald;">Suggestions</div>`;
+    suggestions.forEach((s,idx)=>{
+      const color=TRADE_COLORS[s.tradeAbbr]||'#7F8C8D';
+      const confPct=Math.round(s.confidence*100);
+      h+=`<div style="padding:8px 10px;margin-bottom:4px;border:1px solid var(--border);border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background .15s;" onmouseover="this.style.background='var(--ash)'" onmouseout="this.style.background='transparent'" onclick="assignFromPopover('${esc(crewId)}','${dateISO}','${esc(s.jobCode)}','${esc(s.tradeAbbr)}',${!!isWeek})">`;
+      h+=`<div style="width:6px;height:32px;background:${color};border-radius:3px;flex-shrink:0;"></div>`;
+      h+=`<div style="flex:1;">`;
+      h+=`<div style="font-weight:600;">${s.jobCode} <span style="color:${color};font-size:11px;">${s.tradeAbbr}</span></div>`;
+      h+=`<div style="font-size:11px;color:var(--text-light);line-height:1.3;">${s.reason}</div>`;
+      h+=`</div>`;
+      h+=`<div style="font-family:Oswald;font-size:11px;color:${confPct>=70?'var(--green)':confPct>=40?'var(--orange)':'var(--text-light)'};font-weight:600;">${confPct}%</div>`;
+      h+=`</div>`;
+    });
+  }
+
+  // Manual pick
+  h+=`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">`;
+  h+=`<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:4px;font-family:Oswald;">Manual Assignment</div>`;
+  h+=`<div style="display:flex;gap:6px;">`;
+  h+=`<select id="popJobSelect" style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;font-family:inherit;">`;
+  h+=`<option value="">— Pick a job —</option>`;
+  Object.entries(Store.jobs).forEach(([k,j])=>{
+    const jn=String(j.meta?.number||'').trim();
+    const jname=j.meta?.name||k;
+    h+=`<option value="${esc(jn||k)}">${jn} — ${esc(jname)}</option>`;
+  });
+  h+=`</select>`;
+  h+=`<select id="popTradeSelect" style="width:60px;padding:6px 4px;border:1px solid var(--border);border-radius:4px;font-size:12px;font-family:inherit;">`;
+  Object.entries(TRADE_ABBR).forEach(([name,abbr])=>{
+    h+=`<option value="${abbr}">${abbr}</option>`;
+  });
+  h+=`</select>`;
+  h+=`<button class="btn-primary btn-sm" style="padding:6px 12px;font-size:12px;" onclick="assignManualFromPopover('${esc(crewId)}','${dateISO}',${!!isWeek})">Set</button>`;
+  h+=`</div></div>`;
+
+  // Clear button
+  if(current&&current.source==='plan'){
+    h+=`<div style="margin-top:8px;text-align:center;">`;
+    h+=`<button style="border:1px solid var(--red);color:var(--red);background:transparent;padding:4px 16px;border-radius:4px;cursor:pointer;font-size:11px;" onclick="clearFromPopover('${esc(crewId)}','${dateISO}',${!!isWeek})">Clear Assignment</button>`;
+    h+=`</div>`;
+  }
+
+  h+=`</div>`;
+
+  const pop=document.getElementById('planPopover');
+  pop.innerHTML=h;
+  pop.style.display='block';
+
+  // Position near the click
+  const rect=event.target.getBoundingClientRect();
+  let left=rect.right+8;
+  let top=rect.top;
+  if(left+340>window.innerWidth)left=rect.left-350;
+  if(top+300>window.innerHeight)top=window.innerHeight-310;
+  if(top<0)top=8;
+  pop.style.left=left+'px';
+  pop.style.top=top+'px';
+
+  // Close on click outside
+  setTimeout(()=>{document.addEventListener('click',_closePlanPopoverListener,{once:true})},50);
+}
+
+function _closePlanPopoverListener(e){
+  const pop=document.getElementById('planPopover');
+  if(pop&&!pop.contains(e.target)){closePlanPopover()}
+  else if(pop){document.addEventListener('click',_closePlanPopoverListener,{once:true})}
+}
+function closePlanPopover(){
+  const pop=document.getElementById('planPopover');
+  if(pop){pop.style.display='none';pop.innerHTML=''}
+  _planPopover=null;
+}
+
+function assignFromPopover(crewId,dateISO,jobCode,trade,isWeek){
+  if(isWeek){
+    setCrewPlanWeek(crewId,dateISO,jobCode,trade);
+  }else{
+    setCrewPlan(crewId,dateISO,jobCode,trade);
+  }
+  closePlanPopover();
+  renderPlanning();
+}
+
+function assignManualFromPopover(crewId,dateISO,isWeek){
+  const jobCode=document.getElementById('popJobSelect')?.value;
+  const trade=document.getElementById('popTradeSelect')?.value||'GN';
+  if(!jobCode){alert('Select a job first');return}
+  assignFromPopover(crewId,dateISO,jobCode,trade,isWeek);
+}
+
+function clearFromPopover(crewId,dateISO,isWeek){
+  if(isWeek){
+    const ws=new Date(dateISO+'T00:00:00');
+    for(let i=0;i<5;i++){
+      const d=new Date(ws);d.setDate(d.getDate()+i);
+      clearCrewPlanCell(crewId,d.toISOString().split('T')[0]);
+    }
+  }else{
+    clearCrewPlanCell(crewId,dateISO);
+  }
+  closePlanPopover();
+  renderPlanning();
+}
+
+function acceptAllSuggestions(scope){
+  const crewList=Object.values(Store.crews);
+  const todayISO=new Date().toISOString().split('T')[0];
+  if(scope==='week'){
+    const weekStart=new Date(_weekPlannerDate);
+    weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+    for(let i=0;i<5;i++){
+      const d=new Date(weekStart);d.setDate(d.getDate()+i);
+      const dISO=d.toISOString().split('T')[0];
+      if(dISO<=todayISO)continue;
+      crewList.forEach(crew=>{
+        const existing=getCrewPlanCell(crew.id,dISO);
+        if(existing&&existing.confirmed)return;
+        const cell=getEffectivePlanCell(crew.id,dISO);
+        if(cell&&cell.source==='suggested'){
+          setCrewPlan(crew.id,dISO,cell.jobCode,cell.trade);
+        }
+      });
+    }
+  }
+  persistCrewPlan();
+}
+
+// Keep old renderWeekPlanner as alias for backward compat
+function renderWeekPlanner(){renderPlanning()}
 
 // ═══════════════════════════════════════════
 // VIEW 2: CREW SETTINGS (Enhancement to Crews tab)
@@ -6572,7 +7023,7 @@ function renderCrewSettings(job){
   allCrews.forEach(crew=>{
     crewIdx++;
     const crewCode=`C-${String(crewIdx).padStart(2,'0')}`;
-    const mhPerDay=crew.defaultHeadcount*8;
+    const mhPerDay=crew.defaultHeadcount*10;
     const effFactor=crew.efficiencyFactor||1.0;
     const displayName=crewDisplayName(crew.id);
     const trades=crew.trades||[];
@@ -6592,7 +7043,7 @@ function renderCrewSettings(job){
   });
 
   h+=`</table></div>`;
-  h+=`<div style="margin-top:12px;font-size:12px;color:var(--text-light);"><strong>MH/Day</strong> = headcount × 8 hrs. <strong>Efficiency factor</strong> adjusts for green crews, training, etc.</div>`;
+  h+=`<div style="margin-top:12px;font-size:12px;color:var(--text-light);"><strong>MH/Day</strong> = headcount × 10 hrs. <strong>Efficiency factor</strong> adjusts for green crews, training, etc.</div>`;
 
   return h;
 }
@@ -6733,7 +7184,8 @@ function renderProjectTradeView(){
   allTrades.forEach(trade=>{
     const abbr=TRADE_ABBR[trade]||'GN';
     const color=TRADE_COLORS[abbr];
-    h+=`<button class="filter-chip" style="background:${color}20;border-color:${color};color:${color};cursor:pointer;" onclick="alert('Filter by ${trade} — implementation in progress');">${abbr}</button>`;
+    const isActive=_tradeFilter.size===0||_tradeFilter.has(trade);
+    h+=`<button class="filter-chip" style="background:${isActive?color+'30':color+'08'};border:2px solid ${isActive?color:'transparent'};color:${isActive?color:'var(--text-light)'};cursor:pointer;opacity:${isActive?1:.5};padding:4px 10px;border-radius:4px;font-family:Oswald;font-size:11px;letter-spacing:.5px;transition:all .15s;" onclick="toggleTradeFilter('${trade}')">${abbr}</button>`;
   });
   h+=`</div>`;
 
@@ -6770,6 +7222,8 @@ function renderProjectTradeView(){
     });
 
     Object.values(tradeBars).forEach(bar=>{
+      // Skip if trade filter is active and this trade isn't selected
+      if(_tradeFilter.size>0&&!_tradeFilter.has(bar.name))return;
       const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;
       const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);
       h+=`<div style="display:flex;align-items:center;margin-bottom:1px;border-top:1px solid var(--border);padding-top:6px;">`;
@@ -6983,7 +7437,7 @@ function renderCrews(){
     allCrews.forEach(crew=>{
       const displayName=crewDisplayName(crew.id);
       const originalId=crew.foreman;
-      h+=`<tr><td>${esc(displayName)}</td><td>${esc(originalId)}</td><td><span onclick="this.style.display='none';this.nextElementSibling.style.display='inline';this.nextElementSibling.focus()" style="cursor:pointer;border-bottom:1px dashed var(--sand);font-size:11px;color:var(--orange);" title="Click to rename">Rename</span><input type="text" value="${esc(displayName)}" style="display:none;font-family:inherit;font-size:inherit;border:1px solid var(--orange);padding:2px 6px;border-radius:3px;width:160px;" onblur="saveCrewName('${esc(crew.id)}',this.value);this.style.display='none';this.previousElementSibling.style.display='inline'" onkeydown="if(event.key==='Enter'){this.blur()}"></td></tr>`;
+      h+=`<tr><td>${esc(displayName)}</td><td>${esc(originalId)}</td><td style="display:flex;gap:8px;align-items:center;"><span onclick="this.style.display='none';this.nextElementSibling.style.display='inline';this.nextElementSibling.focus()" style="cursor:pointer;border-bottom:1px dashed var(--sand);font-size:11px;color:var(--orange);" title="Click to rename">Rename</span><input type="text" value="${esc(displayName)}" style="display:none;font-family:inherit;font-size:inherit;border:1px solid var(--orange);padding:2px 6px;border-radius:3px;width:160px;" onblur="saveCrewName('${esc(crew.id)}',this.value);this.style.display='none';this.previousElementSibling.style.display='inline'" onkeydown="if(event.key==='Enter'){this.blur()}"><span onclick="deleteCrew('${esc(crew.id)}')" style="cursor:pointer;font-size:11px;color:var(--red);border-bottom:1px dashed var(--red);" title="Delete this crew">Delete</span></td></tr>`;
     });
     h+='</table></div>';
   }
