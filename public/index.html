@@ -6627,37 +6627,37 @@ function renderProductionTracker(job){
   h+='</div>';
 
   // Pre-group daily detail by cost code for drill-down
+  // Try all sources: actualsDetail first, then crewHistory as fallback for missing codes
   const detailByCode={};
   const jobDetail=job.actualsDetail||[];
-  if(jobDetail.length){
-    // Primary source: actualsDetail (full HJ daily detail)
-    jobDetail.forEach(d=>{
-      if(!detailByCode[d.costCode])detailByCode[d.costCode]=[];
-      detailByCode[d.costCode].push(d);
-    });
-  }else{
-    // Fallback: crewHistory (populated from all HJ imports, even w/o actualsDetail)
-    const jobNum=String(job.meta?.number||'').trim();
-    if(jobNum){
-      Store.crewHistory.forEach(r=>{
-        if(String(r.jobCode).trim()!==jobNum)return;
-        if(!detailByCode[r.costCode])detailByCode[r.costCode]=[];
-        detailByCode[r.costCode].push({
-          date:r.date,
-          foreman:r.crewId||'',
-          actualQty:r.qty||0,
-          actualLaborHours:r.hours||0,
-          actualLaborCost:0,
-          actualEquipCost:0,
-          actualMatCost:0,
-          actualSubCost:0,
-          actualAllCost:r.cost||0,
-        });
+  // Source 1: actualsDetail (full HJ daily detail)
+  jobDetail.forEach(d=>{
+    if(!detailByCode[d.costCode])detailByCode[d.costCode]=[];
+    detailByCode[d.costCode].push(d);
+  });
+  // Source 2: crewHistory — fill in any cost codes not covered by actualsDetail
+  const jobNum=String(job.meta?.number||'').trim();
+  if(jobNum){
+    Store.crewHistory.forEach(r=>{
+      if(String(r.jobCode).trim()!==jobNum)return;
+      if(detailByCode[r.costCode])return; // already have detail from actualsDetail
+      if(!detailByCode[r.costCode])detailByCode[r.costCode]=[];
+      detailByCode[r.costCode].push({
+        date:r.date,
+        foreman:r.crewId||'',
+        actualQty:r.qty||0,
+        actualLaborHours:r.hours||0,
+        actualLaborCost:0,
+        actualEquipCost:0,
+        actualMatCost:0,
+        actualSubCost:0,
+        actualAllCost:r.cost||0,
       });
-    }
+    });
   }
   // Sort each group by date descending
   Object.values(detailByCode).forEach(arr=>arr.sort((a,b)=>b.date.localeCompare(a.date)));
+  const hasAnyDetail=Object.keys(detailByCode).length>0;
 
   // Build BAC qty map (uses phaseCode→costCode mapping from HeavyBid activities)
   const bacMap=evaBuildBACMap(job);
@@ -6716,7 +6716,9 @@ function renderProductionTracker(job){
     }
   }
 
-  h+='<div class="card"><div class="card-title">Production Tracker</div><div class="table-wrap"><table>';
+  h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Production Tracker</span>';
+  if(!hasAnyDetail)h+='<span style="font-size:11px;color:var(--text-light);font-family:Source Serif 4;font-weight:400;">Import HJ Daily Detail to enable drill-down</span>';
+  h+='</div><div class="table-wrap"><table>';
   h+='<thead><tr>';
   h+=sortHdrL('prod-tracker','code','Cost Code','renderProduction');
   h+=sortHdrL('prod-tracker','description','Description','renderProduction');
