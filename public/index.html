@@ -724,23 +724,9 @@ function discoverCrews(job){
       }
     });
   }
-  // Scan activities for crew codes (if no foreman in detail)
-  if(job.activities&&Array.isArray(job.activities)){
-    job.activities.forEach(act=>{
-      if(act.crew&&!Store.crews[act.crew]){
-        Store.crews[act.crew]={
-          id:act.crew,
-          foreman:act.crew,
-          defaultHeadcount:4,
-          equipment:[],
-          trades:act.trades||[],
-          hourlyRate:0,
-          assignments:[]
-        };
-        discovered++;
-      }
-    });
-  }
+  // Note: HeavyBid activity crew codes (CONC, DEMO-L, etc.) are equipment spread
+  // codes, not foreman names — we intentionally skip them. Only HJ daily detail
+  // foreman names are reliable crew identifiers.
   persistCrews();
   return discovered
 }
@@ -1977,7 +1963,7 @@ function delStagingRow(i){Store.staging.data.splice(i,1);renderStaging()}
 function addStagingRow(){const{type,data}=Store.staging;if(type==='activities')data.push({biditem:'',code:'NEW',description:'',quantity:0,units:'',crew:'',crewHours:0,productivityRate:0,manHours:0,calculatedDays:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,totalMaterial:0,totalEquipment:0,directTotal:0,discipline:getDiscipline(''),_selected:true});else if(type==='biditems')data.push({biditem:'NEW',description:'',type:'',clientBidNum:'',units:'',bidQuantity:0,takeoffQuantity:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,directTotal:0,indirects:0,addonBond:0,total:0,balancedTotal:0,unitPrice:0,manHours:0,markup:0,takeoffTotal:0,bidTotal:0,_selected:true});else data.push({id:data.length+1,name:'',start:null,finish:null,durationDays:0,durationStr:'',predecessors:'',status:'',atRisk:'',crew:'',variance:null,_selected:true});editStagingRow(data.length-1)}
 function editStagingRow(i){const t=Store.staging.type;editRow(t==='biditems'?'biditem':t==='activities'?'activity':'schedule',i,true)}
 function cancelStaging(){Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none'}
-function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;sel.forEach(a=>{if(a.crew&&!Store.crews[a.crew])Store.crews[a.crew]={code:a.crew,headcount:0,trades:[],mh_per_day:0,efficiency_factor:1}});
+function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;
     // Auto-build bid items + SOV from activities using phase codes
     const hasPhase=sel.some(a=>a.phaseCode);
     if(hasPhase){
@@ -6523,7 +6509,7 @@ function renderCrews(){
 
   // ── Crew Directory ──
   const allCrews=Object.values(Store.crews).sort((a,b)=>(a.foreman||'').localeCompare(b.foreman||''));
-  h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Crew Directory</span><button class="btn-primary btn-sm" onclick="openCrewAssignModal()">+ Assign to Job</button></div>';
+  h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Crew Directory</span><div style="display:flex;gap:6px;"><button class="edit-btn" onclick="if(confirm(\'Clear all crews and re-discover from daily detail?\')){Store.crews={};persistCrews();renderCrews()}" style="color:var(--red);border-color:var(--red);">Clear All</button><button class="btn-primary btn-sm" onclick="openCrewAssignModal()">+ Assign to Job</button></div></div>';
 
   if(allCrews.length===0){
     h+='<div style="padding:20px;text-align:center;color:var(--text-light);">No crews discovered yet. Import HeavyJob daily detail to auto-discover crews.</div>';
