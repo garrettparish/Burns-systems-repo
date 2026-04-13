@@ -704,6 +704,7 @@ function loadCrews(){
 
 function persistCrewHistory(){
   localStorage.setItem('bdc_crew_history',JSON.stringify(Store.crewHistory));
+  _histIndex=null;_histByCrewJob=null; // Invalidate index
 }
 
 function loadCrewHistory(){
@@ -767,6 +768,35 @@ function setCrewPlanWeek(crewId,weekStartISO,jobCode,trade){
 // ═══════════════════════════════════════════
 // SUGGESTION ENGINE — combines schedule + history
 // ═══════════════════════════════════════════
+// ── Performance: crew history index (rebuilt when history changes) ──
+let _histIndex=null; // { "crewId|date" → [{record},...] }
+let _histByCrewJob=null; // { "crewId" → { jobCode → {count,lastDate,costCode} } }
+function _buildHistIndex(){
+  _histIndex={};
+  _histByCrewJob={};
+  Store.crewHistory.forEach(r=>{
+    const k=r.crewId+'|'+r.date;
+    if(!_histIndex[k])_histIndex[k]=[];
+    _histIndex[k].push(r);
+    // Per-crew job summary
+    if(!_histByCrewJob[r.crewId])_histByCrewJob[r.crewId]={};
+    const cj=_histByCrewJob[r.crewId];
+    if(!cj[r.jobCode])cj[r.jobCode]={count:0,lastDate:'',costCode:'',hours:0};
+    cj[r.jobCode].count++;
+    cj[r.jobCode].hours+=(r.hours||0);
+    if(r.date>cj[r.jobCode].lastDate){cj[r.jobCode].lastDate=r.date;cj[r.jobCode].costCode=r.costCode}
+  });
+}
+function _getHistRecords(crewForeman,dateISO){
+  if(!_histIndex)_buildHistIndex();
+  return _histIndex[crewForeman+'|'+dateISO]||[];
+}
+// Render-level cache for getEffectivePlanCell — cleared each render
+let _cellCache={};
+const _PLAN_PALETTE=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22'];
+const _planJobColors={};let _planColorIdx=0;
+function _clearCellCache(){_cellCache={}}
+
 function suggestCrewAssignment(crewId,dateISO){
   // Returns array of { jobCode, jobName, trade, tradeAbbr, confidence, reason }
   const crew=Store.crews[crewId];
@@ -777,9 +807,9 @@ function suggestCrewAssignment(crewId,dateISO){
   // 1. CONTINUITY: What was this crew doing yesterday / recently?
   const targetDate=new Date(dateISO+'T00:00:00');
   const crewForeman=crew.foreman;
-  // Check last 30 days of history + plan for continuity
+  // Check last 14 days of history + plan for continuity (reduced from 30 for perf)
   let recentJob=null, recentTrade=null, recentDate=null;
-  for(let back=1;back<=30;back++){
+  for(let back=1;back<=14;back++){
     const checkDate=new Date(targetDate);
     checkDate.setDate(checkDate.getDate()-back);
     const checkISO=checkDate.toISOString().split('T')[0];
@@ -789,7 +819,7 @@ function suggestCrewAssignment(crewId,dateISO){
       recentJob=planned.jobCode;recentTrade=planned.trade;recentDate=checkISO;break;
     }
     // Then check history — use dominant job+trade by hours
-    const dayHist=Store.crewHistory.filter(h=>h.crewId===crewForeman&&h.date===checkISO);
+    const dayHist=_getHistRecords(crewForeman,checkISO);
     if(dayHist.length>0){
       const byJob={};
       dayHist.forEach(r=>{
@@ -857,7 +887,8 @@ function suggestCrewAssignment(crewId,dateISO){
         if(!seen[jobCode]){
           seen[jobCode]=true;
           // Check if this crew has history on this job (bonus)
-          const hasHistory=Store.crewHistory.some(h=>h.crewId===crewForeman&&h.jobCode===jobCode);
+          if(!_histByCrewJob)_buildHistIndex();
+          const hasHistory=_histByCrewJob[crewForeman]&&_histByCrewJob[crewForeman][jobCode];
           const conf=hasHistory?0.7:0.4;
           suggestions.push({
             jobCode,jobName:job.meta?.name||jobCode,trade:tradeAbbr,tradeAbbr,
@@ -871,14 +902,10 @@ function suggestCrewAssignment(crewId,dateISO){
     });
   });
 
-  // 3. HISTORY-BASED FALLBACK: jobs this crew has worked before
+  // 3. HISTORY-BASED FALLBACK: jobs this crew has worked before (uses pre-built index)
   if(suggestions.length<3){
-    const jobCounts={};
-    Store.crewHistory.filter(h=>h.crewId===crewForeman).forEach(h=>{
-      if(!jobCounts[h.jobCode])jobCounts[h.jobCode]={count:0,lastDate:'',costCode:''};
-      jobCounts[h.jobCode].count++;
-      if(h.date>jobCounts[h.jobCode].lastDate){jobCounts[h.jobCode].lastDate=h.date;jobCounts[h.jobCode].costCode=h.costCode}
-    });
+    if(!_histByCrewJob)_buildHistIndex();
+    const jobCounts=_histByCrewJob[crewForeman]||{};
     Object.entries(jobCounts)
       .sort((a,b)=>b[1].count-a[1].count)
       .forEach(([jc,data])=>{
@@ -900,17 +927,21 @@ function suggestCrewAssignment(crewId,dateISO){
 
 // Get the effective cell value for a crew on a date (confirmed plan > history > suggestion)
 function getEffectivePlanCell(crewId,dateISO){
-  const todayISO=new Date().toISOString().split('T')[0];
+  // Check render cache first
+  const cacheKey=crewId+'|'+dateISO;
+  if(_cellCache[cacheKey]!==undefined) return _cellCache[cacheKey];
+
+  const todayISO=_todayISO||(new Date().toISOString().split('T')[0]);
   const crew=Store.crews[crewId];
-  if(!crew) return null;
+  if(!crew){_cellCache[cacheKey]=null;return null}
 
   // 1. Confirmed plan entry
   const planned=getCrewPlanCell(crewId,dateISO);
-  if(planned&&planned.confirmed) return {jobCode:planned.jobCode,trade:planned.trade,source:'plan'};
+  if(planned&&planned.confirmed){const r={jobCode:planned.jobCode,trade:planned.trade,source:'plan'};_cellCache[cacheKey]=r;return r}
 
   // 2. Historical data (for past/today) — use dominant trade by hours worked
   if(dateISO<=todayISO){
-    const dayRecords=Store.crewHistory.filter(h=>h.crewId===crew.foreman&&h.date===dateISO);
+    const dayRecords=_getHistRecords(crew.foreman,dateISO);
     if(dayRecords.length>0){
       // Find the dominant job (most hours that day)
       const byJob={};
@@ -929,7 +960,7 @@ function getEffectivePlanCell(crewId,dateISO){
         byTrade[abbr]=(byTrade[abbr]||0)+(r.hours||0);
       });
       const topTrade=Object.entries(byTrade).sort((a,b)=>b[1]-a[1])[0][0];
-      return {jobCode,trade:topTrade,source:'history'};
+      const r={jobCode,trade:topTrade,source:'history'};_cellCache[cacheKey]=r;return r;
     }
   }
 
@@ -937,8 +968,9 @@ function getEffectivePlanCell(crewId,dateISO){
   const suggestions=suggestCrewAssignment(crewId,dateISO);
   if(suggestions.length>0){
     const top=suggestions[0];
-    if(top.confidence>=0.4) return {jobCode:top.jobCode,trade:top.tradeAbbr,source:'suggested',confidence:top.confidence};
+    if(top.confidence>=0.4){const r={jobCode:top.jobCode,trade:top.tradeAbbr,source:'suggested',confidence:top.confidence};_cellCache[cacheKey]=r;return r}
   }
+  _cellCache[cacheKey]=null;
   return null;
 }
 
@@ -1694,6 +1726,7 @@ const TRADE_COLORS={EW:'#D4A017',ER:'#27AE60',DE:'#8E44AD',SA:'#16A085',WA:'#349
 
 // Weekly planner state
 let _weekPlannerDate=new Date();
+let _todayISO=new Date().toISOString().split('T')[0];
 _weekPlannerDate.setDate(_weekPlannerDate.getDate()-(_weekPlannerDate.getDay()+6)%7); // Monday
 let _tradeFilter=new Set(); // empty = show all trades; non-empty = show only these
 
@@ -4746,27 +4779,72 @@ function renderGlobalView(){
   h+=renderProjectTradeView();
   h+=`</div>`;
 
-  // ─── Resource Loading Summary ───
+  // ─── 16-Week Resource Outlook ───
   const allCrews=Object.values(Store.crews);
   if(allCrews.length>0){
-    h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Resource Loading Summary</span><button class="edit-btn" onclick="switchSubTab(\'planning\');return false;" style="border:1px solid var(--orange);color:var(--orange);">View Planning →</button></div>';
-    h+='<div class="table-wrap"><table>';
-    h+='<tr><th>Crew</th><th>Current Job</th><th>Until</th><th>Next Job</th><th>Starts</th><th>Headcount</th></tr>';
-    allCrews.forEach(crew=>{
-      const now=new Date();
-      let currentJob=null,currentEnd=null,nextJob=null,nextStart=null;
-      const assignments=(crew.assignments||[]).sort((a,b)=>toDate(a.startDate)-toDate(b.startDate));
-      assignments.forEach(a=>{
-        const s=toDate(a.startDate),e=toDate(a.endDate);
-        if(s<=now&&e>=now){currentJob=a;currentEnd=e}
-        else if(s>now&&!nextJob){nextJob=a;nextStart=s}
-      });
-      const cj=currentJob?(Store.jobs[currentJob.jobId]?.meta?.name||'Unknown'):null;
-      const nj=nextJob?(Store.jobs[nextJob.jobId]?.meta?.name||'Unknown'):null;
-      const hc=currentJob?currentJob.headcount:(nextJob?nextJob.headcount:crew.defaultHeadcount);
-      h+=`<tr><td>${esc(crewDisplayName(crew.id))}</td><td>${cj||'—'}</td><td>${currentEnd?fmtDate(currentEnd):'—'}</td><td>${nj||'—'}</td><td>${nextStart?fmtDate(nextStart):'—'}</td><td class="num">${hc}</td></tr>`;
+    const crewList=allCrews.slice().sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
+    const todayISO_g=new Date().toISOString().split('T')[0];
+    const gNow=new Date();gNow.setHours(0,0,0,0);
+    const gWeekStart=new Date(gNow);
+    gWeekStart.setDate(gWeekStart.getDate()-((gWeekStart.getDay()+6)%7));
+    const gWeeks=[];
+    for(let w=0;w<16;w++){const wd=new Date(gWeekStart);wd.setDate(wd.getDate()+w*7);gWeeks.push(wd)}
+
+    h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Resource View — 16 Week Outlook</span><button class="edit-btn" onclick="switchSubTab(\'planning\');return false;" style="border:1px solid var(--orange);color:var(--orange);">Open Planner →</button></div>';
+    h+=`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">`;
+    h+=`<tr><th style="background:var(--green);color:var(--white);padding:8px 12px;text-align:left;min-width:140px;">CREW</th>`;
+    gWeeks.forEach(wd=>{
+      const wn=getISOWeekNumber(wd);
+      const wEnd=new Date(wd.getTime()+6*86400000).toISOString().split('T')[0];
+      const isCur=wd.toISOString().split('T')[0]<=todayISO_g&&wEnd>=todayISO_g;
+      h+=`<th style="background:${isCur?'var(--orange)':'var(--green)'};color:var(--white);padding:6px 8px;text-align:center;min-width:52px;font-size:11px;">W${wn}<br><span style="font-weight:400;font-size:10px;">${wd.getMonth()+1}/${wd.getDate()}</span></th>`;
     });
-    h+='</table></div></div>';
+    h+=`</tr>`;
+
+    crewList.forEach(crew=>{
+      h+=`<tr><td style="padding:6px 12px;border-bottom:1px solid var(--border);font-weight:500;background:var(--bg);font-size:12px;">${esc(crewDisplayName(crew.id))}</td>`;
+      gWeeks.forEach(week=>{
+        const weekJobs={};
+        for(let d=0;d<5;d++){
+          const dd=new Date(week);dd.setDate(dd.getDate()+d);
+          const dISO=dd.toISOString().split('T')[0];
+          const cell=getEffectivePlanCell(crew.id,dISO);
+          if(cell){
+            const k=cell.jobCode;
+            if(!weekJobs[k])weekJobs[k]={count:0,trade:cell.trade,source:cell.source};
+            weekJobs[k].count++;
+            if(cell.source!=='suggested')weekJobs[k].source=cell.source;
+          }
+        }
+        const dominant=Object.entries(weekJobs).sort((a,b)=>b[1].count-a[1].count)[0];
+        if(dominant){
+          const [jc,data]=dominant;
+          if(!_planJobColors[jc]){_planJobColors[jc]=_PLAN_PALETTE[_planColorIdx%_PLAN_PALETTE.length];_planColorIdx++}
+          const color=_planJobColors[jc];
+          const isSuggested=data.source==='suggested';
+          const jobLabel=getJobNumber(jc);
+          h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;font-size:11px;${isSuggested?'opacity:0.55;border:2px dashed rgba(255,255,255,0.6);':''}" title="${jobLabel}${isSuggested?' (Suggested)':' (Confirmed)'}">${jobLabel}${isSuggested?' ?':''}</td>`;
+        }else{
+          h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);font-size:11px;">—</td>`;
+        }
+      });
+      h+=`</tr>`;
+    });
+
+    // Available row
+    h+=`<tr style="background:var(--ash);font-weight:600;border-top:2px solid var(--border);">`;
+    h+=`<td style="padding:6px 12px;font-size:12px;">Available</td>`;
+    gWeeks.forEach(week=>{
+      let assigned=0;
+      crewList.forEach(crew=>{
+        const midISO=new Date(week.getTime()+2*86400000).toISOString().split('T')[0];
+        const cell=getEffectivePlanCell(crew.id,midISO);
+        if(cell)assigned++;
+      });
+      const available=crewList.length-assigned;
+      h+=`<td style="padding:6px 8px;text-align:center;font-size:12px;color:${available>0?'var(--orange)':'var(--green)'};">${available}</td>`;
+    });
+    h+=`</tr></table></div></div>`;
   }
 
   // ─── Product Roadmap ───
@@ -6737,11 +6815,13 @@ function renderPlanning(){
     el.innerHTML='<div class="empty-state"><h2>No Crews</h2><p>Import HeavyJob daily detail to auto-discover crews.</p></div>';
     return;
   }
-  const todayISO=new Date().toISOString().split('T')[0];
+  _todayISO=new Date().toISOString().split('T')[0];
+  const todayISO=_todayISO;
+  _clearCellCache(); // Fresh cache each render
+  if(!_histIndex)_buildHistIndex(); // Ensure index is built
   let h='';
   // Job color palette — consistent colors per job across both views
-  const _PLAN_PALETTE=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22'];
-  const _planJobColors={};let _planColorIdx=0;
+  // _PLAN_PALETTE, _planJobColors, _planColorIdx are global (shared with Global View)
 
   // ── WEEKLY CREW PLANNER ──
   const weekStart=new Date(_weekPlannerDate);
