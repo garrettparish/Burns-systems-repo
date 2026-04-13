@@ -777,9 +777,9 @@ function suggestCrewAssignment(crewId,dateISO){
   // 1. CONTINUITY: What was this crew doing yesterday / recently?
   const targetDate=new Date(dateISO+'T00:00:00');
   const crewForeman=crew.foreman;
-  // Check last 7 days of history + plan for continuity
+  // Check last 30 days of history + plan for continuity
   let recentJob=null, recentTrade=null, recentDate=null;
-  for(let back=1;back<=7;back++){
+  for(let back=1;back<=30;back++){
     const checkDate=new Date(targetDate);
     checkDate.setDate(checkDate.getDate()-back);
     const checkISO=checkDate.toISOString().split('T')[0];
@@ -1667,7 +1667,7 @@ const TRADE_COLORS={EW:'#D4A017',ER:'#27AE60',DE:'#8E44AD',SA:'#16A085',WA:'#349
 
 // Weekly planner state
 let _weekPlannerDate=new Date();
-_weekPlannerDate.setDate(_weekPlannerDate.getDate()-_weekPlannerDate.getDay());
+_weekPlannerDate.setDate(_weekPlannerDate.getDate()-(_weekPlannerDate.getDay()+6)%7); // Monday
 let _tradeFilter=new Set(); // empty = show all trades; non-empty = show only these
 
 function toggleTradeFilter(trade){
@@ -4402,8 +4402,8 @@ function renderResources(){
   // KPI Row
   const activeCrewsThisWeek=new Set();
   const now=new Date(),weekStart=new Date(now),weekEnd=new Date(now);
-  weekStart.setDate(now.getDate()-now.getDay());
-  weekEnd.setTime(weekStart.getTime()+7*86400000);
+  weekStart.setDate(now.getDate()-((now.getDay()+6)%7)); // Monday
+  weekEnd.setTime(weekStart.getTime()+5*86400000); // Friday
   let totalHeadcountThisWeek=0;
 
   crewList.forEach(crew=>{
@@ -6701,7 +6701,7 @@ function renderPlanning(){
 
   // ── WEEKLY CREW PLANNER ──
   const weekStart=new Date(_weekPlannerDate);
-  weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+  weekStart.setDate(weekStart.getDate()-((weekStart.getDay()+6)%7)); // Monday start
   weekStart.setHours(0,0,0,0);
   const weekLabel=weekStart.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
 
@@ -6764,7 +6764,7 @@ function renderPlanning(){
   // ── RESOURCE VIEW (26-week) ──
   const now=new Date();now.setHours(0,0,0,0);
   const resWeekStart=new Date(now);
-  resWeekStart.setDate(resWeekStart.getDate()-resWeekStart.getDay()+_resViewWeekOffset*7);
+  resWeekStart.setDate(resWeekStart.getDate()-((resWeekStart.getDay()+6)%7)+_resViewWeekOffset*7);
   const weeksToShow=16;
 
   h+='<div class="card" style="margin-top:24px;"><div class="card-title" style="justify-content:space-between;"><span>Resource View — 16 Week Outlook</span>';
@@ -6988,7 +6988,7 @@ function acceptAllSuggestions(scope){
   const todayISO=new Date().toISOString().split('T')[0];
   if(scope==='week'){
     const weekStart=new Date(_weekPlannerDate);
-    weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+    weekStart.setDate(weekStart.getDate()-((weekStart.getDay()+6)%7));
     for(let i=0;i<5;i++){
       const d=new Date(weekStart);d.setDate(d.getDate()+i);
       const dISO=d.toISOString().split('T')[0];
@@ -7073,7 +7073,7 @@ function renderResourceView(){
   });
 
   const weekStart=new Date(minDate);
-  weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+  weekStart.setDate(weekStart.getDate()-((weekStart.getDay()+6)%7)); // Monday
   const weeksToShow=26;
   let currentWeek=new Date(weekStart);
   currentWeek.setDate(currentWeek.getDate()+_resViewWeekOffset*7);
