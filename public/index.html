@@ -6623,9 +6623,21 @@ function renderProductionTracker(job){
   h+=tile('Avg Daily Burn',fmtD(avgDailyBurn),'','per day');
   h+='</div>';
 
+  // Pre-group daily detail by cost code for drill-down
+  const detailByCode={};
+  (job.actualsDetail||[]).forEach(d=>{
+    if(!detailByCode[d.costCode])detailByCode[d.costCode]=[];
+    detailByCode[d.costCode].push(d);
+  });
+  // Sort each group by date descending
+  Object.values(detailByCode).forEach(arr=>arr.sort((a,b)=>b.date.localeCompare(a.date)));
+
+  // Build BAC qty map (uses phaseCode→costCode mapping from HeavyBid activities)
+  const bacMap=evaBuildBACMap(job);
+
   // Main tracker table
   const trackerData=acts.map(a=>{
-    const budgetQty=a.budgetQty||(activityMap[a.code]?.quantity||0);
+    const budgetQty=a.budgetQty||(activityMap[a.code]?.quantity||0)||(bacMap.qty[a.code]||0);
     const actualQty=a.qtyInstalled||0;
     const remainingQty=Math.max(0,budgetQty-actualQty);
     const qtyCompletePct=budgetQty>0?(actualQty/budgetQty*100):0;
@@ -6694,7 +6706,7 @@ function renderProductionTracker(job){
   h+=sortHdr('prod-tracker','daysLeft','Days Left','renderProduction');
   h+='</tr></thead><tbody>';
 
-  sorted.forEach(row=>{
+  sorted.forEach((row,ri)=>{
     const qtyBadge=row.qtyCompletePct>=90?'good':(row.qtyCompletePct<80?'warn':'');
     const costVarBadge=row.costVar>=0?'good':'warn';
     const daysLeftBadge=row.daysLeft>30?'warn':'';
@@ -6703,9 +6715,12 @@ function renderProductionTracker(job){
     const isOverBudget=row.costVar<0&&varPct>0.10;
     const isCostHigh=row.costCompletePct>110;
     const rowFlag=isOverBudget||isCostHigh;
+    const details=detailByCode[row.code]||[];
+    const hasDetail=details.length>0;
+    const rowId='pt-detail-'+ri;
 
-    h+=`<tr style="${rowFlag?'background:rgba(242,103,34,0.08);border-left:3px solid var(--orange);':''}">`;
-    h+=`<td>${esc(row.code)}</td>`;
+    h+=`<tr style="cursor:${hasDetail?'pointer':'default'};${rowFlag?'background:rgba(242,103,34,0.08);border-left:3px solid var(--orange);':''}" ${hasDetail?`onclick="document.getElementById('${rowId}').style.display=document.getElementById('${rowId}').style.display==='none'?'':'none';this.querySelector('.pt-arrow').textContent=document.getElementById('${rowId}').style.display==='none'?'▸':'▾';"`:''}>`;
+    h+=`<td>${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(row.code)}</td>`;
     h+=`<td>${esc(row.description)}</td>`;
     h+=`<td>${esc(row.unit)}</td>`;
     h+=`<td class="num">${fmt(row.budgetQty)}</td>`;
@@ -6719,6 +6734,28 @@ function renderProductionTracker(job){
     h+=`<td class="num">${row.prodRate>0?fmt(row.prodRate):'—'}</td>`;
     h+=`<td class="num ${daysLeftBadge}">${row.daysLeft!==Infinity&&row.daysLeft>=0?Math.ceil(row.daysLeft):'—'}</td>`;
     h+='</tr>';
+
+    // Expandable daily detail sub-rows
+    if(hasDetail){
+      h+=`<tr id="${rowId}" style="display:none;"><td colspan="13" style="padding:0;border:none;">`;
+      h+=`<div style="background:var(--ash);padding:8px 12px 8px 28px;border-bottom:2px solid var(--sand);">`;
+      h+=`<table style="width:100%;border-collapse:collapse;font-size:12px;">`;
+      h+=`<tr style="background:var(--sand);color:var(--text);"><th style="padding:4px 8px;text-align:left;">Date</th><th style="padding:4px 8px;text-align:left;">Foreman</th><th style="padding:4px 8px;text-align:right;">Qty</th><th style="padding:4px 8px;text-align:right;">Labor Hrs</th><th style="padding:4px 8px;text-align:right;">Labor $</th><th style="padding:4px 8px;text-align:right;">Equip $</th><th style="padding:4px 8px;text-align:right;">Mat $</th><th style="padding:4px 8px;text-align:right;">Sub $</th><th style="padding:4px 8px;text-align:right;font-weight:700;">Total $</th></tr>`;
+      details.forEach(d=>{
+        h+=`<tr style="border-bottom:1px solid var(--border);">`;
+        h+=`<td style="padding:3px 8px;">${d.date}</td>`;
+        h+=`<td style="padding:3px 8px;font-size:11px;">${esc(d.foreman||'—')}</td>`;
+        h+=`<td style="padding:3px 8px;text-align:right;">${fmt(d.actualQty)}</td>`;
+        h+=`<td style="padding:3px 8px;text-align:right;">${d.actualLaborHours.toFixed(1)}</td>`;
+        h+=`<td style="padding:3px 8px;text-align:right;">${fmtD(d.actualLaborCost)}</td>`;
+        h+=`<td style="padding:3px 8px;text-align:right;">${fmtD(d.actualEquipCost)}</td>`;
+        h+=`<td style="padding:3px 8px;text-align:right;">${fmtD(d.actualMatCost)}</td>`;
+        h+=`<td style="padding:3px 8px;text-align:right;">${fmtD(d.actualSubCost)}</td>`;
+        h+=`<td style="padding:3px 8px;text-align:right;font-weight:600;">${fmtD(d.actualAllCost)}</td>`;
+        h+=`</tr>`;
+      });
+      h+=`</table></div></td></tr>`;
+    }
   });
 
   h+='</tbody></table></div></div>';
