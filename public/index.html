@@ -287,6 +287,7 @@ tr:hover{background:#FAF8F5}
   <button class="sub-tab" data-sub="cashflow" onclick="navSub('financials','cashflow')">Cash Flow</button>
 </div>
 <div class="sub-nav" id="subNav-production">
+  <button class="sub-tab" data-sub="weekplanner" onclick="navSub('production','weekplanner')">Weekly Planner</button>
   <button class="sub-tab" data-sub="schedule" onclick="navSub('production','schedule')">Schedule</button>
   <button class="sub-tab" data-sub="jcs" onclick="navSub('production','jcs')">Job Cost Schedule</button>
   <button class="sub-tab" data-sub="production" onclick="navSub('production','production')">Production Tracker</button>
@@ -320,6 +321,11 @@ tr:hover{background:#FAF8F5}
     </div>
     <div class="filter-bar" id="bidFilters"></div>
     <div id="bidContent"></div>
+  </div>
+
+  <!-- Sub-panel: Weekly Planner -->
+  <div id="sub-weekplanner" class="sub-panel">
+    <div id="weekPlannerContent"></div>
   </div>
 
   <!-- Sub-panel: Schedule -->
@@ -557,7 +563,7 @@ tr:hover{background:#FAF8F5}
 // ═══════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════
-const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, staging:{type:null,data:[]}, _pinAuth:{} };
+const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], staging:{type:null,data:[]}, _pinAuth:{} };
 let _globalSchedByDisc=false;
 let _schedSort='pred'; // default sort: predecessor order
 let _schedSortDir='asc'; // sort direction: asc or desc
@@ -698,6 +704,15 @@ function loadCrews(){
   if(stored){try{Store.crews=JSON.parse(stored)}catch(e){log('Could not load crews from storage')}}
   const storedMap=localStorage.getItem('bdc_crew_name_map');
   if(storedMap){try{Store.crewNameMap=JSON.parse(storedMap)}catch(e){log('Could not load crew name map from storage')}}
+}
+
+function persistCrewHistory(){
+  localStorage.setItem('bdc_crew_history',JSON.stringify(Store.crewHistory));
+}
+
+function loadCrewHistory(){
+  const stored=localStorage.getItem('bdc_crew_history');
+  if(stored){try{Store.crewHistory=JSON.parse(stored)}catch(e){log('Could not load crew history from storage')}}
 }
 
 function crewDisplayName(id){
@@ -1375,6 +1390,65 @@ function getAllDisciplines(job){
 }
 
 // ═══════════════════════════════════════════
+// CREW HISTORY HELPERS (from HeavyJob imports)
+// ═══════════════════════════════════════════
+function getCrewHistoryForWeek(startDate,endDate){
+  const startISO=startDate.toISOString().split('T')[0];
+  const endISO=endDate.toISOString().split('T')[0];
+  const result={};
+  Store.crewHistory.forEach(h=>{
+    if(h.date>=startISO&&h.date<=endISO){
+      if(!result[h.crewId])result[h.crewId]=[];
+      result[h.crewId].push(h);
+    }
+  });
+  return result;
+}
+
+function getCrewJobForDate(crewId,dateISO){
+  const today=new Date().toISOString().split('T')[0];
+  if(dateISO<=today){
+    const dayRecords=Store.crewHistory.filter(h=>h.crewId===crewId&&h.date===dateISO);
+    if(dayRecords.length){
+      const byJob={};
+      dayRecords.forEach(r=>{byJob[r.jobCode]=(byJob[r.jobCode]||0)+r.hours});
+      return Object.entries(byJob).sort((a,b)=>b[1]-a[1])[0][0];
+    }
+  }
+  const slug=slugify(crewId);
+  const crew=Store.crews[slug];
+  if(!crew||!crew.assignments)return null;
+  for(const a of crew.assignments){
+    if(a.startDate<=dateISO&&a.endDate>=dateISO)return a.jobId;
+  }
+  return null;
+}
+
+function getCrewTradeForDate(crewId,dateISO,jobCode){
+  const dayRecords=Store.crewHistory.filter(h=>h.crewId===crewId&&h.date===dateISO&&h.jobCode===jobCode);
+  if(!dayRecords.length)return null;
+  const topRecord=dayRecords.sort((a,b)=>b.hours-a.hours)[0];
+  const disc=getDiscipline(topRecord.costCode);
+  return Object.entries(TRADE_ABBR).find(([name,abbr])=>disc.name===name)?.[1]||'GN';
+}
+
+function getJobLabel(jobCode){
+  if(Store.jobs[jobCode])return Store.jobs[jobCode].meta.name;
+  for(const [k,j]of Object.entries(Store.jobs)){
+    if(String(j.meta.number)===String(jobCode))return j.meta.name;
+  }
+  return jobCode;
+}
+
+function clearCrewHistory(){
+  if(!confirm('Clear all imported crew history? You will need to re-import daily detail to rebuild.'))return;
+  Store.crewHistory=[];
+  persistCrewHistory();
+  if(_activeSubTab==='crews')renderCrews();
+  else renderResources();
+}
+
+// ═══════════════════════════════════════════
 // FORMATTERS
 // ═══════════════════════════════════════════
 const fmt=n=>n!=null?Number(n).toLocaleString('en-US',{maximumFractionDigits:1}):'—';
@@ -1394,8 +1468,16 @@ let _activeNavTab='financials';
 // Group definitions — which sub-tabs belong to each top tab
 const NAV_GROUPS={
   financials:['overview','biditems','eva','forecast','payapps','cashflow'],
-  production:['schedule','jcs','production','crews']
+  production:['weekplanner','schedule','jcs','production','crews']
 };
+
+// Trade abbreviations and colors
+const TRADE_ABBR={Earthwork:'EW',Erosion:'ER',Demo:'DE',Sanitary:'SA',Water:'WA',Paving:'PV',Concrete:'CO',Storm:'ST',General:'GN'};
+const TRADE_COLORS={EW:'#D4A017',ER:'#27AE60',DE:'#8E44AD',SA:'#16A085',WA:'#3498DB',PV:'#34495E',CO:'#E67E22',ST:'#2980B9',GN:'#7F8C8D'};
+
+// Weekly planner state
+let _weekPlannerDate=new Date();
+_weekPlannerDate.setDate(_weekPlannerDate.getDate()-_weekPlannerDate.getDay());
 
 function navSwitch(tab){
   // Highlight the top tab
@@ -1504,6 +1586,7 @@ function renderActiveSubTab(){
   const renderers={
     overview:renderDashboard,
     biditems:renderBidItems,
+    weekplanner:renderWeekPlanner,
     schedule:renderSchedule,
     jcs:renderJobCostSchedule,
     production:renderProduction,
@@ -1521,6 +1604,8 @@ function renderActiveSubTab(){
 loadJobs();
 // Load crews from local storage
 loadCrews();
+// Load crew history from local storage
+loadCrewHistory();
 // Init user label
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // Initialize nav to default: Schedule & Financials > Overview
@@ -1767,6 +1852,54 @@ function parseActualsDetailRaw(rows){
   });
   const activeJob=Store.jobs[Store.activeJob];
   const activeJobCode=activeJob?String(activeJob.meta.number||'').trim():'';
+  // First pass: discover ALL crew leaders from the entire file AND build crew history from ALL rows
+  const _clSeen={};
+  const _histSeen={};
+  const _histExisting={};
+  Store.crewHistory.forEach(h=>{_histExisting[h.date+'|'+h.crewId+'|'+h.jobCode+'|'+h.costCode]=true});
+  rows.forEach(r=>{
+    const dateRaw=r['Date'];
+    if(!dateRaw)return;
+    let d=dateRaw instanceof Date?dateRaw:new Date(dateRaw);
+    if(!d||isNaN(d.getTime()))return;
+    const f=String(r['Foreman']||'').trim();
+    const jobCode=String(r['Job Code']||'').trim();
+    const costCode=String(r['Cost Code']||'').trim();
+    if(!f)return;
+    // Discover crew leader
+    if(!_clSeen[f]){
+      _clSeen[f]=true;
+      const slug=slugify(f);
+      if(!Store.crews[slug]){
+        Store.crews[slug]={id:slug,foreman:f,defaultHeadcount:4,equipment:[],trades:[],assignments:[]};
+      }
+    }
+    // Build crew history record from ALL jobs, not just known ones
+    const isoDate=d.toISOString().split('T')[0];
+    const hours=parseFloat(r['Actual Labor Hours'])||0;
+    const cost=(parseFloat(r['Actual Labor Cost'])||0)+(parseFloat(r['Actual Equipment Cost'])||0)+(parseFloat(r['Actual Material Cost'])||0)+(parseFloat(r['Actual Subcontract Cost'])||0);
+    const qty=parseFloat(r['Actual Quantity'])||0;
+    // Skip zero rows
+    if(hours===0&&cost===0&&qty===0)return;
+    const key=isoDate+'|'+f+'|'+jobCode+'|'+costCode;
+    if(!_histSeen[key]&&!_histExisting[key]){
+      _histSeen[key]=true;
+      Store.crewHistory.push({
+        crewId:f,
+        jobCode:jobCode,
+        date:isoDate,
+        costCode:costCode,
+        costCodeDesc:String(r['Cost Code Description']||''),
+        hours:hours,
+        cost:cost,
+        qty:qty
+      });
+    }
+  });
+  if(Object.keys(_clSeen).length)persistCrews();
+  if(Object.keys(_histSeen).length)persistCrewHistory();
+
+  // Second pass: parse rows into actuals detail (filtered to known jobs)
   const out=[];
   const skipped={noDate:0,otherJob:0,noCode:0};
   rows.forEach(r=>{
@@ -4101,14 +4234,25 @@ function renderResources(){
   if(conflictCount>0)h+=`<div class="kpi warn"><div class="kpi-value">${conflictCount}</div><div class="kpi-label">Conflicts</div></div>`;
   h+='</div>';
 
-  // Time range buttons
-  h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">';
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='1m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='1m'?'white':'var(--text)'};" onclick="_resTimeRange='1m';renderResources();">1 Month</button>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='3m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='3m'?'white':'var(--text)'};" onclick="_resTimeRange='3m';renderResources();">3 Months</button>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='6m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='6m'?'white':'var(--text)'};" onclick="_resTimeRange='6m';renderResources();">6 Months</button>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='full'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='full'?'white':'var(--text)'};" onclick="_resTimeRange='full';renderResources();">Full Lifecycle</button>`;
+  // Resource View (crew × week grid)
+  h+=renderResourceView();
+
+  // Time range buttons (for historical view)
+  h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;margin-top:24px;">';
+  h+=`<span style="font-family:Oswald;font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Legacy View:</span>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='1m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='1m'?'white':'var(--text)'};" onclick="_resTimeRange='1m';renderOldResourceView();">1 Month</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='3m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='3m'?'white':'var(--text)'};" onclick="_resTimeRange='3m';renderOldResourceView();">3 Months</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:${_resTimeRange==='6m'?'var(--green)':'var(--bg)'};color:${_resTimeRange==='6m'?'white':'var(--text)'};" onclick="_resTimeRange='6m';renderOldResourceView();">6 Months</button>`;
   h+='</div>';
 
+  el.innerHTML=h;
+}
+
+function renderOldResourceView(){
+  const el=document.getElementById('resourcesContent');
+  let h='<div class="card" style="margin-bottom:0;border-bottom:none;border-radius:8px 8px 0 0;"><div class="card-title">Resource Loading (Legacy Gantt)</div>';
+
+  const crewList=Object.values(Store.crews);
   // Resource Loading Gantt
   const allAssignments=[];
   crewList.forEach(crew=>{
@@ -4377,6 +4521,11 @@ function renderGlobalView(){
     h+=`</div></div>`;
   });
   h+='</div>';
+
+  // ─── Global Schedule by Trade ───
+  h+=`<div class="card"><div class="card-title">Global Schedule — By Trade</div>`;
+  h+=renderProjectTradeView();
+  h+=`</div>`;
 
   // ─── Resource Loading Summary ───
   const allCrews=Object.values(Store.crews);
@@ -6336,6 +6485,306 @@ function renderProductionLog(job){
 }
 
 // ═══════════════════════════════════════════
+// VIEW 1: WEEKLY CREW PLANNER
+// ═══════════════════════════════════════════
+function renderWeekPlanner(){
+  const el=document.getElementById('weekPlannerContent');
+  const crewList=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
+  if(crewList.length===0){el.innerHTML='<div class="empty-state"><h2>No Crews</h2></div>';return}
+
+  const weekStart=new Date(_weekPlannerDate);
+  weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+  weekStart.setHours(0,0,0,0);
+  const weekLabel=weekStart.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+
+  let h='<div class="card"><div class="card-title">Weekly Planner</div>';
+  h+=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_weekPlannerDate);d.setDate(d.getDate()-7);_weekPlannerDate=d;renderWeekPlanner();">← Prev Week</button>`;
+  h+=`<span style="font-family:Oswald;font-size:14px;font-weight:600;min-width:180px;">Week of ${weekLabel}</span>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_weekPlannerDate);d.setDate(d.getDate()+7);_weekPlannerDate=d;renderWeekPlanner();">Next Week →</button>`;
+  h+=`</div>`;
+
+  h+=`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">`;
+  h+=`<tr><th style="background:var(--green);color:var(--white);padding:10px 12px;text-align:left;min-width:150px;">CREW</th>`;
+  const daysOfWeek=['MON','TUE','WED','THU','FRI'];
+  for(let i=0;i<5;i++){
+    const d=new Date(weekStart);
+    d.setDate(d.getDate()+i);
+    h+=`<th style="background:var(--green);color:var(--white);padding:10px 12px;text-align:center;min-width:100px;">${daysOfWeek[i]}<br><span style="font-size:11px;font-weight:400;">${d.getMonth()+1}/${d.getDate()}</span></th>`;
+  }
+  h+=`</tr>`;
+
+  crewList.forEach(crew=>{
+    h+=`<tr><td style="padding:8px 12px;border-bottom:1px solid var(--border);font-weight:500;">${esc(crewDisplayName(crew.id))}</td>`;
+    for(let i=0;i<5;i++){
+      const dayDate=new Date(weekStart);
+      dayDate.setDate(dayDate.getDate()+i);
+      const dateISO=dayDate.toISOString().split('T')[0];
+      const jobCode=getCrewJobForDate(crew.foreman,dateISO);
+      if(jobCode){
+        const tradeAbbr=getCrewTradeForDate(crew.foreman,dateISO,jobCode)||'GN';
+        const disc=getDiscipline(Store.crewHistory.find(h=>h.crewId===crew.foreman&&h.date===dateISO&&h.jobCode===jobCode)?.costCode||'');
+        const cellColor=disc.color;
+        const isPast=dateISO<=new Date().toISOString().split('T')[0];
+        h+=`<td style="padding:6px 12px;border-bottom:1px solid var(--border);background-color:${cellColor}${isPast?'':'66'};border-left:4px solid ${cellColor};text-align:center;cursor:pointer;font-weight:500;${!isPast?'opacity:0.7;':''}font-style:${!isPast?'italic':''}" onclick="Store.activeJob='${jobCode}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job">${jobCode} ${tradeAbbr}</td>`;
+      }else{
+        const assignment=crew.assignments?.find(a=>{const s=toDate(a.startDate),e=toDate(a.endDate);return s<=dayDate&&e>=dayDate});
+        if(assignment){
+          const job=Store.jobs[assignment.jobId];
+          const jobNum=job?.meta?.number||'?';
+          const disc=getTaskDiscipline(assignment.note||'');
+          const tradeAbbr=Object.entries(TRADE_ABBR).find(([name,abbr])=>disc.name===name)?.[1]||'GN';
+          const cellColor=disc.color;
+          h+=`<td style="padding:6px 12px;border-bottom:1px solid var(--border);background-color:${cellColor}22;border-left:4px solid ${cellColor};text-align:center;cursor:pointer;font-weight:500;opacity:0.7;" onclick="Store.activeJob='${assignment.jobId}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job">${jobNum} ${tradeAbbr}</td>`;
+        }else{
+          h+=`<td style="padding:6px 12px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);">—</td>`;
+        }
+      }
+    }
+    h+=`</tr>`;
+  });
+
+  h+=`</table></div>`;
+  h+=`<div style="margin-top:16px;padding:12px;background:var(--bg);border-radius:6px;">`;
+  h+=`<div style="font-family:Oswald;font-size:12px;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;color:var(--green);font-weight:600;">TRADE LEGEND</div>`;
+  h+=`<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;">`;
+  Object.entries(TRADE_ABBR).forEach(([trade,abbr])=>{
+    const color=TRADE_COLORS[abbr];
+    h+=`<div style="display:flex;align-items:center;gap:6px;"><div style="width:10px;height:10px;background:${color};border-radius:2px;"></div><strong>${abbr}</strong> = ${trade}</div>`;
+  });
+  h+=`</div></div>`;
+  h+=`</div>`;
+
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// VIEW 2: CREW SETTINGS (Enhancement to Crews tab)
+// ═══════════════════════════════════════════
+function renderCrewSettings(job){
+  const allCrews=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
+  if(allCrews.length===0) return '<div style="padding:20px;text-align:center;color:var(--text-light);">No crews discovered yet. Import HeavyJob daily detail to auto-discover crews.</div>';
+
+  let h='<div class="table-wrap"><table>';
+  h+=`<tr><th>CREW</th><th>CREW LDR</th><th style="text-align:center;">HEADCOUNT</th><th style="text-align:center;">MH/DAY</th><th>TRADES</th><th style="text-align:center;">EFF. FACTOR</th><th></th></tr>`;
+
+  let crewIdx=0;
+  allCrews.forEach(crew=>{
+    crewIdx++;
+    const crewCode=`C-${String(crewIdx).padStart(2,'0')}`;
+    const mhPerDay=crew.defaultHeadcount*8;
+    const effFactor=crew.efficiencyFactor||1.0;
+    const displayName=crewDisplayName(crew.id);
+    const trades=crew.trades||[];
+
+    h+=`<tr><td>${crewCode}</td><td>${esc(displayName)}</td>`;
+    h+=`<td style="text-align:center;"><input type="number" value="${crew.defaultHeadcount}" style="width:50px;padding:4px;border:1px solid var(--border);border-radius:3px;" onchange="Store.crews['${esc(crew.id)}'].defaultHeadcount=parseInt(this.value)||4;persistCrews();renderCrews();" /></td>`;
+    h+=`<td style="text-align:center;color:var(--text-light);font-size:13px;">${mhPerDay}</td>`;
+    h+=`<td><div style="display:flex;gap:4px;flex-wrap:wrap;">`;
+    Object.entries(TRADE_ABBR).forEach(([tradeAbbr,name])=>{
+      const isActive=trades.includes(name);
+      const color=TRADE_COLORS[name];
+      h+=`<div style="padding:3px 8px;border-radius:3px;font-size:11px;cursor:pointer;border:1px solid ${isActive?color:'var(--border)'};background:${isActive?color+'22':'transparent'};color:${isActive?color:'var(--text-light)'};font-weight:${isActive?'600':'400'};transition:all .2s;" onclick="const c=Store.crews['${esc(crew.id)}'];if(!c.trades)c.trades=[];const idx=c.trades.indexOf('${name}');if(idx>-1)c.trades.splice(idx,1);else c.trades.push('${name}');persistCrews();renderCrews();" title="Click to toggle">${name}</div>`;
+    });
+    h+=`</div></td>`;
+    h+=`<td style="text-align:center;"><input type="number" step="0.05" min="0.5" max="1.5" value="${effFactor.toFixed(2)}" style="width:60px;padding:4px;border:1px solid var(--border);border-radius:3px;" onchange="Store.crews['${esc(crew.id)}'].efficiencyFactor=parseFloat(this.value)||1.0;persistCrews();renderCrews();" />×</td>`;
+    h+=`<td><button class="edit-btn" onclick="openCrewEditModal('${esc(crew.id)}')">Edit</button></td></tr>`;
+  });
+
+  h+=`</table></div>`;
+  h+=`<div style="margin-top:12px;font-size:12px;color:var(--text-light);"><strong>MH/Day</strong> = headcount × 8 hrs. <strong>Efficiency factor</strong> adjusts for green crews, training, etc.</div>`;
+
+  return h;
+}
+
+// ═══════════════════════════════════════════
+// VIEW 3: GLOBAL SCHEDULE - RESOURCE VIEW
+// ═══════════════════════════════════════════
+let _resViewWeekOffset=0;
+
+function renderResourceView(){
+  const el=document.getElementById('resourcesContent');
+  const crewList=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
+  if(crewList.length===0){el.innerHTML='<div class="empty-state"><h2>No Crews</h2></div>';return}
+
+  const now=new Date();
+  now.setHours(0,0,0,0);
+  let minDate=now;
+  let maxDate=new Date(now);
+  maxDate.setDate(maxDate.getDate()+182);
+
+  crewList.forEach(crew=>{
+    (crew.assignments||[]).forEach(a=>{
+      const s=toDate(a.startDate),e=toDate(a.endDate);
+      if(s&&s<minDate) minDate=s;
+      if(e&&e>maxDate) maxDate=e;
+    });
+  });
+
+  const weekStart=new Date(minDate);
+  weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+  const weeksToShow=26;
+  let currentWeek=new Date(weekStart);
+  currentWeek.setDate(currentWeek.getDate()+_resViewWeekOffset*7);
+
+  let h='<div class="card"><div class="card-title">Global Schedule — Resource View</div>';
+  h+=`<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="_resViewWeekOffset=Math.max(0,_resViewWeekOffset-4);renderResourceView();">← Earlier</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="_resViewWeekOffset=0;renderResourceView();">This Week</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="_resViewWeekOffset+=4;renderResourceView();">Later →</button>`;
+  h+=`</div>`;
+
+  h+=`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">`;
+  h+=`<tr><th style="background:var(--green);color:var(--white);padding:10px 12px;text-align:left;min-width:150px;">CREW</th>`;
+
+  const weeks=[];
+  for(let w=0;w<weeksToShow;w++){
+    const weekDate=new Date(currentWeek);
+    weekDate.setDate(weekDate.getDate()+w*7);
+    const weekNum=Math.ceil(((weekDate-new Date(2000,0,3))/604800000)%53);
+    h+=`<th style="background:var(--green);color:var(--white);padding:8px 10px;text-align:center;min-width:50px;font-size:11px;">W${weekNum}</th>`;
+    weeks.push(weekDate);
+  }
+  h+=`</tr>`;
+
+  const JOB_PALETTE=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22'];
+  const jobColors={};
+  let colorIdx=0;
+
+  crewList.forEach(crew=>{
+    h+=`<tr><td style="padding:8px 12px;border-bottom:1px solid var(--border);font-weight:500;background:var(--bg);">${esc(crewDisplayName(crew.id))}</td>`;
+    weeks.forEach(week=>{
+      const weekEnd=new Date(week);
+      weekEnd.setDate(weekEnd.getDate()+6);
+
+      // Check crew history for this week (past dates)
+      const weekISO=week.toISOString().split('T')[0];
+      const weekEndISO=weekEnd.toISOString().split('T')[0];
+      const histRecords=Store.crewHistory.filter(h=>h.crewId===crew.foreman&&h.date>=weekISO&&h.date<=weekEndISO);
+      let primaryJobCode=null;
+      if(histRecords.length){
+        const byJob={};
+        histRecords.forEach(r=>{byJob[r.jobCode]=(byJob[r.jobCode]||0)+1});
+        primaryJobCode=Object.entries(byJob).sort((a,b)=>b[1]-a[1])[0][0];
+      }
+
+      // Fall back to manual assignments for future weeks
+      const assignment=primaryJobCode?null:crew.assignments?.find(a=>{
+        const s=toDate(a.startDate),e=toDate(a.endDate);
+        return s<=weekEnd&&e>=week;
+      });
+
+      const jobCodeToDisplay=primaryJobCode||assignment?.jobId;
+      if(jobCodeToDisplay){
+        if(!jobColors[jobCodeToDisplay]){
+          jobColors[jobCodeToDisplay]=JOB_PALETTE[colorIdx%JOB_PALETTE.length];
+          colorIdx++;
+        }
+        const jobLabel=getJobLabel(jobCodeToDisplay);
+        const color=jobColors[jobCodeToDisplay];
+        h+=`<td style="padding:6px 8px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;cursor:pointer;font-size:12px;" onclick="Store.activeJob='${jobCodeToDisplay}';refreshJobSelectors();switchToSubTab('overview');">${jobLabel}</td>`;
+      }else{
+        h+=`<td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);">—</td>`;
+      }
+    });
+    h+=`</tr>`;
+  });
+
+  // Available row
+  h+=`<tr style="background:var(--ash);font-weight:600;border-top:2px solid var(--border);">`;
+  h+=`<td style="padding:8px 12px;">Available</td>`;
+  weeks.forEach(week=>{
+    const weekEnd=new Date(week);
+    weekEnd.setDate(weekEnd.getDate()+6);
+    const available=crewList.filter(c=>!c.assignments?.some(a=>{
+      const s=toDate(a.startDate),e=toDate(a.endDate);
+      return s<=weekEnd&&e>=week;
+    })).length;
+    h+=`<td style="padding:8px 12px;text-align:center;border-bottom:1px solid var(--border);">${available}</td>`;
+  });
+  h+=`</tr></table></div></div>`;
+
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// VIEW 4: GLOBAL SCHEDULE - PROJECT VIEW (Per-Trade)
+// ═══════════════════════════════════════════
+function renderProjectTradeView(){
+  const ids=Object.keys(Store.jobs).sort();
+  if(!ids.length) return '<div class="empty-state"><h2>No Jobs</h2></div>';
+
+  const jobList=ids.map(id=>Store.jobs[id]);
+  let allMin=null,allMax=null;
+
+  jobList.forEach(j=>{
+    const sd=toDate(j.meta.startDate),ed=toDate(j.meta.endDate);
+    if(sd&&(!allMin||sd<allMin)) allMin=sd;
+    if(ed&&(!allMax||ed>allMax)) allMax=ed;
+  });
+
+  if(!allMin||!allMax) return '<div class="empty-state"><h2>No Schedule Data</h2></div>';
+
+  const td=Math.max((allMax-allMin)/86400000,1);
+
+  let h='<div style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap;">';
+  h+=`<span style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);">Filter trades:</span>`;
+  const allTrades=['Earthwork','Erosion','Demo','Sanitary','Water','Paving','Concrete','Storm','General'];
+  allTrades.forEach(trade=>{
+    const abbr=TRADE_ABBR[trade]||'GN';
+    const color=TRADE_COLORS[abbr];
+    h+=`<button class="filter-chip" style="background:${color}20;border-color:${color};color:${color};cursor:pointer;" onclick="alert('Filter by ${trade} — implementation in progress');">${abbr}</button>`;
+  });
+  h+=`</div>`;
+
+  let months='';const c=new Date(allMin);c.setDate(1);
+  while(c<=allMax){
+    const ms=Math.max(0,(c-allMin)/86400000);
+    const nm=new Date(c);nm.setMonth(nm.getMonth()+1);
+    const me=Math.min(td,(nm-allMin)/86400000);
+    months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;
+    c.setMonth(c.getMonth()+1);
+  }
+
+  h+=`<div style="overflow-x:auto;"><div style="min-width:900px;">`;
+  h+=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;margin-left:220px;">${months}</div>`;
+
+  jobList.forEach(j=>{
+    const m=j.meta;
+    const tm=j.taskMap||{};
+    const validTasks=j.schedule.map(t=>({...t,start:toDate(t.start),finish:toDate(t.finish)})).filter(t=>t.start&&t.finish);
+
+    const tradeBars={};
+    validTasks.forEach(t=>{
+      let disc;
+      if(tm[t.id]){
+        const _tmBIs=getTaskBidItems(tm,t.id);
+        disc=getBidItemDiscipline(_tmBIs[0],j.activities,j);
+      }else{
+        disc=getTaskDiscipline(t.name);
+      }
+      const k=disc.name;
+      if(!tradeBars[k]){tradeBars[k]={name:k,color:disc.color,start:t.start,end:t.finish}};
+      if(t.start<tradeBars[k].start) tradeBars[k].start=t.start;
+      if(t.finish>tradeBars[k].end) tradeBars[k].end=t.finish;
+    });
+
+    Object.values(tradeBars).forEach(bar=>{
+      const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;
+      const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);
+      h+=`<div style="display:flex;align-items:center;margin-bottom:1px;border-top:1px solid var(--border);padding-top:6px;">`;
+      h+=`<div style="width:220px;min-width:220px;padding-right:8px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${m.name} — ${bar.name}"><span style="font-weight:600;">${m.name} #${m.number}</span><br><span style="color:var(--text-light);font-size:11px;">${bar.name}</span></div>`;
+      h+=`<div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${bar.name}: ${fmtDate(bar.start)} — ${fmtDate(bar.end)}"></div></div>`;
+      h+=`</div>`;
+    });
+  });
+
+  h+=`</div></div>`;
+
+  return h;
+}
+
+// ═══════════════════════════════════════════
 // DISCIPLINE EDITOR
 // ═══════════════════════════════════════════
 // CREWS TAB
@@ -6517,21 +6966,24 @@ function renderCrews(){
     h+='</table></div></div>';
   }
 
-  // ── Crew Directory ──
+  // ── Crew Settings ──
+  h+=`<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Crew Settings</span><div style="display:flex;gap:6px;"><button class="edit-btn" onclick="if(confirm('Clear all crews and re-discover from daily detail?')){Store.crews={};persistCrews();renderCrews()}" style="color:var(--red);border-color:var(--red);">Clear All</button><button class="edit-btn" onclick="clearCrewHistory()" style="color:var(--red);border-color:var(--red);">Clear History</button><button class="btn-primary btn-sm" onclick="openCrewAssignModal()">+ Assign to Job</button></div></div>`;
+  h+=renderCrewSettings(job);
+  h+=`</div>`;
+
+  // ── Legacy Crew Directory (for name management) ──
   const allCrews=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
-  h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Crew Directory</span><div style="display:flex;gap:6px;"><button class="edit-btn" onclick="if(confirm(\'Clear all crews and re-discover from daily detail?\')){Store.crews={};persistCrews();renderCrews()}" style="color:var(--red);border-color:var(--red);">Clear All</button><button class="btn-primary btn-sm" onclick="openCrewAssignModal()">+ Assign to Job</button></div></div>';
+  h+='<div class="card" style="border-color:var(--sand);"><div class="card-title" style="justify-content:space-between;color:var(--text-light);"><span>Crew Name Mapping (Legacy)</span></div>';
 
   if(allCrews.length===0){
     h+='<div style="padding:20px;text-align:center;color:var(--text-light);">No crews discovered yet. Import HeavyJob daily detail to auto-discover crews.</div>';
   }else{
-    h+='<div class="table-wrap"><table class="crew-dir-table">';
-    h+='<tr><th>Crew Leader</th><th>Headcount</th><th>Equipment</th><th>Trades</th><th></th></tr>';
+    h+='<div class="table-wrap"><table style="font-size:12px;">';
+    h+='<tr><th style="background:var(--ash);font-weight:600;">Display Name</th><th style="background:var(--ash);font-weight:600;">Original ID</th><th style="background:var(--ash);font-weight:600;">Action</th></tr>';
     allCrews.forEach(crew=>{
-      const eq=(crew.equipment||[]).join(', ')||'—';
-      const tr=(crew.trades||[]).join(', ')||'—';
       const displayName=crewDisplayName(crew.id);
       const originalId=crew.foreman;
-      h+=`<tr><td><div>${esc(displayName)}</div>${originalId!==displayName?'<div style="font-size:10px;color:var(--text-light);">HJ: '+esc(originalId)+'</div>':''}<div style="margin-top:6px;"><span onclick="this.style.display='none';this.nextElementSibling.style.display='inline';this.nextElementSibling.focus()" style="cursor:pointer;border-bottom:1px dashed var(--sand);font-size:12px;color:var(--orange);" title="Click to set display name">Set name</span><input type="text" value="${esc(displayName)}" style="display:none;font-family:inherit;font-size:inherit;border:1px solid var(--orange);padding:2px 6px;border-radius:3px;width:180px;" onblur="saveCrewName('${esc(crew.id)}',this.value);this.style.display='none';this.previousElementSibling.style.display='inline'" onkeydown="if(event.key==='Enter'){this.blur()}"></div></td><td class="num">${crew.defaultHeadcount}</td><td>${eq}</td><td>${tr}</td><td><button class="edit-btn" onclick="openCrewEditModal('${esc(crew.id)}')">Edit</button></td></tr>`;
+      h+=`<tr><td>${esc(displayName)}</td><td>${esc(originalId)}</td><td><span onclick="this.style.display='none';this.nextElementSibling.style.display='inline';this.nextElementSibling.focus()" style="cursor:pointer;border-bottom:1px dashed var(--sand);font-size:11px;color:var(--orange);" title="Click to rename">Rename</span><input type="text" value="${esc(displayName)}" style="display:none;font-family:inherit;font-size:inherit;border:1px solid var(--orange);padding:2px 6px;border-radius:3px;width:160px;" onblur="saveCrewName('${esc(crew.id)}',this.value);this.style.display='none';this.previousElementSibling.style.display='inline'" onkeydown="if(event.key==='Enter'){this.blur()}"></td></tr>`;
     });
     h+='</table></div>';
   }
