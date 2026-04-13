@@ -803,9 +803,29 @@ function suggestCrewAssignment(crewId,dateISO){
   if(!crew) return [];
   const suggestions=[];
   const seen={};
+  const targetDate=new Date(dateISO+'T00:00:00');
+
+  // 0. SCHEDULE-ASSIGNED: Is this crew explicitly assigned to a task on this date?
+  Object.entries(Store.jobs).forEach(([jk,job])=>{
+    const jobCode=String(job.meta?.number||'').trim();
+    if(!jobCode)return;
+    (job.schedule||[]).forEach(task=>{
+      if(!task.crews||!task.crews.includes(crewId))return;
+      const s=toDate(task.start),f=toDate(task.finish);
+      if(!s||!f||s>targetDate||f<targetDate)return;
+      if(seen[jobCode])return;
+      seen[jobCode]=true;
+      const disc=getTaskDiscipline(task.name||'');
+      const tradeAbbr=Object.entries(TRADE_ABBR).find(([name])=>name===disc.name)?.[1]||'GN';
+      suggestions.push({
+        jobCode,jobName:job.meta?.name||jobCode,trade:tradeAbbr,tradeAbbr,
+        confidence:0.99,
+        reason:'Assigned to "'+task.name+'" on '+jobCode+' (schedule)'
+      });
+    });
+  });
 
   // 1. CONTINUITY: What was this crew doing yesterday / recently?
-  const targetDate=new Date(dateISO+'T00:00:00');
   const crewForeman=crew.foreman;
   // Check last 14 days of history + plan for continuity (reduced from 30 for perf)
   let recentJob=null, recentTrade=null, recentDate=null;
@@ -964,10 +984,11 @@ function getEffectivePlanCell(crewId,dateISO){
     }
   }
 
-  // 3. Suggestion (for future)
+  // 3. Suggestion (for future) — schedule-assigned crews get 'scheduled' source
   const suggestions=suggestCrewAssignment(crewId,dateISO);
   if(suggestions.length>0){
     const top=suggestions[0];
+    if(top.confidence>=0.95){const r={jobCode:top.jobCode,trade:top.tradeAbbr,source:'scheduled',confidence:top.confidence};_cellCache[cacheKey]=r;return r}
     if(top.confidence>=0.4){const r={jobCode:top.jobCode,trade:top.tradeAbbr,source:'suggested',confidence:top.confidence};_cellCache[cacheKey]=r;return r}
   }
   _cellCache[cacheKey]=null;
@@ -5714,7 +5735,40 @@ function renderSchedule(){
       h+=`<option value="${s}" ${(t.status||'Not Started')===s?'selected':''}>${s}</option>`;
     });
     h+=`</select></td>`;
-    h+=`<td><input type="text" value="${esc(t.crew||'')}" onchange="updateScheduleTask(${i},'crew',this.value)" style="${inputSt}width:80px;" placeholder="Crew"></td>`;
+    h+=`<td style="position:relative;min-width:140px;">`;
+    // Migrate legacy text crew to crews array display
+    const taskCrews=t.crews||[];
+    const crewChips=taskCrews.map(cid=>{
+      const isCustom=cid.startsWith('_custom:');
+      const label=isCustom?cid.slice(8):crewDisplayName(cid);
+      const bg=isCustom?'var(--orange)':'var(--green)';
+      return `<span style="display:inline-flex;align-items:center;gap:2px;background:${bg};color:var(--white);padding:2px 6px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;margin:1px;">${esc(label)}<span style="cursor:pointer;margin-left:2px;opacity:0.7;" onclick="event.stopPropagation();toggleTaskCrew(${i},'${esc(cid)}')">&times;</span></span>`;
+    }).join('');
+    const legacyText=(!taskCrews.length&&t.crew)?`<span style="font-size:11px;color:var(--text-light);">${esc(t.crew)}</span>`:'';
+    h+=`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;cursor:pointer;min-height:26px;" onclick="toggleCrewPicker(${i},event)">`;
+    h+=crewChips||legacyText||`<span style="font-size:11px;color:var(--sand);">+ Assign</span>`;
+    h+=`</div>`;
+    // Dropdown picker
+    if(_crewPickerOpen===i){
+      const allCrewsSorted=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
+      h+=`<div id="crew-picker-${i}" onclick="event.stopPropagation()" style="position:absolute;top:100%;left:0;z-index:500;background:var(--white);border:2px solid var(--green);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.15);min-width:180px;max-height:220px;overflow-y:auto;padding:4px 0;">`;
+      if(allCrewsSorted.length){
+        allCrewsSorted.forEach(c=>{
+          const isAssigned=taskCrews.includes(c.id);
+          h+=`<div style="padding:5px 12px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;${isAssigned?'background:var(--ash);font-weight:600;':''}" onmouseover="this.style.background='var(--ash)'" onmouseout="this.style.background='${isAssigned?'var(--ash)':'transparent'}'" onclick="event.stopPropagation();toggleTaskCrew(${i},'${esc(c.id)}')">`;
+          h+=`<span style="width:16px;text-align:center;font-size:13px;">${isAssigned?'✓':''}</span>`;
+          h+=`<span>${esc(crewDisplayName(c.id))}</span>`;
+          h+=`</div>`;
+        });
+      }
+      // Custom / sub name text entry
+      h+=`<div style="border-top:1px solid var(--border);padding:6px 8px;display:flex;gap:4px;">`;
+      h+=`<input type="text" id="custom-crew-${i}" placeholder="Sub / other name" onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter'){event.stopPropagation();addCustomTaskCrew(${i});}" style="flex:1;font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;min-width:0;">`;
+      h+=`<button onclick="event.stopPropagation();addCustomTaskCrew(${i});" style="font-size:10px;padding:3px 8px;background:var(--orange);color:var(--white);border:none;border-radius:4px;cursor:pointer;white-space:nowrap;">+ Add</button>`;
+      h+=`</div>`;
+      h+=`</div>`;
+    }
+    h+=`</td>`;
     h+=`<td><input type="text" value="${esc(t.predecessors||'')}" onchange="updateScheduleTask(${i},'predecessors',this.value)" style="${inputSt}width:70px;color:var(--text-light);" placeholder="e.g. 3,5"></td>`;
     // Baseline drift columns
     if(_hasBL){
@@ -5972,6 +6026,53 @@ function updateScheduleTask(idx,field,value){
   renderSchedule();
 }
 
+// Toggle a crew assignment on a schedule task
+function toggleTaskCrew(taskIdx,crewId){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const t=job.schedule[taskIdx];if(!t)return;
+  if(!t.crews)t.crews=[];
+  const idx=t.crews.indexOf(crewId);
+  if(idx>=0)t.crews.splice(idx,1);
+  else t.crews.push(crewId);
+  // Sync legacy crew field for backward compat
+  t.crew=t.crews.map(c=>crewDisplayName(c)).join(', ');
+  _clearCellCache(); // crew assignments affect planning
+  addEditLog('Schedule: '+t.name+' — crew '+(idx>=0?'removed':'added')+': '+crewDisplayName(crewId));
+  saveJob(Store.activeJob);
+  renderSchedule();
+}
+// Add a custom/sub name to a schedule task's crew list
+function addCustomTaskCrew(taskIdx){
+  const el=document.getElementById('custom-crew-'+taskIdx);
+  if(!el)return;
+  const name=el.value.trim();
+  if(!name)return;
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const t=job.schedule[taskIdx];if(!t)return;
+  if(!t.crews)t.crews=[];
+  const customId='_custom:'+name;
+  if(t.crews.includes(customId))return; // already added
+  t.crews.push(customId);
+  t.crew=t.crews.map(c=>c.startsWith('_custom:')?c.slice(8):crewDisplayName(c)).join(', ');
+  addEditLog('Schedule: '+t.name+' — added custom crew: '+name);
+  saveJob(Store.activeJob);
+  renderSchedule();
+  // Re-focus the input after re-render
+  setTimeout(()=>{const inp=document.getElementById('custom-crew-'+taskIdx);if(inp){inp.value='';inp.focus()}},60);
+}
+// Open/close crew picker dropdown on a schedule task
+let _crewPickerOpen=null;
+function toggleCrewPicker(taskIdx,event){
+  event.stopPropagation();
+  if(_crewPickerOpen===taskIdx){_crewPickerOpen=null;renderSchedule();return}
+  _crewPickerOpen=taskIdx;
+  renderSchedule();
+  // Scroll picker into view
+  setTimeout(()=>{const el=document.getElementById('crew-picker-'+taskIdx);if(el)el.scrollIntoView({block:'nearest'})},50);
+}
+// Close crew picker on outside click
+document.addEventListener('click',()=>{if(_crewPickerOpen!==null){_crewPickerOpen=null;renderSchedule()}});
+
 // Add a new blank task to the schedule
 function addScheduleTask(){
   const job=Store.jobs[Store.activeJob];
@@ -5993,6 +6094,7 @@ function addScheduleTask(){
     status:'Not Started',
     atRisk:'No',
     crew:'',
+    crews:[],
     variance:null
   });
 
