@@ -537,7 +537,7 @@ tr:hover{background:#FAF8F5}
 <div class="modal-bg" id="crewEditModal">
   <div class="modal">
     <h3>Edit Crew</h3>
-    <label>Foreman Name</label>
+    <label>Crew Leader Name</label>
     <input type="text" id="editCrewForeman" readonly style="background:var(--bg);cursor:not-allowed;">
     <label>Default Headcount</label>
     <input type="number" id="editCrewHeadcount" min="1" value="4">
@@ -545,8 +545,6 @@ tr:hover{background:#FAF8F5}
     <input type="text" id="editCrewEquipment" placeholder="e.g., Excavator, Truck, Dozer">
     <label>Trades (comma-separated)</label>
     <input type="text" id="editCrewTrades" placeholder="e.g., Earthwork, Utilities">
-    <label>Hourly Rate ($)</label>
-    <input type="number" id="editCrewRate" min="0" step="0.01">
     <div class="modal-actions">
       <button class="del-btn" onclick="deleteCrewConfirm()" style="margin-right:auto;">Delete Crew</button>
       <button class="btn-secondary" onclick="closeCrewEditModal()">Cancel</button>
@@ -559,7 +557,7 @@ tr:hover{background:#FAF8F5}
 // ═══════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════
-const Store = { jobs:{}, activeJob:null, crews:{}, staging:{type:null,data:[]}, _pinAuth:{} };
+const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, staging:{type:null,data:[]}, _pinAuth:{} };
 let _globalSchedByDisc=false;
 let _schedSort='pred'; // default sort: predecessor order
 let _schedSortDir='asc'; // sort direction: asc or desc
@@ -691,12 +689,25 @@ function slugify(name){
 }
 
 function persistCrews(){
-  localStorage.setItem('bdc_crews',JSON.stringify(Store.crews))
+  localStorage.setItem('bdc_crews',JSON.stringify(Store.crews));
+  localStorage.setItem('bdc_crew_name_map',JSON.stringify(Store.crewNameMap));
 }
 
 function loadCrews(){
   const stored=localStorage.getItem('bdc_crews');
   if(stored){try{Store.crews=JSON.parse(stored)}catch(e){log('Could not load crews from storage')}}
+  const storedMap=localStorage.getItem('bdc_crew_name_map');
+  if(storedMap){try{Store.crewNameMap=JSON.parse(storedMap)}catch(e){log('Could not load crew name map from storage')}}
+}
+
+function crewDisplayName(id){
+  return Store.crewNameMap[id]||(Store.crews[id]?.foreman)||id;
+}
+
+function saveCrewName(id,name){
+  Store.crewNameMap[id]=name;
+  persistCrews();
+  renderCrews();
 }
 
 function discoverCrews(job){
@@ -716,7 +727,6 @@ function discoverCrews(job){
             defaultHeadcount:4,
             equipment:[],
             trades:[],
-            hourlyRate:0,
             assignments:[]
           };
           discovered++;
@@ -737,11 +747,11 @@ function openCrewAssignModal(crewId){
 
   // Populate crew select
   crewSelect.innerHTML='';
-  const crewList=Object.entries(Store.crews).sort((a,b)=>(a[1].foreman||'').localeCompare(b[1].foreman||''));
+  const crewList=Object.entries(Store.crews).sort((a,b)=>crewDisplayName(a[0]).localeCompare(crewDisplayName(b[0])));
   crewList.forEach(([id,crew])=>{
     const opt=document.createElement('option');
     opt.value=id;
-    opt.text=crew.foreman;
+    opt.text=crewDisplayName(id);
     if(id===crewId)opt.selected=true;
     crewSelect.appendChild(opt);
   });
@@ -810,7 +820,7 @@ function saveCrewAssignment(){
   // Refresh the active view
   if(_activeSubTab==='crews')renderCrews();
   else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
-  log(`Assigned ${crew.foreman} to job from ${startDate} to ${endDate}`);
+  log(`Assigned ${crewDisplayName(crewId)} to job from ${startDate} to ${endDate}`);
 }
 
 function openCrewEditModal(crewId){
@@ -822,7 +832,6 @@ function openCrewEditModal(crewId){
   document.getElementById('editCrewHeadcount').value=crew.defaultHeadcount||4;
   document.getElementById('editCrewEquipment').value=(crew.equipment||[]).join(', ');
   document.getElementById('editCrewTrades').value=(crew.trades||[]).join(', ');
-  document.getElementById('editCrewRate').value=crew.hourlyRate||0;
 
   document.getElementById('crewEditModal').classList.add('show');
   setTimeout(()=>document.getElementById('editCrewHeadcount').focus(),100);
@@ -841,21 +850,20 @@ function saveCrewEdit(){
   crew.defaultHeadcount=parseInt(document.getElementById('editCrewHeadcount').value,10)||4;
   crew.equipment=document.getElementById('editCrewEquipment').value.split(',').map(s=>s.trim()).filter(s=>s);
   crew.trades=document.getElementById('editCrewTrades').value.split(',').map(s=>s.trim()).filter(s=>s);
-  crew.hourlyRate=parseFloat(document.getElementById('editCrewRate').value)||0;
 
   persistCrews();
   closeCrewEditModal();
   // Refresh
   if(_activeSubTab==='crews')renderCrews();
   else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
-  log(`Updated crew: ${crew.foreman}`);
+  log(`Updated crew: ${crewDisplayName(_editingCrewId)}`);
 }
 
 function deleteCrewConfirm(){
   if(!_editingCrewId)return;
   const crew=Store.crews[_editingCrewId];
   if(!crew)return;
-  if(!confirm(`Delete crew "${crew.foreman}" and all their assignments?`))return;
+  if(!confirm(`Delete crew "${crewDisplayName(_editingCrewId)}" and all their assignments?`))return;
 
   delete Store.crews[_editingCrewId];
   persistCrews();
@@ -863,7 +871,7 @@ function deleteCrewConfirm(){
   // Refresh
   if(_activeSubTab==='crews')renderCrews();
   else if(document.getElementById('panel-resources').classList.contains('active'))renderResources();
-  log(`Deleted crew: ${crew.foreman}`);
+  log(`Deleted crew: ${crewDisplayName(_editingCrewId)}`);
 }
 
 // ═══════════════════════════════════════════
@@ -1945,7 +1953,7 @@ function renderStaging(){
     const sortedDates=selData.map(d=>d.date).sort();
     const dateMin=sortedDates[0]||'';const dateMax=sortedDates[sortedDates.length-1]||'';
     h=h.replace('<div class="card">','<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:10px 0;padding:12px;background:#F9F9F7;border-radius:6px;font-family:Oswald;"><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Selected Rows</div><div style="font-size:18px;font-weight:600;">'+selData.length.toLocaleString()+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Cost Codes</div><div style="font-size:18px;font-weight:600;">'+uniqueCodes+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Date Range</div><div style="font-size:13px;font-weight:600;">'+dateMin+' → '+dateMax+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Labor Hrs</div><div style="font-size:18px;font-weight:600;">'+tot.hrs.toFixed(1)+'</div></div><div><div style="font-size:10px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;">Total Cost</div><div style="font-size:18px;font-weight:600;color:var(--orange);">$'+Math.round(tot.all).toLocaleString()+'</div></div></div><div class="card">');
-    h+='<tr><th></th><th>Date</th><th>Cost Code</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Lab Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Mat $</th><th class="num">Sub $</th><th class="num">Total</th><th>Foreman</th></tr>';
+    h+='<tr><th></th><th>Date</th><th>Cost Code</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Lab Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Mat $</th><th class="num">Sub $</th><th class="num">Total</th><th>Crew Leader</th></tr>';
     // Only show first 200 rows in staging for perf
     const showMax=200;
     data.slice(0,showMax).forEach((d,i)=>{if(!d._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td style="font-size:11px;">${d.date}</td><td><strong>${d.costCode}</strong></td><td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${d.costCodeDesc}</td><td>${d.unit}</td><td class="num">${fmt(d.actualQty)}</td><td class="num">${d.actualLaborHours.toFixed(1)}</td><td class="num">${fmtD(d.actualLaborCost)}</td><td class="num">${fmtD(d.actualEquipCost)}</td><td class="num">${fmtD(d.actualMatCost)}</td><td class="num">${fmtD(d.actualSubCost)}</td><td class="num"><strong>${fmtD(d.actualAllCost)}</strong></td><td style="font-size:10px;color:var(--text-light);">${d.foreman||'—'}</td></tr>`});
@@ -4106,7 +4114,7 @@ function renderResources(){
   crewList.forEach(crew=>{
     (crew.assignments||[]).forEach(a=>{
       const s=toDate(a.startDate),e=toDate(a.endDate);
-      if(s&&e){allAssignments.push({crewId:crew.id,crewName:crew.foreman,jobId:a.jobId,jobName:(Store.jobs[a.jobId]?.meta?.name||'Unknown'),s,e,headcount:a.headcount})}
+      if(s&&e){allAssignments.push({crewId:crew.id,crewName:crewDisplayName(crew.id),jobId:a.jobId,jobName:(Store.jobs[a.jobId]?.meta?.name||'Unknown'),s,e,headcount:a.headcount})}
     });
   });
 
@@ -4122,7 +4130,7 @@ function renderResources(){
     minDate=Math.min(minDate,now.getTime());
 
     const timelineDays=Math.max((maxDate-minDate)/86400000,1);
-    const crewGanttList=crewList.filter(c=>(c.assignments||[]).some(a=>{const s=toDate(a.startDate),e=toDate(a.endDate);return s<=new Date(maxDate)&&e>=new Date(minDate)})).sort((a,b)=>(a.foreman||'').localeCompare(b.foreman||''));
+    const crewGanttList=crewList.filter(c=>(c.assignments||[]).some(a=>{const s=toDate(a.startDate),e=toDate(a.endDate);return s<=new Date(maxDate)&&e>=new Date(minDate)})).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
 
     h+='<div class="card"><div class="card-title">Resource Loading (Gantt)</div>';
     h+='<div class="crew-timeline"><div class="crew-timeline-wrapper">';
@@ -4141,7 +4149,7 @@ function renderResources(){
     // Crew rows
     crewGanttList.forEach(crew=>{
       h+=`<div class="crew-timeline-row">`;
-      h+=`<div class="crew-timeline-name">${esc(crew.foreman)}</div>`;
+      h+=`<div class="crew-timeline-name">${esc(crewDisplayName(crew.id))}</div>`;
       h+=`<div class="crew-timeline-bars" style="display:flex;align-items:center;position:relative;">`;
 
       // Each assignment as a bar
@@ -4210,7 +4218,7 @@ function renderResources(){
     h+='<ul class="unassigned-crews">';
     unassigned.forEach(c=>{
       h+=`<li class="unassigned-crew-item">`;
-      h+=`<span class="unassigned-crew-name">${esc(c.foreman)}</span>`;
+      h+=`<span class="unassigned-crew-name">${esc(crewDisplayName(c.id))}</span>`;
       h+=`<div class="unassigned-crew-actions"><button class="edit-btn" onclick="openCrewAssignModal('${esc(c.id)}')">Assign</button><button class="edit-btn" onclick="openCrewEditModal('${esc(c.id)}')">Edit</button></div>`;
       h+='</li>';
     });
@@ -4388,7 +4396,7 @@ function renderGlobalView(){
       const cj=currentJob?(Store.jobs[currentJob.jobId]?.meta?.name||'Unknown'):null;
       const nj=nextJob?(Store.jobs[nextJob.jobId]?.meta?.name||'Unknown'):null;
       const hc=currentJob?currentJob.headcount:(nextJob?nextJob.headcount:crew.defaultHeadcount);
-      h+=`<tr><td>${esc(crew.foreman)}</td><td>${cj||'—'}</td><td>${currentEnd?fmtDate(currentEnd):'—'}</td><td>${nj||'—'}</td><td>${nextStart?fmtDate(nextStart):'—'}</td><td class="num">${hc}</td></tr>`;
+      h+=`<tr><td>${esc(crewDisplayName(crew.id))}</td><td>${cj||'—'}</td><td>${currentEnd?fmtDate(currentEnd):'—'}</td><td>${nj||'—'}</td><td>${nextStart?fmtDate(nextStart):'—'}</td><td class="num">${hc}</td></tr>`;
     });
     h+='</table></div></div>';
   }
@@ -6280,7 +6288,7 @@ function renderProductionLog(job){
     h+=`</div>`;
 
     h+=`<div class="table-wrap"><table style="margin:0;">`;
-    h+=`<thead><tr style="background:var(--ash);"><th>${sortHdrL('log-'+dateStr,'code','Cost Code','renderProduction').replace(/<th /,'<th style="background:var(--ash);" ')}</th><th>Description</th><th>Foreman</th><th class="num">Qty</th><th class="num">Labor Hrs</th><th class="num">Equip Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Material $</th><th class="num">Sub $</th><th class="num">Total $</th></tr></thead>`;
+    h+=`<thead><tr style="background:var(--ash);"><th>${sortHdrL('log-'+dateStr,'code','Cost Code','renderProduction').replace(/<th /,'<th style="background:var(--ash);" ')}</th><th>Description</th><th>Crew Leader</th><th class="num">Qty</th><th class="num">Labor Hrs</th><th class="num">Equip Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Material $</th><th class="num">Sub $</th><th class="num">Total $</th></tr></thead>`;
     h+=`<tbody>`;
 
     rows.forEach(r=>{
@@ -6288,7 +6296,8 @@ function renderProductionLog(job){
       h+=`<tr>`;
       h+=`<td>${esc(r.costCode)}</td>`;
       h+=`<td>${esc(r.costCodeDesc||'')}</td>`;
-      h+=`<td>${esc(r.foreman||'')}</td>`;
+      const crewId=r.foreman?slugify(r.foreman):'';
+      h+=`<td>${esc(crewId?crewDisplayName(crewId):r.foreman||'')}</td>`;
       h+=`<td class="num">${fmt(r.actualQty||0)}</td>`;
       h+=`<td class="num">${fmt(r.actualLaborHours||0)}</td>`;
       h+=`<td class="num">${fmt(r.actualEquipHours||0)}</td>`;
@@ -6369,7 +6378,7 @@ function renderCrews(){
         const crew=Store.crews[slug];
         if(crew){
           crewsInJob[slug]={crew:crew,workStart:start,workEnd:end,assignments:(crew.assignments||[]).filter(a=>a.jobId===Store.activeJob)};
-          if(!crewsList.find(c=>c.id===slug))crewsList.push({id:slug,name:foreman});
+          if(!crewsList.find(c=>c.id===slug))crewsList.push({id:slug,name:crewDisplayName(slug)});
         }
       });
     }
@@ -6380,7 +6389,7 @@ function renderCrews(){
       if(jobAssignments.length>0){
         if(!crewsInJob[crewId]){
           crewsInJob[crewId]={crew:crew,workStart:null,workEnd:null,assignments:jobAssignments};
-          if(!crewsList.find(c=>c.id===crewId))crewsList.push({id:crewId,name:crew.foreman});
+          if(!crewsList.find(c=>c.id===crewId))crewsList.push({id:crewId,name:crewDisplayName(crewId)});
         }else{
           crewsInJob[crewId].assignments=jobAssignments;
         }
@@ -6492,7 +6501,7 @@ function renderCrews(){
 
     h+='<div class="card"><div class="card-title">Crew Performance</div><div class="table-wrap"><table>';
     h+='<tr>';
-    h+=sortHdrL('crew-perf','foreman','Foreman','renderCrews');
+    h+=sortHdrL('crew-perf','foreman','Crew Leader','renderCrews');
     h+=sortHdr('crew-perf','daysWorked','Days Worked','renderCrews');
     h+=sortHdr('crew-perf','totalHours','Total Hours','renderCrews');
     h+=sortHdr('crew-perf','avgHrsPerDay','Avg Hrs/Day','renderCrews');
@@ -6502,24 +6511,27 @@ function renderCrews(){
     h+=sortHdrL('crew-perf','lastActive','Last Active','renderCrews');
     h+='</tr>';
     sorted.forEach(r=>{
-      h+=`<tr><td>${esc(r.foreman)}</td><td class="num">${r.daysWorked}</td><td class="num">${fmt(r.totalHours)}</td><td class="num">${fmt(r.avgHrsPerDay)}</td><td class="num">${fmt(r.totalQty)}</td><td class="num">${fmtD(r.totalCost)}</td><td class="num">${fmtD(r.avgCostPerDay)}</td><td>${r.lastActive}</td></tr>`;
+      const crewId=slugify(r.foreman);
+      h+=`<tr><td>${esc(crewDisplayName(crewId))}</td><td class="num">${r.daysWorked}</td><td class="num">${fmt(r.totalHours)}</td><td class="num">${fmt(r.avgHrsPerDay)}</td><td class="num">${fmt(r.totalQty)}</td><td class="num">${fmtD(r.totalCost)}</td><td class="num">${fmtD(r.avgCostPerDay)}</td><td>${r.lastActive}</td></tr>`;
     });
     h+='</table></div></div>';
   }
 
   // ── Crew Directory ──
-  const allCrews=Object.values(Store.crews).sort((a,b)=>(a.foreman||'').localeCompare(b.foreman||''));
+  const allCrews=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
   h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Crew Directory</span><div style="display:flex;gap:6px;"><button class="edit-btn" onclick="if(confirm(\'Clear all crews and re-discover from daily detail?\')){Store.crews={};persistCrews();renderCrews()}" style="color:var(--red);border-color:var(--red);">Clear All</button><button class="btn-primary btn-sm" onclick="openCrewAssignModal()">+ Assign to Job</button></div></div>';
 
   if(allCrews.length===0){
     h+='<div style="padding:20px;text-align:center;color:var(--text-light);">No crews discovered yet. Import HeavyJob daily detail to auto-discover crews.</div>';
   }else{
     h+='<div class="table-wrap"><table class="crew-dir-table">';
-    h+='<tr><th>Foreman</th><th>Headcount</th><th>Equipment</th><th>Trades</th><th>Rate</th><th></th></tr>';
+    h+='<tr><th>Crew Leader</th><th>Headcount</th><th>Equipment</th><th>Trades</th><th></th></tr>';
     allCrews.forEach(crew=>{
       const eq=(crew.equipment||[]).join(', ')||'—';
       const tr=(crew.trades||[]).join(', ')||'—';
-      h+=`<tr><td>${esc(crew.foreman)}</td><td class="num">${crew.defaultHeadcount}</td><td>${eq}</td><td>${tr}</td><td class="num">${crew.hourlyRate>0?'$'+fmt(crew.hourlyRate)+'/hr':'—'}</td><td><button class="edit-btn" onclick="openCrewEditModal('${esc(crew.id)}')">Edit</button></td></tr>`;
+      const displayName=crewDisplayName(crew.id);
+      const originalId=crew.foreman;
+      h+=`<tr><td><div>${esc(displayName)}</div>${originalId!==displayName?'<div style="font-size:10px;color:var(--text-light);">HJ: '+esc(originalId)+'</div>':''}<div style="margin-top:6px;"><span onclick="this.style.display='none';this.nextElementSibling.style.display='inline';this.nextElementSibling.focus()" style="cursor:pointer;border-bottom:1px dashed var(--sand);font-size:12px;color:var(--orange);" title="Click to set display name">Set name</span><input type="text" value="${esc(displayName)}" style="display:none;font-family:inherit;font-size:inherit;border:1px solid var(--orange);padding:2px 6px;border-radius:3px;width:180px;" onblur="saveCrewName('${esc(crew.id)}',this.value);this.style.display='none';this.previousElementSibling.style.display='inline'" onkeydown="if(event.key==='Enter'){this.blur()}"></div></td><td class="num">${crew.defaultHeadcount}</td><td>${eq}</td><td>${tr}</td><td><button class="edit-btn" onclick="openCrewEditModal('${esc(crew.id)}')">Edit</button></td></tr>`;
     });
     h+='</table></div>';
   }
