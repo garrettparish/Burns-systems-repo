@@ -4608,9 +4608,15 @@ function renderGantt(tasks,meta,baselineSchedule){
   const td=Math.max((mx-mn)/86400000,1);
   let months='';const c=new Date(mn);c.setDate(1);
   while(c<=mx){const ms=Math.max(0,(c-mn)/86400000);const nm=new Date(c);nm.setMonth(nm.getMonth()+1);const me=Math.min(td,(nm-mn)/86400000);months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;c.setMonth(c.getMonth()+1)}
+  // Today line position
+  const _today=new Date();_today.setHours(0,0,0,0);
+  const todayPct=((_today-mn)/86400000)/td*100;
+  const showToday=todayPct>=0&&todayPct<=100;
   let h=`<div style="overflow-x:auto;"><div style="min-width:800px;">`;
-  if(hasBL) h+=`<div style="display:flex;gap:14px;margin-bottom:6px;font-size:10px;color:var(--text-light);font-family:Oswald;letter-spacing:.5px;"><span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:6px;border-radius:2px;background:var(--blue);opacity:.8;"></span>Current</span><span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:6px;border-radius:2px;background:var(--text-light);opacity:.3;"></span>Baseline</span></div>`;
+  if(hasBL||showToday){h+=`<div style="display:flex;gap:14px;margin-bottom:6px;font-size:10px;color:var(--text-light);font-family:Oswald;letter-spacing:.5px;">`;if(hasBL){h+=`<span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:6px;border-radius:2px;background:var(--blue);opacity:.8;"></span>Current</span><span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:6px;border-radius:2px;background:var(--text-light);opacity:.3;"></span>Baseline</span>`}if(showToday){h+=`<span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:14px;height:2px;border-top:2px dashed var(--orange);"></span>Today</span>`}h+=`</div>`}
   h+=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:4px;">${months}</div>`;
+  h+=`<div style="position:relative;">`;
+  if(showToday){h+=`<div style="position:absolute;left:calc(220px + (100% - 270px) * ${todayPct/100});top:0;bottom:0;width:0;border-left:2px dashed var(--orange);opacity:.7;z-index:5;pointer-events:none;"><span style="position:absolute;top:-14px;left:-14px;font-size:9px;font-family:Oswald;color:var(--orange);letter-spacing:.5px;">TODAY</span></div>`}
   vt.forEach(t=>{
     const durDays=Math.max((t.finish-t.start)/86400000,0);
     if(durDays>=td*.95)return;
@@ -4632,7 +4638,7 @@ function renderGantt(tasks,meta,baselineSchedule){
     }
     h+=`<div style="display:flex;align-items:center;margin-bottom:2px;"><div style="width:220px;min-width:220px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${t.name}">${t.name}${varInd}</div><div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;">${blBar}<div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${sc};border-radius:2px;opacity:.8;" title="${t.name}: ${fmtDate(t.start)} — ${fmtDate(t.finish)}"></div></div><div style="width:50px;min-width:50px;text-align:right;font-size:11px;color:var(--text-light);padding-left:6px;">${t.durationStr}</div></div>`;
   });
-  h+='</div></div>';return h;
+  h+='</div></div></div>';return h;
 }
 
 // ═══════════════════════════════════════════
@@ -5831,6 +5837,15 @@ function renderSchedule(){
   h+='<div class="card"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">Master Schedule<div style="display:flex;gap:8px;">';
   h+='<button class="btn-green btn-sm" onclick="recalcDependencies(Store.jobs[Store.activeJob]);renderSchedule();">⟳ Calc Dependencies</button><button class="btn-green btn-sm" onclick="addScheduleTask()">+ Add Task</button></div></div>';
   h+='<div style="font-size:11px;color:var(--text-light);margin-bottom:8px;">Edit dates, status, and names directly — changes update JCS &amp; Cash Flow automatically. Click column headers to sort.</div>';
+  // Quick-assign toolbar
+  if(_quickAssign){
+    const qBg=_quickAssign.crewId.startsWith('_sub:')||_quickAssign.crewId.startsWith('_custom:')?'var(--orange)':'var(--green)';
+    h+=`<div onclick="event.stopPropagation()" style="position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:10px;padding:8px 14px;margin-bottom:8px;background:${qBg};color:var(--white);border-radius:6px;font-size:13px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,0.15);">`;
+    h+=`<span style="font-family:Oswald;letter-spacing:.5px;">QUICK ASSIGN:</span> ${esc(_quickAssign.label)}`;
+    h+=`<span style="opacity:0.8;font-weight:400;font-size:11px;margin-left:4px;">— click crew cells to apply</span>`;
+    h+=`<button onclick="event.stopPropagation();stopQuickAssign()" style="margin-left:auto;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.5);color:var(--white);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;">Done</button>`;
+    h+=`</div>`;
+  }
   h+='<div class="table-wrap" style="max-height:600px;"><table>';
   // Sortable column headers
   const _ss=_schedSort||'id';
@@ -5909,19 +5924,20 @@ function renderSchedule(){
       h+=`<option value="${s}" ${(t.status||'Not Started')===s?'selected':''}>${s}</option>`;
     });
     h+=`</select></td>`;
-    h+=`<td style="position:relative;min-width:140px;">`;
-    // Migrate legacy text crew to crews array display
+    const qaActive=!!_quickAssign;
+    const qaAlready=qaActive&&(t.crews||[]).includes(_quickAssign?.crewId);
+    h+=`<td style="position:relative;min-width:140px;${qaActive&&!qaAlready?'background:rgba(62,77,62,0.06);':''}">`;
     const taskCrews=t.crews||[];
     const crewChips=taskCrews.map(cid=>{
       const isCustom=cid.startsWith('_custom:');
       const isSub=cid.startsWith('_sub:');
       const label=isCustom?cid.slice(8):isSub?(Store.subs[cid.slice(5)]?.name||cid.slice(5)):crewDisplayName(cid);
       const bg=isCustom||isSub?'var(--orange)':'var(--green)';
-      return `<span style="display:inline-flex;align-items:center;gap:2px;background:${bg};color:var(--white);padding:2px 6px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;margin:1px;">${esc(label)}<span style="cursor:pointer;margin-left:2px;opacity:0.7;" onclick="event.stopPropagation();toggleTaskCrew(${i},'${esc(cid)}')">&times;</span></span>`;
+      return `<span style="display:inline-flex;align-items:center;gap:2px;background:${bg};color:var(--white);padding:2px 6px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap;margin:1px;">${esc(label)}${qaActive?'':`<span style="cursor:pointer;margin-left:2px;opacity:0.7;" onclick="event.stopPropagation();toggleTaskCrew(${i},'${esc(cid)}')">&times;</span>`}</span>`;
     }).join('');
     const legacyText=(!taskCrews.length&&t.crew)?`<span style="font-size:11px;color:var(--text-light);">${esc(t.crew)}</span>`:'';
     h+=`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;cursor:pointer;min-height:26px;" onclick="toggleCrewPicker(${i},event)">`;
-    h+=crewChips||legacyText||`<span style="font-size:11px;color:var(--sand);">+ Assign</span>`;
+    h+=crewChips||legacyText||(qaActive?`<span style="font-size:11px;color:var(--green);font-weight:600;">+ Click to assign</span>`:`<span style="font-size:11px;color:var(--sand);">+ Assign</span>`);
     h+=`</div>`;
     // Dropdown picker
     if(_crewPickerOpen===i){
@@ -6223,11 +6239,11 @@ function toggleTaskCrew(taskIdx,crewId){
   if(!t.crews)t.crews=[];
   const idx=t.crews.indexOf(crewId);
   if(idx>=0)t.crews.splice(idx,1);
-  else t.crews.push(crewId);
+  else{t.crews.push(crewId);_lastUsedCrew=crewId}
   // Sync legacy crew field for backward compat
-  t.crew=t.crews.map(c=>crewDisplayName(c)).join(', ');
+  t.crew=t.crews.map(c=>c.startsWith('_custom:')?c.slice(8):c.startsWith('_sub:')?(Store.subs[c.slice(5)]?.name||c.slice(5)):crewDisplayName(c)).join(', ');
   _clearCellCache(); // crew assignments affect planning
-  addEditLog('Schedule: '+t.name+' — crew '+(idx>=0?'removed':'added')+': '+crewDisplayName(crewId));
+  addEditLog('Schedule: '+t.name+' — crew '+(idx>=0?'removed':'added')+': '+(crewId.startsWith('_sub:')?Store.subs[crewId.slice(5)]?.name:crewDisplayName(crewId)));
   saveJob(Store.activeJob);
   renderSchedule();
 }
@@ -6250,17 +6266,50 @@ function addCustomTaskCrew(taskIdx){
   // Re-focus the input after re-render
   setTimeout(()=>{const inp=document.getElementById('custom-crew-'+taskIdx);if(inp){inp.value='';inp.focus()}},60);
 }
+// ── Quick-assign mode ──
+let _quickAssign=null; // { crewId:'xxx', label:'Name' } when active
+let _lastUsedCrew=null; // last crew/sub assigned (for top-of-list)
+
+function startQuickAssign(crewId){
+  const isCustom=crewId.startsWith('_custom:');
+  const isSub=crewId.startsWith('_sub:');
+  const label=isCustom?crewId.slice(8):isSub?(Store.subs[crewId.slice(5)]?.name||crewId.slice(5)):crewDisplayName(crewId);
+  _quickAssign={crewId,label};
+  _crewPickerOpen=null;
+  _lastUsedCrew=crewId;
+  renderSchedule();
+}
+function stopQuickAssign(){
+  _quickAssign=null;
+  renderSchedule();
+}
+function quickAssignToTask(taskIdx){
+  if(!_quickAssign)return;
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const t=job.schedule[taskIdx];if(!t)return;
+  if(!t.crews)t.crews=[];
+  if(!t.crews.includes(_quickAssign.crewId)){
+    t.crews.push(_quickAssign.crewId);
+    t.crew=t.crews.map(c=>c.startsWith('_custom:')?c.slice(8):c.startsWith('_sub:')?(Store.subs[c.slice(5)]?.name||c.slice(5)):crewDisplayName(c)).join(', ');
+    _clearCellCache();
+    addEditLog('Schedule: '+t.name+' — quick-assigned: '+_quickAssign.label);
+    saveJob(Store.activeJob);
+  }
+  renderSchedule();
+}
+
 // Open/close crew picker dropdown on a schedule task
 let _crewPickerOpen=null;
 function toggleCrewPicker(taskIdx,event){
   event.stopPropagation();
+  // If quick-assign is active, clicking a crew cell assigns to that task
+  if(_quickAssign){quickAssignToTask(taskIdx);return}
   if(_crewPickerOpen===taskIdx){_crewPickerOpen=null;renderSchedule();return}
   _crewPickerOpen=taskIdx;
   renderSchedule();
-  // Scroll picker into view
   setTimeout(()=>{const el=document.getElementById('crew-picker-'+taskIdx);if(el)el.scrollIntoView({block:'nearest'})},50);
 }
-// Close crew picker on outside click
+// Close crew picker on outside click (but not quick-assign)
 document.addEventListener('click',()=>{if(_crewPickerOpen!==null){_crewPickerOpen=null;renderSchedule()}});
 
 // Add a new blank task to the schedule
