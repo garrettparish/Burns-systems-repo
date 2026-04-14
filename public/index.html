@@ -1631,8 +1631,12 @@ async function hcssSyncNow(){
   if(el)el.textContent='Syncing…';
   try{
     const j=await hcssCallFn({trigger:'manual'});
-    log(`HCSS sync: ${j.status} · ${j.jobsSynced} jobs · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s`);
+    log(`HCSS sync: ${j.status} · ${j.jobsSynced} jobs (${j.totalJobsFound||'?'} total) · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s`);
     if(j.errors&&j.errors.length)log('HCSS sync had '+j.errors.length+' per-job errors (see sync_log)');
+    if(j.debug)console.log('HCSS sync debug:',JSON.stringify(j.debug,null,2));
+    if(j.totalJobsFound===0&&j.debug){
+      alert(`Sync returned 0 jobs.\n\nBU: ${j.debug.businessUnit?.code} (id=${j.debug.businessUnit?.id})\nJobs endpoint: ${j.debug.jobsEndpoint}\n\nThis may mean the jobs endpoint path or query param is wrong. Check console for full debug info.`);
+    }
     // After syncing, refresh front-end actuals for every loaded job
     await hcssLoadIntoActiveJob();
     await hcssLoadSyncStatus();

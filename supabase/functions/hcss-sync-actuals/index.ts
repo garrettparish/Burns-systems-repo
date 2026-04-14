@@ -49,16 +49,13 @@ const HCSS_TOKEN_URL   = Deno.env.get('HCSS_TOKEN_URL')   || `${HCSS_API_BASE}/i
 const HCSS_SCOPES      = Deno.env.get('HCSS_SCOPES')      || 'heavyjob:read e360:read e360:timecards:read setups:read setups:write timecards:read';
 const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '14', 10);
 
-// Endpoint paths — setups product for BusinessUnit & Job (per HCSS support),
-// heavyjob product for TimeCard & Quantity.
-// PascalCase singular resource names on setups endpoints.
+// Endpoint paths — ALL under heavyjob product (confirmed via endpoint scan 2026-04-14).
+// businessUnits returned 200 from heavyjob; setups returned 403, e360 returned 404.
 const EP = {
-  // Setups endpoints — per HCSS support (requires setups:read + setups:write scopes)
-  businessUnits: `${HCSS_API_BASE}/setups/api/v1/BusinessUnit`,
-  jobs:          (buId: string) => `${HCSS_API_BASE}/setups/api/v1/Job?businessUnitCode=${encodeURIComponent(buId)}`,
-  // HeavyJob endpoints for time cards & quantities
-  timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/timeCard?jobId=${encodeURIComponent(jobId)}`,
-  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/quantity?jobId=${encodeURIComponent(jobId)}`,
+  businessUnits: `${HCSS_API_BASE}/heavyjob/api/v1/businessUnits`,
+  jobs:          (buId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/jobs?businessUnitId=${encodeURIComponent(buId)}`,
+  timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${encodeURIComponent(jobId)}`,
+  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/quantities?jobId=${encodeURIComponent(jobId)}`,
 };
 
 // -------------------- TYPES --------------------
@@ -126,55 +123,22 @@ Deno.serve(async (req) => {
 
     // 2. Business unit — env override or discover.
     const buEnv = Deno.env.get('HCSS_BUSINESS_UNIT_CODE');
+    const bus = await listBusinessUnits(token);
 
     if (body.discover || !buEnv) {
-      // Discovery mode: try ALL possible product paths to find which one works
-      const BU_CANDIDATES = [
-        { label: 'setups/BusinessUnit',        url: `${HCSS_API_BASE}/setups/api/v1/BusinessUnit` },
-        { label: 'setups/businessUnits',        url: `${HCSS_API_BASE}/setups/api/v1/businessUnits` },
-        { label: 'setups/businessunit',         url: `${HCSS_API_BASE}/setups/api/v1/businessunit` },
-        { label: 'e360/businessUnits',          url: `${HCSS_API_BASE}/e360/api/v1/businessUnits` },
-        { label: 'e360/BusinessUnit',           url: `${HCSS_API_BASE}/e360/api/v1/BusinessUnit` },
-        { label: 'heavyjob/businessUnits',      url: `${HCSS_API_BASE}/heavyjob/api/v1/businessUnits` },
-        { label: 'heavyjob/BusinessUnit',       url: `${HCSS_API_BASE}/heavyjob/api/v1/BusinessUnit` },
-        { label: 'heavybid/businessUnits',      url: `${HCSS_API_BASE}/heavybid/api/v1/businessUnits` },
-        { label: 'heavybid/BusinessUnit',       url: `${HCSS_API_BASE}/heavybid/api/v1/BusinessUnit` },
-      ];
-
-      const results: { label: string; status: number; body: string; headers: string }[] = [];
-      for (const c of BU_CANDIDATES) {
-        try {
-          const resp = await fetch(c.url, {
-            headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
-          });
-          const txt = await resp.text();
-          results.push({
-            label: c.label,
-            status: resp.status,
-            body: txt.substring(0, 500),
-            headers: [...resp.headers.entries()].map(([k,v]) => `${k}: ${v}`).join(', '),
-          });
-        } catch (e) {
-          results.push({ label: c.label, status: 0, body: String(e), headers: '' });
-        }
-      }
-
-      // Find the first 200-level response
-      const winner = results.find(r => r.status >= 200 && r.status < 300);
+      // Discovery mode: return the list without writing actuals.
+      await logRun('success', {
+        details: { mode: 'discover', businessUnits: bus, lookbackDays: lookback },
+      });
       return json({
-        ok: !!winner,
-        mode: 'discover-scan',
-        message: winner
-          ? `SUCCESS on ${winner.label}. Update EP.businessUnits to use this path.`
-          : 'All candidate endpoints failed. See results for details.',
-        winner: winner || null,
-        results,
-        requestedScopes: HCSS_SCOPES,
+        ok: true,
+        mode: 'discover',
+        businessUnits: bus,
+        message: buEnv
+          ? `Discovery requested. Env has HCSS_BUSINESS_UNIT_CODE=${buEnv}`
+          : 'HCSS_BUSINESS_UNIT_CODE is not set. Pick a code from businessUnits[] and set it via: supabase secrets set HCSS_BUSINESS_UNIT_CODE=<code>',
       });
     }
-
-    // Normal mode — use configured EP
-    const bus = await listBusinessUnits(token);
 
     const buCode = buEnv;
     // Match by code OR by id (env can store either)
@@ -182,8 +146,8 @@ Deno.serve(async (req) => {
     if (!matchedBU) {
       throw new Error(`HCSS_BUSINESS_UNIT_CODE='${buCode}' not found in this account's BU list. Available: ${bus.map(b=>`${b.code} (id=${b.id})`).join(', ')}`);
     }
-    // setups/Job endpoint uses businessUnitCode, not UUID
-    const buIdentifier = matchedBU.code || matchedBU.id;
+    // heavyjob endpoints use UUID businessUnitId
+    const buIdentifier = matchedBU.id || matchedBU.code;
 
     // 3. List jobs
     let jobs = await listJobs(token, buIdentifier);
@@ -240,9 +204,15 @@ Deno.serve(async (req) => {
       ok: true,
       status,
       jobsSynced: activeJobs.length,
+      totalJobsFound: jobs.length,
       rowsUpserted: updated,
       errors,
       durationMs: Date.now() - startedAt,
+      debug: {
+        businessUnit: { code: buCode, id: buIdentifier },
+        jobsEndpoint: EP.jobs(buIdentifier),
+        sampleJobs: jobs.slice(0, 5),
+      },
     });
   } catch (err) {
     console.error('HCSS sync failed:', err);
