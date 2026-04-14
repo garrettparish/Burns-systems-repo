@@ -49,19 +49,16 @@ const HCSS_TOKEN_URL   = Deno.env.get('HCSS_TOKEN_URL')   || `${HCSS_API_BASE}/i
 const HCSS_SCOPES      = Deno.env.get('HCSS_SCOPES')      || 'heavyjob:read e360:read e360:timecards:read setups:read setups:write timecards:read';
 const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '14', 10);
 
-// Endpoint paths — confirmed against HCSS developer portal on 2026-04-10.
-// BusinessUnit and Job live under the `setups` product (NOT heavyjob) and use
-// PascalCase singular resource names. Jobs takes businessUnitCode as a
-// query param rather than a path segment.
-// TimeCard / Quantity endpoints under /heavyjob/api/v1/... are still best-guess
-// and will be confirmed once discovery succeeds.
+// Endpoint paths — setups product for BusinessUnit & Job (per HCSS support),
+// heavyjob product for TimeCard & Quantity.
+// PascalCase singular resource names on setups endpoints.
 const EP = {
-  // Equipment360 endpoints — confirmed from HCSS Developer Portal API Reference
-  businessUnits: `${HCSS_API_BASE}/e360/api/v1/businessUnits`,
-  jobs:          (buId: string) => `${HCSS_API_BASE}/e360/api/v1/jobs?businessUnitId=${encodeURIComponent(buId)}`,
+  // Setups endpoints — per HCSS support (requires setups:read + setups:write scopes)
+  businessUnits: `${HCSS_API_BASE}/setups/api/v1/BusinessUnit`,
+  jobs:          (buId: string) => `${HCSS_API_BASE}/setups/api/v1/Job?businessUnitCode=${encodeURIComponent(buId)}`,
   // HeavyJob endpoints for time cards & quantities
-  timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/e360/api/v1/timeCard?jobId=${encodeURIComponent(jobId)}`,
-  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/e360/api/v1/quantity?jobId=${encodeURIComponent(jobId)}`,
+  timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/timeCard?jobId=${encodeURIComponent(jobId)}`,
+  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/quantity?jobId=${encodeURIComponent(jobId)}`,
 };
 
 // -------------------- TYPES --------------------
@@ -151,10 +148,11 @@ Deno.serve(async (req) => {
     if (!matchedBU) {
       throw new Error(`HCSS_BUSINESS_UNIT_CODE='${buCode}' not found in this account's BU list. Available: ${bus.map(b=>`${b.code} (id=${b.id})`).join(', ')}`);
     }
-    const buId = matchedBU.id; // Use UUID for API calls
+    // setups/Job endpoint uses businessUnitCode, not UUID
+    const buIdentifier = matchedBU.code || matchedBU.id;
 
     // 3. List jobs
-    let jobs = await listJobs(token, buId);
+    let jobs = await listJobs(token, buIdentifier);
     if (body.jobNumber) jobs = jobs.filter(j => j.jobCode === body.jobNumber);
     // Active jobs only — skip closed/archived.
     const activeJobs = jobs.filter(j => isJobActive(j));
@@ -168,8 +166,8 @@ Deno.serve(async (req) => {
     for (const job of activeJobs) {
       try {
         const [tcs, qs] = await Promise.all([
-          listTimeCards(token, buId, job.id || job.jobCode, since),
-          listQuantities(token, buId, job.id || job.jobCode, since),
+          listTimeCards(token, buIdentifier, job.id || job.jobCode, since),
+          listQuantities(token, buIdentifier, job.id || job.jobCode, since),
         ]);
         rows.push(...mergeJobRows(job.jobCode, tcs, qs));
       } catch (e) {
