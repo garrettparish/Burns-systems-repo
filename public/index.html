@@ -1666,7 +1666,17 @@ async function hcssSyncDiscover(){
     alert('HCSS Business Units:\n\n'+(bus||'(none found)')+'\n\nNext step:\nsupabase secrets set HCSS_BUSINESS_UNIT_CODE=<code>');
     await hcssLoadSyncStatus();
   }catch(e){
-    alert('Discovery failed: '+e.message);
+    // Show full diagnostic info for debugging HCSS auth issues
+    let msg='Discovery failed: '+e.message;
+    try{
+      const res=await fetch(HCSS_FN_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPABASE_ANON},body:JSON.stringify({discover:true})});
+      const diag=await res.json().catch(()=>null);
+      if(diag&&(diag.requestedScopes||diag.grantedScope)){
+        msg+='\n\nRequested scopes: '+(diag.requestedScopes||'?');
+        msg+='\nGranted scopes: '+(diag.grantedScope||'(none returned)');
+      }
+    }catch(e2){}
+    alert(msg);
   }
 }
 // Load synced actuals into the active job's in-memory Store.

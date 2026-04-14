@@ -81,8 +81,20 @@ interface DetailRow {
   source: string;
 }
 
+// -------------------- CORS --------------------
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, content-type, x-client-info, apikey',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
 // -------------------- MAIN HANDLER --------------------
 Deno.serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: CORS_HEADERS });
+  }
+
   const startedAt = Date.now();
   let body: SyncRequest = {};
   try { body = await req.json(); } catch { /* empty body = cron */ }
@@ -413,9 +425,8 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
+      ...CORS_HEADERS,
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'authorization, content-type',
     },
   });
 }
