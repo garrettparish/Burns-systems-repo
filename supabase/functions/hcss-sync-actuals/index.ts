@@ -46,7 +46,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // -------------------- CONFIG --------------------
 const HCSS_API_BASE    = Deno.env.get('HCSS_API_BASE')    || 'https://api.hcssapps.com';
 const HCSS_TOKEN_URL   = Deno.env.get('HCSS_TOKEN_URL')   || `${HCSS_API_BASE}/identity/connect/token`;
-const HCSS_SCOPES      = Deno.env.get('HCSS_SCOPES')      || 'heavyjob:read setups:read timecards:read';
+const HCSS_SCOPES      = Deno.env.get('HCSS_SCOPES')      || 'heavyjob:read setups:read setups:write timecards:read';
 const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '14', 10);
 
 // Endpoint paths — confirmed against HCSS developer portal on 2026-04-10.

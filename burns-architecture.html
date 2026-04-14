@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Burns System — Architecture Map</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;600&family=Source+Serif+4:wght@300;400;600&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Source Serif 4',Georgia,serif; background:#1a1a1a; color:#e0ddd8; overflow:hidden; height:100vh; }
+
+  /* ── Top bar ── */
+  .topbar { background:#363636; border-bottom:2px solid #3E4D3E; padding:12px 24px; display:flex; align-items:center; gap:16px; z-index:100; position:relative; }
+  .topbar h1 { font-family:Oswald,sans-serif; font-size:20px; font-weight:500; color:#B9AB99; letter-spacing:1px; }
+  .topbar .subtitle { font-size:13px; color:#888; }
+  .legend { display:flex; gap:14px; margin-left:auto; font-size:11px; font-family:Oswald,sans-serif; letter-spacing:.5px; color:#999; }
+  .legend span { display:flex; align-items:center; gap:5px; }
+  .legend .dot { width:10px; height:10px; border-radius:50%; }
+
+  /* ── Canvas area ── */
+  .canvas-wrap { width:100%; height:calc(100vh - 52px); position:relative; overflow:hidden; cursor:grab; }
+  .canvas-wrap.dragging { cursor:grabbing; }
+  .canvas { position:absolute; transform-origin:0 0; transition: transform 0.05s linear; }
+
+  /* ── Nodes ── */
+  .node { position:absolute; border-radius:10px; padding:0; cursor:pointer; transition: box-shadow .2s, transform .2s; user-select:none; }
+  .node:hover { transform:scale(1.03); z-index:50; }
+  .node.highlight { box-shadow:0 0 0 3px #F26722, 0 0 24px rgba(242,103,34,.4) !important; z-index:60; }
+  .node-header { padding:10px 14px 6px; border-radius:10px 10px 0 0; font-family:Oswald,sans-serif; font-size:13px; font-weight:500; letter-spacing:.8px; text-transform:uppercase; display:flex; align-items:center; gap:8px; }
+  .node-header .icon { font-size:16px; }
+  .node-body { padding:6px 14px 10px; font-size:11px; line-height:1.5; color:#ccc; }
+  .node-body .item { padding:2px 0; display:flex; align-items:center; gap:5px; }
+  .node-body .item .bullet { width:5px; height:5px; border-radius:50%; flex-shrink:0; }
+  .node-body .divider { border-top:1px solid rgba(255,255,255,.08); margin:5px 0; }
+  .node-body .tag { display:inline-block; font-family:Oswald,sans-serif; font-size:9px; padding:1px 6px; border-radius:3px; letter-spacing:.5px; margin-right:3px; }
+
+  /* ── Node types ── */
+  .node.data-source { background:#2a3a2a; border:1px solid #3E4D3E; box-shadow:0 2px 12px rgba(62,77,62,.3); }
+  .node.data-source .node-header { background:#3E4D3E; color:#d4e8d4; }
+
+  .node.core-engine { background:#3a2a1a; border:1px solid #F26722; box-shadow:0 2px 12px rgba(242,103,34,.2); }
+  .node.core-engine .node-header { background:rgba(242,103,34,.85); color:#fff; }
+
+  .node.view { background:#2a2a3a; border:1px solid #4A90D9; box-shadow:0 2px 12px rgba(74,144,217,.2); }
+  .node.view .node-header { background:rgba(74,144,217,.85); color:#fff; }
+
+  .node.store { background:#3a3020; border:1px solid #B9AB99; box-shadow:0 2px 16px rgba(185,171,153,.25); }
+  .node.store .node-header { background:#B9AB99; color:#363636; }
+
+  .node.config { background:#2a2a2a; border:1px solid #708090; box-shadow:0 2px 8px rgba(112,128,144,.2); }
+  .node.config .node-header { background:#708090; color:#fff; }
+
+  /* ── SVG connections ── */
+  svg.connections { position:absolute; top:0; left:0; pointer-events:none; overflow:visible; }
+  svg.connections path { fill:none; stroke-width:1.5; opacity:.35; transition: opacity .3s, stroke-width .3s; }
+  svg.connections path.highlight { opacity:.9; stroke-width:3; }
+  svg.connections path.data-flow { stroke:#3E4D3E; stroke-dasharray:6,4; }
+  svg.connections path.read-flow { stroke:#4A90D9; }
+  svg.connections path.engine-flow { stroke:#F26722; }
+  svg.connections path.config-flow { stroke:#708090; stroke-dasharray:3,3; }
+
+  /* ── Detail panel ── */
+  .detail-panel { position:fixed; right:-420px; top:52px; width:400px; height:calc(100vh - 52px); background:#2a2a2a; border-left:2px solid #3E4D3E; transition:right .3s ease; z-index:200; overflow-y:auto; padding:20px; }
+  .detail-panel.open { right:0; }
+  .detail-panel .close-btn { position:absolute; top:12px; right:14px; background:none; border:none; color:#999; font-size:20px; cursor:pointer; }
+  .detail-panel .close-btn:hover { color:#fff; }
+  .detail-panel h2 { font-family:Oswald,sans-serif; font-size:18px; color:#B9AB99; margin-bottom:4px; letter-spacing:.5px; }
+  .detail-panel .type-badge { display:inline-block; font-family:Oswald,sans-serif; font-size:10px; padding:2px 8px; border-radius:3px; letter-spacing:.5px; margin-bottom:12px; }
+  .detail-panel p { font-size:13px; line-height:1.6; color:#bbb; margin-bottom:12px; }
+  .detail-panel h3 { font-family:Oswald,sans-serif; font-size:13px; color:#999; letter-spacing:.5px; margin:16px 0 8px; text-transform:uppercase; }
+  .detail-panel ul { list-style:none; padding:0; }
+  .detail-panel li { font-size:12px; color:#ccc; padding:4px 0; padding-left:14px; position:relative; }
+  .detail-panel li::before { content:'→'; position:absolute; left:0; color:#F26722; }
+  .detail-panel .conn-tag { display:inline-block; font-family:Oswald,sans-serif; font-size:9px; padding:1px 6px; border-radius:3px; margin-right:4px; }
+
+  /* ── Zoom controls ── */
+  .zoom-controls { position:fixed; bottom:20px; left:20px; display:flex; gap:6px; z-index:100; }
+  .zoom-controls button { width:36px; height:36px; border-radius:6px; border:1px solid #555; background:#363636; color:#ccc; font-size:18px; cursor:pointer; font-family:Oswald; }
+  .zoom-controls button:hover { background:#4a4a4a; color:#fff; }
+
+  /* ── Minimap ── */
+  .minimap { position:fixed; bottom:20px; right:20px; width:200px; height:140px; background:#222; border:1px solid #444; border-radius:6px; z-index:100; overflow:hidden; }
+  .minimap .viewport { position:absolute; border:1px solid #F26722; background:rgba(242,103,34,.1); pointer-events:none; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>BURNS SYSTEM — ARCHITECTURE MAP</h1>
+  <span class="subtitle">Interactive module diagram — click nodes for details, drag to pan, scroll to zoom</span>
+  <div class="legend">
+    <span><span class="dot" style="background:#3E4D3E"></span> Data Source</span>
+    <span><span class="dot" style="background:#B9AB99"></span> Store / State</span>
+    <span><span class="dot" style="background:#F26722"></span> Engine</span>
+    <span><span class="dot" style="background:#4A90D9"></span> View</span>
+    <span><span class="dot" style="background:#708090"></span> Config</span>
+  </div>
+</div>
+
+<div class="canvas-wrap" id="canvasWrap">
+  <div class="canvas" id="canvas">
+    <svg class="connections" id="svg" width="3000" height="2200"></svg>
+  </div>
+</div>
+
+<div class="detail-panel" id="detailPanel">
+  <button class="close-btn" onclick="closeDetail()">&times;</button>
+  <div id="detailContent"></div>
+</div>
+
+<div class="zoom-controls">
+  <button onclick="zoomIn()">+</button>
+  <button onclick="zoomOut()">−</button>
+  <button onclick="resetView()" style="font-size:12px">⟲</button>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+// NODE DEFINITIONS
+// ═══════════════════════════════════════════
+const nodes = [
+
+  // ── DATA SOURCES (top row) ──
+  { id:'heavybid', type:'data-source', x:80, y:40, w:200, h:120, icon:'📊',
+    label:'HeavyBid Export', items:['Activities (.xlsx)','Cost codes & quantities','Crew hours & rates','Material/equip/sub costs','Phase codes'],
+    detail:'HeavyBid is the estimating software. Its activity export provides the full cost breakdown that becomes the project budget. Each activity maps to a cost code with labor, equipment, material, and subcontractor cost categories.',
+    connections:['staging'] },
+
+  { id:'heavyjob_summary', type:'data-source', x:320, y:40, w:200, h:110, icon:'📋',
+    label:'HJ Summary Actuals', items:['Cost code totals','Budget vs actual qty','Cumulative costs'],
+    detail:'HeavyJob summary export gives rolled-up actual costs and quantities per cost code. Used for high-level cost tracking when daily detail isn\'t available.',
+    connections:['staging'] },
+
+  { id:'heavyjob_detail', type:'data-source', x:560, y:40, w:200, h:120, icon:'🔍',
+    label:'HJ Daily Detail', items:['Daily crew entries','Foreman + cost code','Qty/hrs/cost per day','Auto-discovers crews'],
+    detail:'The richest data source — daily production records from HeavyJob with foreman, cost code, quantities, hours, and costs. This feeds crew discovery, production tracking, and the planning suggestion engine.',
+    connections:['staging'] },
+
+  { id:'smartsheet', type:'data-source', x:800, y:40, w:200, h:110, icon:'📅',
+    label:'Schedule Import', items:['Smartsheet / MSP export','Tasks, dates, deps','Auto-parses crew names'],
+    detail:'CPM schedule imported from Smartsheet or MS Project. The parser auto-matches crew names against the roster and subcontractor list. Provides the schedule backbone for Gantt, planning, and resource views.',
+    connections:['staging'] },
+
+  { id:'manual', type:'data-source', x:1040, y:40, w:180, h:110, icon:'✏️',
+    label:'Manual Entry', items:['Job creation','Crew plan edits','Sub roster','Pay apps'],
+    detail:'Direct user input — creating jobs, manually assigning crews in the planner, managing the subcontractor roster, entering pay applications, and configuring job settings.',
+    connections:['store'] },
+
+  // ── STAGING ──
+  { id:'staging', type:'core-engine', x:360, y:220, w:240, h:100, icon:'⏳',
+    label:'Staging Area', items:['Review before commit','Filter / edit / delete rows','Type: activities | biditems | schedule | actuals | actualsDetail'],
+    detail:'All file imports land here first for review. The user can filter, edit, or delete rows before confirming. This prevents bad data from entering the system. Staging handles 5 import types and auto-detects column headers.',
+    connections:['store'] },
+
+  // ── CENTRAL STORE ──
+  { id:'store', type:'store', x:340, y:400, w:560, h:180, icon:'🗄️',
+    label:'Central Store', items:[
+      '{tag:JOB} jobs{} — meta, activities, bidItems, schedule, actuals, actualsDetail, taskMap, baseline, eva, payApps, cashFlowConfig, sovItems',
+      '{tag:CREW} crews{} — foreman, trades, availability',
+      '{tag:CREW} crewHistory[] — daily work records from HJ',
+      '{tag:CREW} crewPlan{} — "crewId|date" → job assignment',
+      '{tag:CREW} crewNameMap{} — display name overrides',
+      '{tag:SUB} subs{} — global subcontractor roster',
+      '{tag:SYS} staging{} — import buffer',
+      '{tag:SYS} _pinAuth{} — margin unlock state'
+    ],
+    detail:'The single source of truth. All data flows through here. Persisted to localStorage (jobs, crews, crewPlan, crewHistory, subs). The Store object is reactive — views re-render when data changes. Each job contains its own activities, bid items, schedule, actuals, and configuration.',
+    connections:['discovery','planning_engine','eva_engine','production_engine','discipline_engine'] },
+
+  // ── PROCESSING ENGINES (middle layer) ──
+  { id:'discovery', type:'core-engine', x:60, y:660, w:200, h:110, icon:'🔎',
+    label:'Crew Discovery', items:['discoverCrews()','Auto-creates from HJ detail','Builds _histIndex','_histByCrewJob lookup'],
+    detail:'When HJ daily detail is imported, this engine scans foreman names and auto-creates crew entries in the roster. It also builds performance indexes (_histIndex, _histByCrewJob) for fast crew history lookups used by the planning engine.',
+    connections:['planning_engine','crews_view'] },
+
+  { id:'planning_engine', type:'core-engine', x:300, y:660, w:260, h:140, icon:'🧠',
+    label:'Planning Engine', items:[
+      'getEffectivePlanCell() — 4-tier hierarchy:',
+      '  1. Confirmed plan (gospel)',
+      '  2. History (past HJ data)',
+      '  3. Schedule-assigned (crew picker)',
+      '  4. Conservative suggestion (≤3wk)',
+      'suggestCrewAssignment() — confidence scores',
+      '_cellCache — render memoization'
+    ],
+    detail:'The brain of the crew planning system. Uses a strict hierarchy: confirmed manual plan entries are gospel, then past HJ history for dates already worked, then schedule-based assignments from the crew picker, and finally conservative suggestions limited to 3 weeks out. Suggestions require active schedule tasks and recent continuity signals. Blank cells are preferred over bad guesses.',
+    connections:['planning_view','global_view','resources_view'] },
+
+  { id:'eva_engine', type:'core-engine', x:600, y:660, w:220, h:120, icon:'📈',
+    label:'EVA Engine', items:['computeEVA() — BAC/EV/AC/PV','CPI, SPI, CV, SV, EAC, TCPI','evaBuildBACMap()','evaMaybeSnapshot() — weekly S-curve','3 EAC methods: CPI/simple/composite'],
+    detail:'Earned Value Analysis engine. Computes standard EVA metrics from actuals and budget data. BAC comes from activities, AC from actuals, EV from percent complete × budget. Supports three EAC forecasting methods. Auto-snapshots weekly for S-curve trend analysis.',
+    connections:['eva_view','forecast_view','dashboard'] },
+
+  { id:'production_engine', type:'core-engine', x:860, y:660, w:200, h:100, icon:'⚙️',
+    label:'Production Engine', items:['computeProductionRates()','Daily output by cost code','Burn rate & days remaining','rollupActualsDetail()'],
+    detail:'Analyzes daily production data to compute output rates per cost code. Calculates burn rates, remaining quantities, and estimated days to completion. Feeds the Production Tracker view with actionable metrics.',
+    connections:['production_view'] },
+
+  { id:'discipline_engine', type:'core-engine', x:1100, y:660, w:200, h:110, icon:'🏷️',
+    label:'Discipline Engine', items:['getDiscipline(costCode)','getTaskDiscipline(taskName)','getBidItemDiscipline()','9 built-in + custom disciplines','Trade abbreviations & colors'],
+    detail:'Maps cost codes, task names, and bid items to construction disciplines (Earthwork, Storm, Paving, etc.). Uses cost code prefixes, keyword matching, and manual overrides. Provides consistent color coding across all views. Supports custom discipline definitions per job.',
+    connections:['global_view','schedule_view','biditems_view','jcs_view','discipline_editor'] },
+
+  // ── VIEWS (bottom layer) ──
+
+  // Global
+  { id:'global_view', type:'view', x:20, y:900, w:220, h:150, icon:'🌐',
+    label:'Global View', items:['Multi-job timeline (by job or discipline)','Job summary table (financials)','Company-wide cash flow','Global trade schedule','16-week resource outlook','Sub overlap detection'],
+    detail:'The bird\'s-eye view across ALL jobs. Shows timelines, financials, trade schedules, and the 16-week crew/sub resource outlook with overlap detection. Pulls from every job\'s schedule, actuals, and the shared planning engine. Uses the same color palette as the Planning view for consistency.',
+    connections:[] },
+
+  // Planning
+  { id:'planning_view', type:'view', x:270, y:900, w:220, h:140, icon:'📋',
+    label:'Planning View', items:['Weekly crew planner (5-day grid)','Click-to-assign with suggestions','Confidence scores & reasoning','16-week resource outlook','Shared _PLAN_PALETTE colors'],
+    detail:'The crew assignment workspace. Shows a 5-day grid per crew with color-coded job assignments. Click any cell to see suggestions with confidence scores and reasoning. Manual assignments override all suggestions. Includes the 16-week forward-looking resource view that\'s also shown in Global View.',
+    connections:[] },
+
+  // Schedule
+  { id:'schedule_view', type:'view', x:520, y:900, w:220, h:150, icon:'📅',
+    label:'Master Schedule', items:['Gantt chart with today line','Baseline variance tracking','Multi-crew picker per task','Quick-assign mode','Sub assignment','Task dependencies (topoSort)'],
+    detail:'The CPM schedule management view. Features an interactive Gantt chart with baseline comparison and today marker. The crew picker supports multi-crew and subcontractor assignment per task. Quick-assign mode enables rapid crew application across multiple tasks. Schedule data feeds into the planning engine for resource projections.',
+    connections:[] },
+
+  // Dashboard
+  { id:'dashboard', type:'view', x:770, y:900, w:200, h:130, icon:'🏠',
+    label:'Dashboard', items:['Executive summary','Contract / cost / profit','Hours & schedule status','Alerts & status checks','Quick navigation cards'],
+    detail:'The job-level overview showing key financial metrics (contract amount, costs to date, projected profit), schedule status, and alert flags. Serves as the entry point for each job with quick navigation to detailed views.',
+    connections:[] },
+
+  // EVA
+  { id:'eva_view', type:'view', x:20, y:1110, w:200, h:130, icon:'📈',
+    label:'EVA View', items:['Full EVA dashboard','% complete overrides','S-curve trend (snapshots)','EAC method selector','Cost code breakdown'],
+    detail:'Earned Value Analysis dashboard showing BAC, EV, AC, PV with derived metrics (CPI, SPI, CV, SV, EAC, ETC, VAC, TCPI). Supports per-cost-code percent complete overrides and three EAC forecasting methods. Weekly snapshots power the S-curve trend chart.',
+    connections:[] },
+
+  // Production
+  { id:'production_view', type:'view', x:250, y:1110, w:220, h:140, icon:'🏗️',
+    label:'Production Tracker', items:['KPIs: budget/actual/variance','Cost code breakdown table','Over-budget highlighting (>10%)','Drill-down to daily entries','Burn rate & days remaining'],
+    detail:'Tracks production performance per cost code. Shows budget vs actual quantities and costs with variance highlighting (red for >10% over budget). Each cost code row expands to show daily entries from HJ detail. Computes daily burn rates and estimates remaining days to completion.',
+    connections:[] },
+
+  // Forecast
+  { id:'forecast_view', type:'view', x:500, y:1110, w:180, h:100, icon:'🔮',
+    label:'Forecast', items:['Cost projection','Schedule projection','EVA-based trending'],
+    detail:'Forward-looking cost and schedule projections based on EVA metrics and current burn rates. Uses CPI/SPI trends to project final cost and completion date.',
+    connections:[] },
+
+  // Bid Items
+  { id:'biditems_view', type:'view', x:710, y:1110, w:190, h:110, icon:'💰',
+    label:'Bid Items', items:['Cost breakdown by bid item','Discipline roll-up','Change order flagging','SOV grouping'],
+    detail:'Displays the bid item structure with full cost breakdown across labor, equipment, materials, and subs. Groups by discipline with roll-up totals. Supports change order flagging and links to the SOV builder for payment tiers.',
+    connections:[] },
+
+  // JCS
+  { id:'jcs_view', type:'view', x:930, y:1110, w:190, h:100, icon:'📊',
+    label:'Job Cost Schedule', items:['Schedule ↔ cost alignment','Task-to-bid-item mapping','Cost per schedule task'],
+    detail:'Bridges the schedule and budget by mapping CPM tasks to bid items and cost codes via the taskMap. Shows cost loading per schedule task for resource-loaded scheduling and cash flow alignment.',
+    connections:[] },
+
+  // Cash Flow
+  { id:'cashflow_view', type:'view', x:1150, y:1110, w:190, h:110, icon:'💵',
+    label:'Cash Flow', items:['Monthly in/out projection','SOV-based draw schedule','Payment terms config','Date range filtering'],
+    detail:'Projects monthly cash inflows and outflows based on the SOV groupings, payment terms, and schedule. Configurable date range and billing timing. Uses bid item costs distributed across the schedule timeline.',
+    connections:[] },
+
+  // Pay Apps
+  { id:'payapps_view', type:'view', x:1150, y:900, w:180, h:100, icon:'🧾',
+    label:'Pay Apps', items:['Payment application history','Invoice preparation','Progress billing'],
+    detail:'Manages payment applications (draw requests) for the project. Tracks billing progress against the contract and SOV items.',
+    connections:[] },
+
+  // ── CONFIG NODES ──
+  { id:'crews_view', type:'config', x:1000, y:900, w:190, h:120, icon:'👷',
+    label:'Crews & Subs', items:['Crew roster management','Display name mapping','Sub roster (name, trade)','Active task counts'],
+    detail:'Configuration view for managing the crew roster (discovered from HJ + manual), display name overrides, and the global subcontractor list. Subs can be assigned to schedule tasks and appear in the 16-week resource outlook with overlap detection.',
+    connections:[] },
+
+  { id:'discipline_editor', type:'config', x:1100, y:800, w:180, h:90, icon:'🎨',
+    label:'Discipline Editor', items:['Custom disciplines','Bid item overrides','Color assignments'],
+    detail:'Allows defining custom discipline categories and overriding the auto-detected discipline for individual bid items. Custom disciplines inherit color coding throughout all views.',
+    connections:[] },
+
+  { id:'setup_view', type:'config', x:1040, y:190, w:180, h:100, icon:'⚙️',
+    label:'Setup / Import', items:['File upload interface','Job creation','PIN configuration','Import type selection'],
+    detail:'The data import hub. Upload HeavyBid, HeavyJob, and schedule files here. Also handles job creation, PIN setup for margin protection, and general configuration.',
+    connections:['staging'] },
+];
+
+// ═══════════════════════════════════════════
+// CONNECTION DEFINITIONS
+// ═══════════════════════════════════════════
+const connections = [
+  // Data sources → Staging
+  { from:'heavybid', to:'staging', type:'data-flow', label:'activities' },
+  { from:'heavyjob_summary', to:'staging', type:'data-flow', label:'summary actuals' },
+  { from:'heavyjob_detail', to:'staging', type:'data-flow', label:'daily detail' },
+  { from:'smartsheet', to:'staging', type:'data-flow', label:'schedule' },
+  { from:'setup_view', to:'staging', type:'config-flow', label:'import trigger' },
+
+  // Staging → Store
+  { from:'staging', to:'store', type:'engine-flow', label:'confirmStaging()' },
+
+  // Manual → Store
+  { from:'manual', to:'store', type:'data-flow', label:'direct edits' },
+
+  // Store → Engines
+  { from:'store', to:'discovery', type:'engine-flow', label:'actualsDetail' },
+  { from:'store', to:'planning_engine', type:'engine-flow', label:'crews + history + schedule + plan' },
+  { from:'store', to:'eva_engine', type:'engine-flow', label:'actuals + activities' },
+  { from:'store', to:'production_engine', type:'engine-flow', label:'actualsDetail + budget' },
+  { from:'store', to:'discipline_engine', type:'engine-flow', label:'cost codes + tasks' },
+
+  // Discovery → Planning
+  { from:'discovery', to:'planning_engine', type:'engine-flow', label:'crew roster + indexes' },
+
+  // Engines → Views
+  { from:'planning_engine', to:'planning_view', type:'read-flow', label:'effective plan cells' },
+  { from:'planning_engine', to:'global_view', type:'read-flow', label:'16-week resource data' },
+  { from:'planning_engine', to:'global_view', type:'read-flow', label:'crew utilization (resources)' },
+  { from:'eva_engine', to:'eva_view', type:'read-flow', label:'EVA metrics' },
+  { from:'eva_engine', to:'forecast_view', type:'read-flow', label:'EAC projections' },
+  { from:'eva_engine', to:'dashboard', type:'read-flow', label:'% complete' },
+  { from:'production_engine', to:'production_view', type:'read-flow', label:'rates + KPIs' },
+  { from:'discipline_engine', to:'global_view', type:'read-flow', label:'trade colors' },
+  { from:'discipline_engine', to:'schedule_view', type:'read-flow', label:'task disciplines' },
+  { from:'discipline_engine', to:'biditems_view', type:'read-flow', label:'bid item disciplines' },
+  { from:'discipline_engine', to:'jcs_view', type:'read-flow', label:'cost code mapping' },
+
+  // Store direct → Views
+  { from:'store', to:'dashboard', type:'read-flow', label:'meta + bidItems' },
+  { from:'store', to:'schedule_view', type:'read-flow', label:'schedule + baseline' },
+  { from:'store', to:'biditems_view', type:'read-flow', label:'bidItems + activities' },
+  { from:'store', to:'cashflow_view', type:'read-flow', label:'sovItems + config' },
+  { from:'store', to:'payapps_view', type:'read-flow', label:'payApps' },
+  { from:'store', to:'jcs_view', type:'read-flow', label:'taskMap + schedule' },
+  { from:'store', to:'global_view', type:'read-flow', label:'all jobs' },
+  { from:'store', to:'crews_view', type:'read-flow', label:'crews + subs' },
+
+  // Cross-view
+  { from:'discovery', to:'crews_view', type:'engine-flow', label:'auto-discovered crews' },
+  { from:'discipline_engine', to:'discipline_editor', type:'config-flow', label:'custom overrides' },
+
+  // Schedule feeds planning
+  { from:'schedule_view', to:'planning_engine', type:'engine-flow', label:'crew assignments (task.crews)' },
+];
+
+// ═══════════════════════════════════════════
+// RENDERING
+// ═══════════════════════════════════════════
+const canvas = document.getElementById('canvas');
+const svg = document.getElementById('svg');
+const nodeMap = {};
+
+// Render nodes
+nodes.forEach(n => {
+  nodeMap[n.id] = n;
+  const el = document.createElement('div');
+  el.className = `node ${n.type}`;
+  el.id = `node-${n.id}`;
+  el.style.cssText = `left:${n.x}px;top:${n.y}px;width:${n.w}px;`;
+
+  let itemsHtml = '';
+  n.items.forEach(item => {
+    if (item.startsWith('{tag:')) {
+      const tagMatch = item.match(/\{tag:(\w+)\}\s*(.*)/);
+      const tagColors = { JOB:'#3E4D3E', CREW:'#4A90D9', SUB:'#F26722', SYS:'#708090' };
+      itemsHtml += `<div class="item"><span class="tag" style="background:${tagColors[tagMatch[1]]||'#555'};color:#fff">${tagMatch[1]}</span>${tagMatch[2]}</div>`;
+    } else if (item.startsWith('  ')) {
+      itemsHtml += `<div class="item" style="padding-left:16px;color:#999;font-size:10px">${item.trim()}</div>`;
+    } else {
+      itemsHtml += `<div class="item"><span class="bullet" style="background:${n.type==='data-source'?'#3E4D3E':n.type==='core-engine'?'#F26722':n.type==='view'?'#4A90D9':n.type==='store'?'#B9AB99':'#708090'}"></span>${item}</div>`;
+    }
+  });
+
+  el.innerHTML = `<div class="node-header"><span class="icon">${n.icon}</span>${n.label}</div><div class="node-body">${itemsHtml}</div>`;
+  el.addEventListener('click', () => showDetail(n));
+  canvas.appendChild(el);
+
+  // Measure actual rendered height
+  requestAnimationFrame(() => { n.h = el.offsetHeight; });
+});
+
+// Draw connections after layout
+setTimeout(() => {
+  drawConnections();
+}, 100);
+
+function getNodeCenter(id) {
+  const n = nodeMap[id];
+  const el = document.getElementById(`node-${id}`);
+  const h = el ? el.offsetHeight : (n.h || 100);
+  return { x: n.x + n.w/2, y: n.y + h/2 };
+}
+
+function getNodeEdge(fromId, toId) {
+  const f = nodeMap[fromId], t = nodeMap[toId];
+  const fEl = document.getElementById(`node-${fromId}`);
+  const tEl = document.getElementById(`node-${toId}`);
+  const fh = fEl ? fEl.offsetHeight : (f.h||100);
+  const th = tEl ? tEl.offsetHeight : (t.h||100);
+  const fcx = f.x + f.w/2, fcy = f.y + fh/2;
+  const tcx = t.x + t.w/2, tcy = t.y + th/2;
+  const dx = tcx - fcx, dy = tcy - fcy;
+
+  let fx, fy, tx, ty;
+  // From node: exit from closest edge
+  if (Math.abs(dy) * f.w > Math.abs(dx) * fh) {
+    // vertical dominant
+    if (dy > 0) { fx = fcx; fy = f.y + fh; } else { fx = fcx; fy = f.y; }
+  } else {
+    if (dx > 0) { fx = f.x + f.w; fy = fcy; } else { fx = f.x; fy = fcy; }
+  }
+  // To node: enter from closest edge
+  if (Math.abs(dy) * t.w > Math.abs(dx) * th) {
+    if (dy > 0) { tx = tcx; ty = t.y; } else { tx = tcx; ty = t.y + th; }
+  } else {
+    if (dx > 0) { tx = t.x; ty = tcy; } else { tx = t.x + t.w; ty = tcy; }
+  }
+  return { fx, fy, tx, ty };
+}
+
+function drawConnections() {
+  let paths = '';
+  connections.forEach((c, i) => {
+    if (!nodeMap[c.from] || !nodeMap[c.to]) return;
+    const { fx, fy, tx, ty } = getNodeEdge(c.from, c.to);
+    const mx = (fx+tx)/2, my = (fy+ty)/2;
+    // Cubic bezier
+    const cpx1 = fx, cpy1 = fy + (ty-fy)*0.4;
+    const cpx2 = tx, cpy2 = ty - (ty-fy)*0.4;
+    const d = `M${fx},${fy} C${cpx1},${cpy1} ${cpx2},${cpy2} ${tx},${ty}`;
+    paths += `<path d="${d}" class="${c.type}" data-from="${c.from}" data-to="${c.to}" id="conn-${i}"/>`;
+  });
+  svg.innerHTML = paths;
+}
+
+// ═══════════════════════════════════════════
+// DETAIL PANEL
+// ═══════════════════════════════════════════
+function showDetail(n) {
+  const panel = document.getElementById('detailPanel');
+  const content = document.getElementById('detailContent');
+
+  const typeColors = { 'data-source':'#3E4D3E', 'core-engine':'#F26722', 'view':'#4A90D9', 'store':'#B9AB99', 'config':'#708090' };
+  const typeLabels = { 'data-source':'Data Source', 'core-engine':'Processing Engine', 'view':'View / UI', 'store':'Central Store', 'config':'Configuration' };
+
+  // Find connections involving this node
+  const incoming = connections.filter(c => c.to === n.id);
+  const outgoing = connections.filter(c => c.from === n.id);
+
+  let html = `<h2>${n.icon} ${n.label}</h2>`;
+  html += `<div class="type-badge" style="background:${typeColors[n.type]};color:#fff">${typeLabels[n.type]}</div>`;
+  html += `<p>${n.detail}</p>`;
+
+  if (incoming.length) {
+    html += `<h3>Receives Data From</h3><ul>`;
+    incoming.forEach(c => {
+      const src = nodeMap[c.from];
+      html += `<li><span class="conn-tag" style="background:${typeColors[src.type]};color:#fff">${src.label}</span> ${c.label}</li>`;
+    });
+    html += `</ul>`;
+  }
+
+  if (outgoing.length) {
+    html += `<h3>Sends Data To</h3><ul>`;
+    outgoing.forEach(c => {
+      const tgt = nodeMap[c.to];
+      html += `<li><span class="conn-tag" style="background:${typeColors[tgt.type]};color:#fff">${tgt.label}</span> ${c.label}</li>`;
+    });
+    html += `</ul>`;
+  }
+
+  content.innerHTML = html;
+  panel.classList.add('open');
+
+  // Highlight connected nodes and paths
+  document.querySelectorAll('.node.highlight').forEach(el => el.classList.remove('highlight'));
+  document.querySelectorAll('path.highlight').forEach(el => el.classList.remove('highlight'));
+
+  document.getElementById(`node-${n.id}`).classList.add('highlight');
+  connections.forEach((c, i) => {
+    if (c.from === n.id || c.to === n.id) {
+      const pathEl = document.getElementById(`conn-${i}`);
+      if (pathEl) pathEl.classList.add('highlight');
+      const otherId = c.from === n.id ? c.to : c.from;
+      const otherEl = document.getElementById(`node-${otherId}`);
+      if (otherEl) otherEl.classList.add('highlight');
+    }
+  });
+}
+
+function closeDetail() {
+  document.getElementById('detailPanel').classList.remove('open');
+  document.querySelectorAll('.node.highlight').forEach(el => el.classList.remove('highlight'));
+  document.querySelectorAll('path.highlight').forEach(el => el.classList.remove('highlight'));
+}
+
+// ═══════════════════════════════════════════
+// PAN & ZOOM
+// ═══════════════════════════════════════════
+let scale = 1, panX = 0, panY = 0;
+let isDragging = false, dragStartX, dragStartY;
+
+const wrap = document.getElementById('canvasWrap');
+
+function applyTransform() {
+  canvas.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`;
+}
+
+wrap.addEventListener('mousedown', e => {
+  if (e.target.closest('.node')) return;
+  isDragging = true;
+  wrap.classList.add('dragging');
+  dragStartX = e.clientX - panX;
+  dragStartY = e.clientY - panY;
+});
+window.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  panX = e.clientX - dragStartX;
+  panY = e.clientY - dragStartY;
+  applyTransform();
+});
+window.addEventListener('mouseup', () => { isDragging = false; wrap.classList.remove('dragging'); });
+
+wrap.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = wrap.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const oldScale = scale;
+  scale *= e.deltaY < 0 ? 1.08 : 0.92;
+  scale = Math.max(0.3, Math.min(3, scale));
+  panX = mx - (mx - panX) * (scale / oldScale);
+  panY = my - (my - panY) * (scale / oldScale);
+  applyTransform();
+}, { passive: false });
+
+function zoomIn() { scale = Math.min(3, scale * 1.2); applyTransform(); }
+function zoomOut() { scale = Math.max(0.3, scale * 0.8); applyTransform(); }
+function resetView() { scale = 1; panX = 0; panY = 0; applyTransform(); }
+
+// Initial slight zoom-out to fit
+scale = 0.85; panX = 20; panY = 0;
+applyTransform();
+</script>
+</body>
+</html>
