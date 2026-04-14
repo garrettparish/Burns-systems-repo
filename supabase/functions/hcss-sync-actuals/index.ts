@@ -126,21 +126,55 @@ Deno.serve(async (req) => {
 
     // 2. Business unit — env override or discover.
     const buEnv = Deno.env.get('HCSS_BUSINESS_UNIT_CODE');
-    const bus = await listBusinessUnits(token);
+
     if (body.discover || !buEnv) {
-      // Discovery mode: return the list without writing actuals.
-      await logRun('success', {
-        details: { mode: 'discover', businessUnits: bus, lookbackDays: lookback },
-      });
+      // Discovery mode: try ALL possible product paths to find which one works
+      const BU_CANDIDATES = [
+        { label: 'setups/BusinessUnit',        url: `${HCSS_API_BASE}/setups/api/v1/BusinessUnit` },
+        { label: 'setups/businessUnits',        url: `${HCSS_API_BASE}/setups/api/v1/businessUnits` },
+        { label: 'setups/businessunit',         url: `${HCSS_API_BASE}/setups/api/v1/businessunit` },
+        { label: 'e360/businessUnits',          url: `${HCSS_API_BASE}/e360/api/v1/businessUnits` },
+        { label: 'e360/BusinessUnit',           url: `${HCSS_API_BASE}/e360/api/v1/BusinessUnit` },
+        { label: 'heavyjob/businessUnits',      url: `${HCSS_API_BASE}/heavyjob/api/v1/businessUnits` },
+        { label: 'heavyjob/BusinessUnit',       url: `${HCSS_API_BASE}/heavyjob/api/v1/BusinessUnit` },
+        { label: 'heavybid/businessUnits',      url: `${HCSS_API_BASE}/heavybid/api/v1/businessUnits` },
+        { label: 'heavybid/BusinessUnit',       url: `${HCSS_API_BASE}/heavybid/api/v1/BusinessUnit` },
+      ];
+
+      const results: { label: string; status: number; body: string; headers: string }[] = [];
+      for (const c of BU_CANDIDATES) {
+        try {
+          const resp = await fetch(c.url, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+          });
+          const txt = await resp.text();
+          results.push({
+            label: c.label,
+            status: resp.status,
+            body: txt.substring(0, 500),
+            headers: [...resp.headers.entries()].map(([k,v]) => `${k}: ${v}`).join(', '),
+          });
+        } catch (e) {
+          results.push({ label: c.label, status: 0, body: String(e), headers: '' });
+        }
+      }
+
+      // Find the first 200-level response
+      const winner = results.find(r => r.status >= 200 && r.status < 300);
       return json({
-        ok: true,
-        mode: 'discover',
-        businessUnits: bus,
-        message: buEnv
-          ? `Discovery requested. Env has HCSS_BUSINESS_UNIT_CODE=${buEnv}`
-          : 'HCSS_BUSINESS_UNIT_CODE is not set. Pick a code from businessUnits[] and set it via: supabase secrets set HCSS_BUSINESS_UNIT_CODE=<code>',
+        ok: !!winner,
+        mode: 'discover-scan',
+        message: winner
+          ? `SUCCESS on ${winner.label}. Update EP.businessUnits to use this path.`
+          : 'All candidate endpoints failed. See results for details.',
+        winner: winner || null,
+        results,
+        requestedScopes: HCSS_SCOPES,
       });
     }
+
+    // Normal mode — use configured EP
+    const bus = await listBusinessUnits(token);
 
     const buCode = buEnv;
     // Match by code OR by id (env can store either)
