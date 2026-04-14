@@ -46,7 +46,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // -------------------- CONFIG --------------------
 const HCSS_API_BASE    = Deno.env.get('HCSS_API_BASE')    || 'https://api.hcssapps.com';
 const HCSS_TOKEN_URL   = Deno.env.get('HCSS_TOKEN_URL')   || `${HCSS_API_BASE}/identity/connect/token`;
-const HCSS_SCOPES      = Deno.env.get('HCSS_SCOPES')      || 'heavyjob:read setups:read setups:write timecards:read';
+const HCSS_SCOPES      = Deno.env.get('HCSS_SCOPES')      || 'heavyjob:read e360:read e360:timecards:read setups:read setups:write timecards:read';
 const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '14', 10);
 
 // Endpoint paths — confirmed against HCSS developer portal on 2026-04-10.
@@ -56,10 +56,12 @@ const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '14', 10
 // TimeCard / Quantity endpoints under /heavyjob/api/v1/... are still best-guess
 // and will be confirmed once discovery succeeds.
 const EP = {
-  businessUnits: `${HCSS_API_BASE}/setups/api/v1/BusinessUnit`,
-  jobs:          (buCode: string) => `${HCSS_API_BASE}/setups/api/v1/Job?businessUnitCode=${encodeURIComponent(buCode)}`,
-  timeCards:     (_buCode: string, jobCode: string) => `${HCSS_API_BASE}/heavyjob/api/v1/TimeCard?jobCode=${encodeURIComponent(jobCode)}`,
-  quantities:    (_buCode: string, jobCode: string) => `${HCSS_API_BASE}/heavyjob/api/v1/Quantity?jobCode=${encodeURIComponent(jobCode)}`,
+  // Equipment360 endpoints — confirmed from HCSS Developer Portal API Reference
+  businessUnits: `${HCSS_API_BASE}/e360/api/v1/businessUnits`,
+  jobs:          (buId: string) => `${HCSS_API_BASE}/e360/api/v1/jobs?businessUnitId=${encodeURIComponent(buId)}`,
+  // HeavyJob endpoints for time cards & quantities
+  timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/e360/api/v1/timeCard?jobId=${encodeURIComponent(jobId)}`,
+  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/e360/api/v1/quantity?jobId=${encodeURIComponent(jobId)}`,
 };
 
 // -------------------- TYPES --------------------
@@ -144,12 +146,15 @@ Deno.serve(async (req) => {
     }
 
     const buCode = buEnv;
-    if (!bus.some(b => b.code === buCode)) {
-      throw new Error(`HCSS_BUSINESS_UNIT_CODE='${buCode}' not found in this account's BU list. Available: ${bus.map(b=>b.code).join(', ')}`);
+    // Match by code OR by id (env can store either)
+    const matchedBU = bus.find(b => b.code === buCode || b.id === buCode);
+    if (!matchedBU) {
+      throw new Error(`HCSS_BUSINESS_UNIT_CODE='${buCode}' not found in this account's BU list. Available: ${bus.map(b=>`${b.code} (id=${b.id})`).join(', ')}`);
     }
+    const buId = matchedBU.id; // Use UUID for API calls
 
     // 3. List jobs
-    let jobs = await listJobs(token, buCode);
+    let jobs = await listJobs(token, buId);
     if (body.jobNumber) jobs = jobs.filter(j => j.jobCode === body.jobNumber);
     // Active jobs only — skip closed/archived.
     const activeJobs = jobs.filter(j => isJobActive(j));
@@ -163,8 +168,8 @@ Deno.serve(async (req) => {
     for (const job of activeJobs) {
       try {
         const [tcs, qs] = await Promise.all([
-          listTimeCards(token, buCode, job.jobCode, since),
-          listQuantities(token, buCode, job.jobCode, since),
+          listTimeCards(token, buId, job.id || job.jobCode, since),
+          listQuantities(token, buId, job.id || job.jobCode, since),
         ]);
         rows.push(...mergeJobRows(job.jobCode, tcs, qs));
       } catch (e) {
@@ -295,9 +300,10 @@ async function listBusinessUnits(token: string) {
   })).filter(b => b.code);
 }
 
-async function listJobs(token: string, buCode: string) {
-  const data = await hcssGetPaginated(EP.jobs(buCode), token);
+async function listJobs(token: string, buId: string) {
+  const data = await hcssGetPaginated(EP.jobs(buId), token);
   return data.map((j: any) => ({
+    id:      String(j.id || ''),
     jobCode: String(j.jobCode || j.code || j.number || '').trim(),
     name:    String(j.name || j.description || ''),
     status:  String(j.status || j.jobStatus || ''),
