@@ -140,6 +140,53 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Endpoint scan mode — try multiple paths for timecard/quantity endpoints
+    if (body.scanEndpoints) {
+      const matchedBU = bus.find(b => b.code === buEnv || b.id === buEnv);
+      const buId = matchedBU?.id || buEnv;
+      // Get first job to use as test
+      const testJobs = await listJobs(token, buId);
+      const testJobId = testJobs[0]?.id || '';
+      const testJobCode = testJobs[0]?.jobCode || '';
+
+      const TC_CANDIDATES = [
+        { label: 'heavyjob/timeCards',       url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${testJobId}&count=1` },
+        { label: 'heavyjob/timecards',       url: `${HCSS_API_BASE}/heavyjob/api/v1/timecards?jobId=${testJobId}&count=1` },
+        { label: 'heavyjob/timeCard',        url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCard?jobId=${testJobId}&count=1` },
+        { label: 'e360/timeCards',           url: `${HCSS_API_BASE}/e360/api/v1/timeCards?count=1` },
+        { label: 'e360/timecards',           url: `${HCSS_API_BASE}/e360/api/v1/timecards?count=1` },
+        { label: 'heavyjob/dailyTimecards',  url: `${HCSS_API_BASE}/heavyjob/api/v1/dailyTimecards?jobId=${testJobId}` },
+        { label: 'heavyjob/costCodes',       url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${testJobId}` },
+        { label: 'heavyjob/jobCosts',        url: `${HCSS_API_BASE}/heavyjob/api/v1/jobCosts?jobId=${testJobId}` },
+        { label: 'heavyjob/quantities',      url: `${HCSS_API_BASE}/heavyjob/api/v1/quantities?jobId=${testJobId}&count=1` },
+        { label: 'heavyjob/quantity',        url: `${HCSS_API_BASE}/heavyjob/api/v1/quantity?jobId=${testJobId}&count=1` },
+        { label: 'heavyjob/productionTotals',url: `${HCSS_API_BASE}/heavyjob/api/v1/productionTotals?jobId=${testJobId}` },
+        { label: 'heavyjob/costData',        url: `${HCSS_API_BASE}/heavyjob/api/v1/costData?jobId=${testJobId}` },
+        { label: 'heavyjob/jobCostSummary',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobCostSummary?jobId=${testJobId}` },
+      ];
+
+      const results: { label: string; status: number; body: string }[] = [];
+      for (const c of TC_CANDIDATES) {
+        try {
+          const resp = await fetch(c.url, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+          });
+          const txt = await resp.text();
+          results.push({ label: c.label, status: resp.status, body: txt.substring(0, 300) });
+        } catch (e) {
+          results.push({ label: c.label, status: 0, body: String(e) });
+        }
+      }
+
+      return json({
+        ok: true,
+        mode: 'endpoint-scan',
+        testJob: { id: testJobId, code: testJobCode },
+        totalJobs: testJobs.length,
+        results,
+      });
+    }
+
     const buCode = buEnv;
     // Match by code OR by id (env can store either)
     const matchedBU = bus.find(b => b.code === buCode || b.id === buCode);
