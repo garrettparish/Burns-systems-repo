@@ -284,6 +284,7 @@ tr:hover{background:#FAF8F5}
   <button class="sub-tab" data-sub="forecast" onclick="navSub('financials','forecast')">Forecast</button>
   <button class="sub-tab" data-sub="payapps" onclick="navSub('financials','payapps')">Pay Apps</button>
   <button class="sub-tab" data-sub="cashflow" onclick="navSub('financials','cashflow')">Cash Flow</button>
+  <button class="sub-tab" data-sub="jobcost" onclick="navSub('financials','jobcost')">Job Cost</button>
 </div>
 <div class="sub-nav" id="subNav-production">
   <button class="sub-tab" data-sub="planning" onclick="navSub('production','planning')">Planning</button>
@@ -362,6 +363,11 @@ tr:hover{background:#FAF8F5}
   <!-- Sub-panel: Cash Flow -->
   <div id="sub-cashflow" class="sub-panel">
     <div id="jcsCashFlowContent"></div>
+  </div>
+
+  <!-- Sub-panel: Job Cost (Spectrum Integration) -->
+  <div id="sub-jobcost" class="sub-panel">
+    <div id="jobCostContent"></div>
   </div>
 
   <!-- Sub-panel: Project Set Up -->
@@ -1536,6 +1542,68 @@ const SUPABASE_URL = 'https://sxzvlazmkxnbsoayhuln.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4enZsYXpta3huYnNvYXlodWxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMjIxNjIsImV4cCI6MjA5MDc5ODE2Mn0.0RhuM1CkdqZi56zWDANcdM6Zfe2Hge_1yXUyvS-9yhg';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
+// ═══════════════════════════════════════════
+// SPECTRUM — Burns Finance Supabase (read-only)
+// ═══════════════════════════════════════════
+const SPECTRUM_URL = 'https://bodcpnytvonucefnbmyz.supabase.co';
+const SPECTRUM_KEY = 'sb_publishable_KqGnb8z8OLu9f2Oez-asvg_7dWnJhZm';
+const sbSpectrum = window.supabase.createClient(SPECTRUM_URL, SPECTRUM_KEY, {
+  db: { schema: 'burns_dirt' }
+});
+
+// Cache for Spectrum data per job
+const SpectrumCache = { jobs: null, phases: {}, lastFetch: {} };
+const SPECTRUM_FRESHNESS_DAYS = 30; // HJ data used for anything newer than this
+
+async function spectrumLoadJobs() {
+  if (SpectrumCache.jobs && Date.now() - (SpectrumCache.lastFetch.jobs||0) < 300000) return SpectrumCache.jobs;
+  const { data, error } = await sbSpectrum.from('spectrum_jobs').select('*');
+  if (error) { console.warn('Spectrum jobs load error:', error); return []; }
+  SpectrumCache.jobs = data || [];
+  SpectrumCache.lastFetch.jobs = Date.now();
+  console.log(`Spectrum: loaded ${SpectrumCache.jobs.length} jobs`);
+  return SpectrumCache.jobs;
+}
+
+async function spectrumLoadPhases(jobNumber) {
+  const cacheKey = String(jobNumber);
+  if (SpectrumCache.phases[cacheKey] && Date.now() - (SpectrumCache.lastFetch['ph_'+cacheKey]||0) < 300000) {
+    return SpectrumCache.phases[cacheKey];
+  }
+  const { data, error } = await sbSpectrum.from('spectrum_phases').select('*').eq('job_number', String(jobNumber));
+  if (error) { console.warn('Spectrum phases load error:', error); return []; }
+  SpectrumCache.phases[cacheKey] = data || [];
+  SpectrumCache.lastFetch['ph_'+cacheKey] = Date.now();
+  console.log(`Spectrum: loaded ${(data||[]).length} phases for job ${jobNumber}`);
+  return SpectrumCache.phases[cacheKey];
+}
+
+async function spectrumLoadJob(jobNumber) {
+  const jobs = await spectrumLoadJobs();
+  return jobs.find(j => j.job_number === String(jobNumber)) || null;
+}
+
+// Merge engine: decides data source per cost line based on age
+function pickDataSource(hjRow, specRow, cutoffDays) {
+  cutoffDays = cutoffDays || SPECTRUM_FRESHNESS_DAYS;
+  const now = new Date();
+  // If HJ row has a date, check age
+  const hjDate = hjRow && hjRow.date ? new Date(hjRow.date) : null;
+  const hjAgeDays = hjDate ? Math.floor((now - hjDate) / 86400000) : null;
+
+  // Both sources available — use age to decide
+  if (hjRow && specRow) {
+    if (hjAgeDays !== null && hjAgeDays <= cutoffDays) {
+      return { source: 'heavyjob', data: hjRow, age: hjAgeDays, hasVariance: true, specData: specRow };
+    }
+    return { source: 'spectrum', data: specRow, age: hjAgeDays, hasVariance: true, hjData: hjRow };
+  }
+  // Only one source
+  if (specRow) return { source: 'spectrum', data: specRow, age: null, hasVariance: false };
+  if (hjRow) return { source: 'heavyjob', data: hjRow, age: hjAgeDays, hasVariance: false };
+  return null;
+}
+
 // Save a single job to Supabase
 function serializeForStorage(obj){
   if(obj instanceof Date) return { __date: obj.toISOString() };
@@ -2101,6 +2169,262 @@ function switchToSubTab(sub){
   switchSubTab(sub);
 }
 
+// ═══════════════════════════════════════════
+// JOB COST — Spectrum + HeavyJob blended view
+// ═══════════════════════════════════════════
+async function renderJobCost(){
+  const el=document.getElementById('jobCostContent');
+  if(!Store.activeJob||!Store.jobs[Store.activeJob]){
+    el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return;
+  }
+  const job=Store.jobs[Store.activeJob], m=job.meta;
+  const jobNum = m.jobNumber || m.number || Store.activeJob;
+
+  el.innerHTML='<div class="card"><div class="card-title">Job Cost</div><p style="color:var(--text-light);font-size:13px;">Loading Spectrum data for job '+jobNum+'...</p></div>';
+
+  // Load Spectrum data
+  const specJob = await spectrumLoadJob(jobNum);
+  const specPhases = await spectrumLoadPhases(jobNum);
+
+  // Load HJ actuals from Supabase (if any synced)
+  let hjActuals = [];
+  try {
+    const { data } = await sb.from('actuals_detail_sync').select('*').eq('job_number', String(jobNum));
+    hjActuals = data || [];
+  } catch(e) { console.warn('HJ actuals load:', e); }
+
+  if(!specPhases.length && !hjActuals.length){
+    el.innerHTML=`<div class="card">
+      <div class="card-title">Job Cost — #${jobNum}</div>
+      <p style="color:var(--text-light);font-size:14px;">No Spectrum or HeavyJob data found for job <strong>${jobNum}</strong>.</p>
+      <p style="color:var(--text-light);font-size:13px;margin-top:8px;">Make sure the job number matches between your project controls job and Spectrum. You can also import HJ actuals manually from the Setup tab.</p>
+    </div>`;
+    return;
+  }
+
+  // --- Build blended cost rows ---
+  // Group Spectrum phases by phase_code + cost_type
+  const specByCode = {};
+  specPhases.forEach(p => {
+    const key = (p.phase_code||'') + '|' + (p.cost_type||'');
+    specByCode[key] = p;
+  });
+
+  // Group HJ actuals by cost_code (aggregate across dates)
+  const hjByCode = {};
+  hjActuals.forEach(r => {
+    const key = (r.cost_code||'');
+    if(!hjByCode[key]) hjByCode[key] = { cost_code: r.cost_code, cost_code_desc: r.cost_code_desc, actual_labor_cost:0, actual_equip_cost:0, actual_mat_cost:0, actual_sub_cost:0, actual_labor_hours:0, actual_qty:0, latest_date: r.date };
+    const agg = hjByCode[key];
+    agg.actual_labor_cost += Number(r.actual_labor_cost)||0;
+    agg.actual_equip_cost += Number(r.actual_equip_cost)||0;
+    agg.actual_mat_cost += Number(r.actual_mat_cost)||0;
+    agg.actual_sub_cost += Number(r.actual_sub_cost)||0;
+    agg.actual_labor_hours += Number(r.actual_labor_hours)||0;
+    agg.actual_qty += Number(r.actual_qty)||0;
+    if(r.date > agg.latest_date) agg.latest_date = r.date;
+  });
+
+  // Merge into unified rows
+  const allCodes = new Set([...Object.keys(specByCode), ...Object.keys(hjByCode).map(k=>k+'|')]);
+  // Actually let's build from Spectrum as the primary structure
+  const costRows = [];
+  const specTotals = { jtd:0, projected:0, estimate:0, budget:0 };
+  const hjTotals = { labor:0, equip:0, mat:0, sub:0, total:0 };
+
+  specPhases.forEach(p => {
+    const jtd = Number(p.jtd_actual_dollars)||0;
+    const projected = Number(p.projected_dollars)||0;
+    const estimate = Number(p.current_estimate_dollars)||0;
+    const hrs = Number(p.jtd_hours)||0;
+    const qty = Number(p.jtd_quantity)||0;
+    const estQty = Number(p.estimated_quantity)||0;
+    const estHrs = Number(p.estimated_hours)||0;
+
+    // Check for HJ data for this cost code
+    const hjMatch = hjByCode[p.phase_code] || null;
+    const hjTotal = hjMatch ? (hjMatch.actual_labor_cost + hjMatch.actual_equip_cost + hjMatch.actual_mat_cost + hjMatch.actual_sub_cost) : 0;
+
+    // Variance between sources
+    const variance = hjMatch ? (hjTotal - jtd) : null;
+
+    specTotals.jtd += jtd;
+    specTotals.projected += projected;
+    specTotals.estimate += estimate;
+    if(hjMatch) {
+      hjTotals.labor += hjMatch.actual_labor_cost;
+      hjTotals.equip += hjMatch.actual_equip_cost;
+      hjTotals.mat += hjMatch.actual_mat_cost;
+      hjTotals.sub += hjMatch.actual_sub_cost;
+      hjTotals.total += hjTotal;
+    }
+
+    costRows.push({
+      phaseCode: p.phase_code||'',
+      costType: p.cost_type||'',
+      description: p.description||'',
+      jtd, projected, estimate, hrs, qty, estQty, estHrs,
+      hjTotal, variance,
+      hasHJ: !!hjMatch,
+      status: p.status_code||''
+    });
+  });
+
+  // Add HJ-only rows (cost codes not in Spectrum)
+  Object.values(hjByCode).forEach(h => {
+    const matchKey = (h.cost_code||'') + '|';
+    const alreadyInSpec = specPhases.some(p => p.phase_code === h.cost_code);
+    if(!alreadyInSpec) {
+      const hjTotal = h.actual_labor_cost + h.actual_equip_cost + h.actual_mat_cost + h.actual_sub_cost;
+      hjTotals.labor += h.actual_labor_cost;
+      hjTotals.equip += h.actual_equip_cost;
+      hjTotals.mat += h.actual_mat_cost;
+      hjTotals.sub += h.actual_sub_cost;
+      hjTotals.total += hjTotal;
+      costRows.push({
+        phaseCode: h.cost_code, costType: 'HJ', description: h.cost_code_desc||'(HeavyJob only)',
+        jtd: 0, projected: 0, estimate: 0, hrs: 0, qty: 0, estQty:0, estHrs:0,
+        hjTotal, variance: null, hasHJ: true, status: ''
+      });
+    }
+  });
+
+  // Sort by phase code
+  costRows.sort((a,b) => a.phaseCode.localeCompare(b.phaseCode, undefined, {numeric:true}));
+
+  const fmtD = n => n ? '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '$0.00';
+  const fmtN = n => n ? Number(n).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1}) : '0.0';
+  const pctClass = v => v > 0 ? 'negative' : v < 0 ? 'positive' : '';
+  const specSyncDate = specPhases.length ? specPhases[0].synced_at : null;
+  const syncLabel = specSyncDate ? new Date(specSyncDate).toLocaleDateString() : 'unknown';
+
+  // Spectrum job info bar
+  const specInfo = specJob ? `<span style="font-size:12px;color:var(--text-light);margin-left:12px;">
+    ${specJob.job_description||''} &middot; PM: ${specJob.project_manager||'—'} &middot; Status: ${specJob.status_code||'—'}
+  </span>` : '';
+
+  // Remaining budget
+  const remaining = specTotals.estimate - specTotals.jtd;
+  const pctComplete = specTotals.estimate > 0 ? ((specTotals.jtd / specTotals.estimate) * 100).toFixed(1) : '0.0';
+
+  let html = `
+  <div class="card" style="padding:12px 20px;margin-bottom:8px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <div>
+        <span style="font-family:Oswald,sans-serif;font-size:16px;color:var(--green);letter-spacing:1px;">JOB COST — #${jobNum}</span>
+        ${specInfo}
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue);margin-right:4px;"></span>Spectrum synced ${syncLabel}
+        </span>
+        ${hjActuals.length ? '<span style="font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--orange);margin-right:4px;"></span>HeavyJob '+hjActuals.length+' rows</span>' : ''}
+        <button class="edit-btn" onclick="renderJobCost()" style="padding:4px 10px;">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi"><div class="kpi-value">${fmtD(specTotals.estimate)}</div><div class="kpi-label">Current Estimate</div></div>
+    <div class="kpi${specTotals.jtd > specTotals.estimate ? ' danger' : ''}"><div class="kpi-value">${fmtD(specTotals.jtd)}</div><div class="kpi-label">JTD Actual (Spectrum)</div></div>
+    <div class="kpi"><div class="kpi-value">${fmtD(specTotals.projected)}</div><div class="kpi-label">Projected</div></div>
+    <div class="kpi${remaining < 0 ? ' danger' : ' good'}"><div class="kpi-value">${fmtD(remaining)}</div><div class="kpi-label">Remaining (Est - JTD)</div></div>
+    <div class="kpi"><div class="kpi-value">${pctComplete}%</div><div class="kpi-label">Cost Complete</div></div>
+  </div>`;
+
+  // HJ vs Spectrum comparison bar (if HJ data exists)
+  if(hjTotals.total > 0) {
+    const diff = hjTotals.total - specTotals.jtd;
+    const diffPct = specTotals.jtd > 0 ? ((diff / specTotals.jtd) * 100).toFixed(1) : '—';
+    html += `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="card-title">Data Source Comparison
+        <span style="font-size:11px;font-weight:400;color:var(--text-light);text-transform:none;letter-spacing:0;">
+          HeavyJob data &le; ${SPECTRUM_FRESHNESS_DAYS} days used for real-time; older data defers to Spectrum
+        </span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;text-align:center;">
+        <div>
+          <div style="font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;color:var(--text-light);text-transform:uppercase;">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue);margin-right:4px;"></span>Spectrum JTD
+          </div>
+          <div style="font-family:Oswald,sans-serif;font-size:22px;font-weight:600;">${fmtD(specTotals.jtd)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;color:var(--text-light);text-transform:uppercase;">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--orange);margin-right:4px;"></span>HeavyJob Total
+          </div>
+          <div style="font-family:Oswald,sans-serif;font-size:22px;font-weight:600;">${fmtD(hjTotals.total)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-family:Oswald,sans-serif;letter-spacing:.5px;color:var(--text-light);text-transform:uppercase;">Variance</div>
+          <div style="font-family:Oswald,sans-serif;font-size:22px;font-weight:600;" class="${diff > 0 ? 'negative' : diff < 0 ? 'positive' : ''}">${diff > 0 ? '+' : ''}${fmtD(diff)} (${diffPct}%)</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Phase detail table
+  html += `
+  <div class="card">
+    <div class="card-title">Cost Detail by Phase
+      <span style="font-size:11px;font-weight:400;color:var(--text-light);text-transform:none;letter-spacing:0;">
+        ${costRows.length} phase codes &middot; ${specPhases.length} from Spectrum${hjActuals.length ? ' &middot; '+Object.keys(hjByCode).length+' from HeavyJob':''}
+      </span>
+    </div>
+    <div class="table-wrap" style="max-height:600px;overflow-y:auto;">
+    <table>
+      <thead><tr>
+        <th>Phase</th><th>Type</th><th>Description</th>
+        <th style="text-align:right;">JTD Actual</th>
+        <th style="text-align:right;">Projected</th>
+        <th style="text-align:right;">Estimate</th>
+        <th style="text-align:right;">Remaining</th>
+        <th style="text-align:right;">Hours</th>
+        ${hjActuals.length ? '<th style="text-align:right;">HJ Total</th><th style="text-align:right;">Variance</th>' : ''}
+        <th>Source</th>
+      </tr></thead>
+      <tbody>`;
+
+  costRows.forEach(r => {
+    const rem = r.estimate - r.jtd;
+    const srcDot = r.hasHJ && r.jtd > 0
+      ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue);margin-right:2px;" title="Spectrum"></span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--orange);" title="HeavyJob"></span>'
+      : r.hasHJ
+        ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--orange);" title="HeavyJob only"></span>'
+        : '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue);" title="Spectrum"></span>';
+
+    html += `<tr>
+      <td style="font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;">${r.phaseCode}</td>
+      <td>${r.costType}</td>
+      <td>${r.description}</td>
+      <td class="num">${fmtD(r.jtd)}</td>
+      <td class="num">${fmtD(r.projected)}</td>
+      <td class="num">${fmtD(r.estimate)}</td>
+      <td class="num ${rem < 0 ? 'negative' : ''}">${fmtD(rem)}</td>
+      <td class="num">${fmtN(r.hrs)}</td>
+      ${hjActuals.length ? `<td class="num">${r.hasHJ ? fmtD(r.hjTotal) : '—'}</td><td class="num ${r.variance !== null ? pctClass(r.variance) : ''}">${r.variance !== null ? (r.variance > 0 ? '+' : '')+fmtD(r.variance) : '—'}</td>` : ''}
+      <td>${srcDot}</td>
+    </tr>`;
+  });
+
+  // Totals row
+  const totalRem = specTotals.estimate - specTotals.jtd;
+  html += `<tr style="font-weight:700;background:var(--ash);">
+    <td colspan="3" style="font-family:Oswald,sans-serif;">TOTAL</td>
+    <td class="num">${fmtD(specTotals.jtd)}</td>
+    <td class="num">${fmtD(specTotals.projected)}</td>
+    <td class="num">${fmtD(specTotals.estimate)}</td>
+    <td class="num ${totalRem < 0 ? 'negative' : ''}">${fmtD(totalRem)}</td>
+    <td></td>
+    ${hjActuals.length ? `<td class="num">${fmtD(hjTotals.total)}</td><td class="num ${(hjTotals.total-specTotals.jtd) > 0 ? 'negative' : 'positive'}">${(hjTotals.total-specTotals.jtd) > 0 ? '+' : ''}${fmtD(hjTotals.total-specTotals.jtd)}</td>` : ''}
+    <td></td>
+  </tr>`;
+
+  html += '</tbody></table></div></div>';
+  el.innerHTML = html;
+}
+
 function renderActiveSubTab(){
   const renderers={
     overview:renderDashboard,
@@ -2114,6 +2438,7 @@ function renderActiveSubTab(){
     forecast:renderForecast,
     payapps:renderPayApps,
     cashflow:renderCashFlowProjection,
+    jobcost:renderJobCost,
     setup:updateImportPanel
   };
   if(renderers[_activeSubTab])renderers[_activeSubTab]();
