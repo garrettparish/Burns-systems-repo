@@ -403,9 +403,17 @@ tr:hover{background:#FAF8F5}
       <div><strong style="color:var(--olive);">HCSS Auto-Sync</strong> <span id="hcssSyncStatus" style="color:var(--text-light);">Loading…</span></div>
       <div style="display:flex;gap:6px;">
         <button class="edit-btn" onclick="hcssSyncNow()" style="padding:5px 12px;">Sync Now</button>
+        <button class="edit-btn" onclick="hcssSyncMetadata()" style="padding:5px 12px;" title="Pull job list & cost codes from HeavyJob API">Sync Jobs & Codes</button>
         <button class="edit-btn" onclick="hcssBackfill()" style="padding:5px 12px;" title="Pull full history (use once on first deployment)">Backfill All</button>
         <button class="edit-btn" onclick="hcssSyncDiscover()" style="padding:5px 12px;" title="List HCSS business units (use once to find your BU code)">Discover BU</button>
       </div>
+    </div>
+    <div id="hcssCostCodeBanner" style="margin-top:12px;padding:10px 14px;background:var(--card);border:1px solid var(--sand);border-radius:6px;display:none;font-size:12px;font-family:Oswald,sans-serif;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <strong style="color:var(--olive);">HCSS Cost Codes</strong>
+        <button class="edit-btn" onclick="hcssPullCostCodes()" style="padding:4px 10px;font-size:11px;">Pull Cost Codes into Job</button>
+      </div>
+      <div id="hcssCostCodeStatus" style="color:var(--text-light);font-size:11px;">Link this job to an HCSS job via Edit Job to see cost codes.</div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn-primary" id="mapScheduleBtn" style="display:none;background:var(--blue);" onclick="showMapping()">Map Schedule &rarr; Pay Items</button>
@@ -445,6 +453,11 @@ tr:hover{background:#FAF8F5}
     <label>Total Contract Amount ($)</label><input type="number" id="newJobContract" placeholder="e.g. 2500000" step="0.01" min="0">
     <label>Total Overhead ($)</label><input type="number" id="newJobOH" placeholder="e.g. 350000" step="0.01" min="0">
     <p style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">Enter the executed contract value and total overhead. Profit will be calculated as Contract − (Direct Costs + OH) and distributed across pay items.</p>
+    <label>HCSS HeavyJob Link</label>
+    <select id="newJobHCSS" style="font-size:13px;">
+      <option value="">— Not linked —</option>
+    </select>
+    <p style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">Link this job to an HCSS HeavyJob job to auto-pull cost codes. Click "Sync Jobs & Codes" first to populate this list.</p>
     <label>Margin PIN (4-6 digits)</label><input type="password" id="newJobPin" placeholder="e.g. 1234" maxlength="6" pattern="[0-9]*" inputmode="numeric" style="letter-spacing:4px;font-family:monospace;font-size:16px;">
     <p style="font-size:11px;color:var(--text-light);margin:-4px 0 8px;">Required to access or modify the profit distribution / front-load tool. Leave blank for no protection.</p>
     <div class="modal-actions">
@@ -1697,6 +1710,75 @@ async function hcssSyncDiscover(){
     alert(msg);
   }
 }
+// ── Metadata sync: pull HCSS job list + cost codes ──
+async function hcssSyncMetadata(){
+  const el=document.getElementById('hcssSyncStatus');
+  if(el)el.textContent='Syncing jobs & cost codes…';
+  try{
+    const j=await hcssCallFn({syncMetadata:true});
+    log(`HCSS metadata sync: ${j.jobsUpserted} jobs, ${j.costCodesUpserted} cost codes (${j.activeJobs} active of ${j.totalJobs} total) · ${Math.round(j.durationMs/1000)}s`);
+    if(j.costCodeErrors>0)log(`HCSS metadata had ${j.costCodeErrors} cost code errors — see sync_log`);
+    alert(`Metadata sync complete!\n\n${j.jobsUpserted} jobs synced\n${j.costCodesUpserted} cost codes synced\n${j.activeJobs} active / ${j.totalJobs} total jobs\n\nDuration: ${Math.round(j.durationMs/1000)}s`);
+    await hcssLoadSyncStatus();
+  }catch(e){
+    log('HCSS metadata sync failed: '+e.message);
+    if(el)el.textContent='Metadata sync error: '+e.message;
+    alert('Metadata sync failed: '+e.message);
+  }
+}
+
+// ── Load HCSS job list for auto-match ──
+async function hcssLoadJobList(){
+  const{data,error}=await sb.from('hcss_jobs').select('hcss_id,job_code,job_name,status').order('job_code');
+  if(error){console.warn('hcssLoadJobList:',error);return[];}
+  return data||[];
+}
+
+// ── Load HCSS cost codes for a specific job code ──
+async function hcssLoadCostCodes(jobCode){
+  const{data,error}=await sb.from('hcss_cost_codes').select('cost_code,description,unit,quantity_driven').eq('job_code',String(jobCode)).order('cost_code');
+  if(error){console.warn('hcssLoadCostCodes:',error);return[];}
+  return data||[];
+}
+
+// ── Pull HCSS cost codes into the active job ──
+async function hcssPullCostCodes(){
+  const job=Store.jobs[Store.activeJob];
+  if(!job)return;
+  const hcssCode=job.meta.hcssJobCode||job.meta.number;
+  if(!hcssCode){alert('Link this job to an HCSS job first (Edit Job → HCSS HeavyJob Link).');return;}
+  const codes=await hcssLoadCostCodes(hcssCode);
+  if(!codes.length){alert(`No cost codes found for HCSS job #${hcssCode}. Run "Sync Jobs & Codes" first.`);return;}
+  // Store on the job for reference
+  job.hcssCostCodes=codes;
+  log(`Loaded ${codes.length} HCSS cost codes for job #${hcssCode}`);
+  saveJob(Store.activeJob);
+  renderHcssCostCodeBanner();
+  alert(`${codes.length} cost codes loaded from HCSS for job #${hcssCode}.`);
+}
+
+// ── Render HCSS cost code banner ──
+function renderHcssCostCodeBanner(){
+  const banner=document.getElementById('hcssCostCodeBanner');
+  const status=document.getElementById('hcssCostCodeStatus');
+  if(!banner||!status)return;
+  const job=Store.jobs[Store.activeJob];
+  if(!job){banner.style.display='none';return;}
+  const hcssCode=job.meta.hcssJobCode;
+  if(!hcssCode){
+    banner.style.display='block';
+    status.textContent='Link this job to an HCSS job via Edit Job to pull cost codes.';
+    return;
+  }
+  banner.style.display='block';
+  const codes=job.hcssCostCodes||[];
+  if(codes.length){
+    status.innerHTML=`<span style="color:var(--green);font-weight:600;">${codes.length} cost codes</span> loaded from HCSS job #${hcssCode}. <span style="color:var(--text-light);">These are available for reference in EVA and Production views.</span>`;
+  }else{
+    status.textContent=`Linked to HCSS job #${hcssCode} — click "Pull Cost Codes" to load.`;
+  }
+}
+
 // Load synced actuals into the active job's in-memory Store.
 // Reads from actuals_detail_sync where job_number matches job.meta.number,
 // converts to the shape parseActualsDetailRaw() produces, and runs rollupActualsDetail.
@@ -2059,8 +2141,17 @@ setTimeout(()=>{try{hcssLoadSyncStatus()}catch(e){}},500);
 // ═══════════════════════════════════════════
 let _editingJobId=null;
 function showNewJobModal(){_editingJobId=null;document.getElementById('jobModalTitle').textContent='New Job';document.getElementById('jobModalSaveBtn').textContent='Create Job';document.getElementById('jobModalSaveBtn').onclick=createJob;['newJobNum','newJobName','newJobClient'].forEach(id=>document.getElementById(id).value='');document.getElementById('newJobContract').value='';document.getElementById('newJobOH').value='';document.getElementById('newJobPin').value='';document.getElementById('newJobNum').disabled=false;document.getElementById('newJobBilling').value='unit-price';document.getElementById('jobDeleteBtn').style.display='none';document.getElementById('newJobModal').classList.add('show')}
-function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobContract').value=m.contractAmount||'';document.getElementById('newJobOH').value=m.totalOH||'';document.getElementById('newJobPin').value=m.jobPin||'';document.getElementById('jobDeleteBtn').style.display='inline-block';document.getElementById('newJobModal').classList.add('show')}
-function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;m.contractAmount=parseFloat(document.getElementById('newJobContract').value)||0;m.totalOH=parseFloat(document.getElementById('newJobOH').value)||0;const pin=document.getElementById('newJobPin').value.trim();m.jobPin=pin||'';if(pin&&Store._pinAuth)delete Store._pinAuth[_editingJobId];closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`);saveJob(_editingJobId)}
+async function showEditJobModal(){if(!Store.activeJob)return;const m=Store.jobs[Store.activeJob].meta;_editingJobId=Store.activeJob;document.getElementById('jobModalTitle').textContent='Edit Job';document.getElementById('jobModalSaveBtn').textContent='Save Changes';document.getElementById('jobModalSaveBtn').onclick=saveJobEdit;document.getElementById('newJobNum').value=m.number;document.getElementById('newJobNum').disabled=true;document.getElementById('newJobName').value=m.name;document.getElementById('newJobClient').value=m.client||'';document.getElementById('newJobBilling').value=m.billingType||'unit-price';document.getElementById('newJobContract').value=m.contractAmount||'';document.getElementById('newJobOH').value=m.totalOH||'';document.getElementById('newJobPin').value=m.jobPin||'';document.getElementById('jobDeleteBtn').style.display='inline-block';
+// Populate HCSS job link dropdown
+const hcssSel=document.getElementById('newJobHCSS');
+hcssSel.innerHTML='<option value="">— Not linked —</option>';
+const hcssJobs=await hcssLoadJobList();
+hcssJobs.forEach(hj=>{const o=document.createElement('option');o.value=hj.job_code;o.textContent=`#${hj.job_code} — ${hj.job_name} (${hj.status})`;hcssSel.appendChild(o)});
+// Auto-select if already linked or if job numbers match
+if(m.hcssJobCode)hcssSel.value=m.hcssJobCode;
+else{const autoMatch=hcssJobs.find(hj=>String(hj.job_code)===String(m.number));if(autoMatch)hcssSel.value=autoMatch.job_code}
+document.getElementById('newJobModal').classList.add('show')}
+function saveJobEdit(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;m.name=document.getElementById('newJobName').value.trim()||m.name;m.client=document.getElementById('newJobClient').value.trim();m.billingType=document.getElementById('newJobBilling').value;m.contractAmount=parseFloat(document.getElementById('newJobContract').value)||0;m.totalOH=parseFloat(document.getElementById('newJobOH').value)||0;m.hcssJobCode=document.getElementById('newJobHCSS').value||'';const pin=document.getElementById('newJobPin').value.trim();m.jobPin=pin||'';if(pin&&Store._pinAuth)delete Store._pinAuth[_editingJobId];closeNewJobModal();refreshJobSelectors();renderActiveSubTab();log(`Job updated: #${m.number} ${m.name}`+(m.hcssJobCode?' (HCSS: #'+m.hcssJobCode+')':''));saveJob(_editingJobId)}
 function confirmDeleteJob(){if(!_editingJobId)return;const m=Store.jobs[_editingJobId].meta;if(!confirm(`Delete job #${m.number} "${m.name}"? This cannot be undone.`))return;deleteJob(_editingJobId);delete Store.jobs[_editingJobId];if(Store.activeJob===_editingJobId)Store.activeJob=null;closeNewJobModal();refreshJobSelectors();switchJob();log(`Job deleted: #${m.number} ${m.name}`)}
 function closeNewJobModal(){document.getElementById('newJobModal').classList.remove('show');_editingJobId=null}
 function createJob(){const num=document.getElementById('newJobNum').value.trim(),name=document.getElementById('newJobName').value.trim();if(!num||!name){alert('Job number and name are required.');return}const pin=document.getElementById('newJobPin').value.trim();Store.jobs[num]={meta:{number:num,name:name,client:document.getElementById('newJobClient').value.trim(),billingType:document.getElementById('newJobBilling').value,contractAmount:parseFloat(document.getElementById('newJobContract').value)||0,totalOH:parseFloat(document.getElementById('newJobOH').value)||0,jobPin:pin||'',created:new Date()},activities:[],bidItems:[],schedule:[],taskMap:{},baseline:null,actuals:[],sovItems:[],cashFlowConfig:null};Store.activeJob=num;closeNewJobModal();refreshJobSelectors();switchToSubTab('setup');log(`Job created: #${num} ${name}`);addEditLog('Created job #'+num+' '+name);saveJob(num)}
@@ -2077,7 +2168,7 @@ function switchJob(){
   updateNavBadges();
 }
 function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
-function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog()}
+function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog();renderHcssCostCodeBanner()}
 function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule','actuals','actualsDetail'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';if(type==='biditems'){st.className='status loaded';st.textContent=data.length+' bid items loaded (OH+P included)'}else if(type==='actuals'){st.className='status loaded';st.textContent=data.length+' actuals loaded'}else if(type==='actualsDetail'){st.className='status loaded';const freshness=job.meta.lastActualsImport?' — updated '+new Date(job.meta.lastActualsImport).toLocaleDateString():'';st.textContent=data.length+' daily rows'+freshness}else{st.className='status loaded';st.textContent=data.length+' records loaded'+extra}}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
   if(mapBtn){if((job.bidItems.length||job.sovItems?.length)&&job.schedule.length){mapBtn.style.display='inline-block';const mapped=Object.keys(job.taskMap||{}).length;mapBtn.textContent=mapped?`Re-Map Schedule (${mapped}/${job.schedule.length})`:'Map Schedule → Pay Items'}else{mapBtn.style.display='none'}}

@@ -64,7 +64,7 @@ interface TokenResponse { access_token: string; token_type: string; expires_in: 
 // Module-level cache of the last minted token's granted scope string,
 // so discovery mode can surface it to the caller for debugging.
 let _lastGrantedScope: string | null = null;
-interface SyncRequest { trigger?: 'cron'|'manual'|'api'; discover?: boolean; lookbackDays?: number; jobNumber?: string; fullHistory?: boolean }
+interface SyncRequest { trigger?: 'cron'|'manual'|'api'; discover?: boolean; syncMetadata?: boolean; scanEndpoints?: boolean; lookbackDays?: number; jobNumber?: string; fullHistory?: boolean }
 interface DetailRow {
   job_number: string; date: string; cost_code: string; foreman: string;
   cost_code_desc: string; unit: string;
@@ -144,25 +144,40 @@ Deno.serve(async (req) => {
     if (body.scanEndpoints) {
       const matchedBU = bus.find(b => b.code === buEnv || b.id === buEnv);
       const buId = matchedBU?.id || buEnv;
-      // Get first job to use as test
+      // Get jobs and pick a real one (skip job code "0" or empty)
       const testJobs = await listJobs(token, buId);
-      const testJobId = testJobs[0]?.id || '';
-      const testJobCode = testJobs[0]?.jobCode || '';
+      const realJob = testJobs.find(j => j.jobCode && j.jobCode !== '0') || testJobs[0];
+      const testJobId = realJob?.id || '';
+      const testJobCode = realJob?.jobCode || '';
+
+      // Also get first 10 job samples for debugging
+      const jobSamples = testJobs.slice(0, 10).map(j => ({ code: j.jobCode, id: (j.id || '').substring(0, 8), name: j.name, status: j.status }));
 
       const TC_CANDIDATES = [
-        { label: 'heavyjob/timeCards',       url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${testJobId}&count=1` },
-        { label: 'heavyjob/timecards',       url: `${HCSS_API_BASE}/heavyjob/api/v1/timecards?jobId=${testJobId}&count=1` },
-        { label: 'heavyjob/timeCard',        url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCard?jobId=${testJobId}&count=1` },
-        { label: 'e360/timeCards',           url: `${HCSS_API_BASE}/e360/api/v1/timeCards?count=1` },
-        { label: 'e360/timecards',           url: `${HCSS_API_BASE}/e360/api/v1/timecards?count=1` },
-        { label: 'heavyjob/dailyTimecards',  url: `${HCSS_API_BASE}/heavyjob/api/v1/dailyTimecards?jobId=${testJobId}` },
-        { label: 'heavyjob/costCodes',       url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${testJobId}` },
-        { label: 'heavyjob/jobCosts',        url: `${HCSS_API_BASE}/heavyjob/api/v1/jobCosts?jobId=${testJobId}` },
-        { label: 'heavyjob/quantities',      url: `${HCSS_API_BASE}/heavyjob/api/v1/quantities?jobId=${testJobId}&count=1` },
-        { label: 'heavyjob/quantity',        url: `${HCSS_API_BASE}/heavyjob/api/v1/quantity?jobId=${testJobId}&count=1` },
-        { label: 'heavyjob/productionTotals',url: `${HCSS_API_BASE}/heavyjob/api/v1/productionTotals?jobId=${testJobId}` },
-        { label: 'heavyjob/costData',        url: `${HCSS_API_BASE}/heavyjob/api/v1/costData?jobId=${testJobId}` },
-        { label: 'heavyjob/jobCostSummary',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobCostSummary?jobId=${testJobId}` },
+        // HeavyJob v1
+        { label: 'hj/v1/timeCards',          url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${testJobId}&count=1` },
+        { label: 'hj/v1/timecards',          url: `${HCSS_API_BASE}/heavyjob/api/v1/timecards?jobId=${testJobId}&count=1` },
+        // HeavyJob v2
+        { label: 'hj/v2/timeCards',          url: `${HCSS_API_BASE}/heavyjob/api/v2/timeCards?jobId=${testJobId}&count=1` },
+        { label: 'hj/v2/timecards',          url: `${HCSS_API_BASE}/heavyjob/api/v2/timecards?jobId=${testJobId}&count=1` },
+        // No product prefix
+        { label: 'api/v1/timeCards',         url: `${HCSS_API_BASE}/api/v1/timeCards?jobId=${testJobId}&count=1` },
+        { label: 'api/v1/timecards',         url: `${HCSS_API_BASE}/api/v1/timecards?jobId=${testJobId}&count=1` },
+        // Timecards product prefix
+        { label: 'timecards/v1/timeCards',   url: `${HCSS_API_BASE}/timecards/api/v1/timeCards?jobId=${testJobId}&count=1` },
+        { label: 'timecards/v1/timecards',   url: `${HCSS_API_BASE}/timecards/api/v1/timecards?jobId=${testJobId}&count=1` },
+        // E360 (may not be provisioned)
+        { label: 'e360/v1/timeCards',        url: `${HCSS_API_BASE}/e360/api/v1/timeCards?count=1` },
+        // HJ costCodes (known working — get with real job)
+        { label: 'hj/v1/costCodes',          url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${testJobId}` },
+        // HJ other data endpoints
+        { label: 'hj/v1/employees',          url: `${HCSS_API_BASE}/heavyjob/api/v1/employees?count=1` },
+        { label: 'hj/v1/equipment',          url: `${HCSS_API_BASE}/heavyjob/api/v1/equipment?count=1` },
+        { label: 'hj/v1/dailies',            url: `${HCSS_API_BASE}/heavyjob/api/v1/dailies?jobId=${testJobId}&count=1` },
+        { label: 'hj/v1/dailyLogs',          url: `${HCSS_API_BASE}/heavyjob/api/v1/dailyLogs?jobId=${testJobId}&count=1` },
+        { label: 'hj/v1/foremen',            url: `${HCSS_API_BASE}/heavyjob/api/v1/foremen?jobId=${testJobId}` },
+        { label: 'hj/v1/tags',               url: `${HCSS_API_BASE}/heavyjob/api/v1/tags` },
+        { label: 'hj/v1/costTypes',          url: `${HCSS_API_BASE}/heavyjob/api/v1/costTypes` },
       ];
 
       const results: { label: string; status: number; body: string }[] = [];
@@ -183,7 +198,102 @@ Deno.serve(async (req) => {
         mode: 'endpoint-scan',
         testJob: { id: testJobId, code: testJobCode },
         totalJobs: testJobs.length,
+        jobSamples,
         results,
+      });
+    }
+
+    // ── Metadata sync mode: pull jobs + cost codes into reference tables ──
+    if (body.syncMetadata) {
+      const matchedBU = bus.find(b => b.code === buEnv || b.id === buEnv);
+      if (!matchedBU) throw new Error(`BU '${buEnv}' not found`);
+      const buId = matchedBU.id || matchedBU.code;
+
+      // 1. Pull all jobs
+      const allJobs = await listJobs(token, buId);
+
+      // 2. Upsert jobs into hcss_jobs
+      const jobRows = allJobs.map(j => ({
+        hcss_id: j.id,
+        job_code: j.jobCode,
+        job_name: j.name,
+        status: j.status,
+        start_date: j.startDate || null,
+        end_date: j.endDate || null,
+        business_unit_id: matchedBU.id,
+        business_unit_code: matchedBU.code,
+        raw: j._raw || null,
+        synced_at: new Date().toISOString(),
+      }));
+
+      let jobsUpserted = 0;
+      // Batch upsert in chunks of 50
+      for (let i = 0; i < jobRows.length; i += 50) {
+        const chunk = jobRows.slice(i, i + 50);
+        const { error, count } = await supa
+          .from('hcss_jobs')
+          .upsert(chunk, { onConflict: 'hcss_id', count: 'exact' });
+        if (error) throw new Error(`hcss_jobs upsert failed: ${error.message}`);
+        jobsUpserted += count || chunk.length;
+      }
+
+      // 3. Pull cost codes for active jobs only (to avoid API rate limits)
+      const activeJobs = allJobs.filter(j => isJobActive(j));
+      let totalCostCodes = 0;
+      const ccErrors: { job: string; error: string }[] = [];
+
+      for (const job of activeJobs) {
+        try {
+          const ccUrl = `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${encodeURIComponent(job.id)}`;
+          const ccData = await hcssGetPaginated(ccUrl, token);
+
+          if (ccData.length > 0) {
+            const ccRows = ccData.map((cc: any) => ({
+              hcss_job_id: job.id,
+              job_code: job.jobCode,
+              cost_code: String(cc.code || '').trim(),
+              description: String(cc.description || ''),
+              unit: String(cc.unit || cc.unitOfMeasure || ''),
+              is_hidden: cc.isHiddenFromMobile || false,
+              quantity_driven: cc.quantityDriving || cc.isQuantityDriving || false,
+              raw: cc,
+              synced_at: new Date().toISOString(),
+            })).filter(r => r.cost_code);
+
+            for (let i = 0; i < ccRows.length; i += 50) {
+              const chunk = ccRows.slice(i, i + 50);
+              const { error } = await supa
+                .from('hcss_cost_codes')
+                .upsert(chunk, { onConflict: 'hcss_job_id,cost_code' });
+              if (error) throw new Error(`hcss_cost_codes upsert: ${error.message}`);
+            }
+            totalCostCodes += ccRows.length;
+          }
+        } catch (e) {
+          ccErrors.push({ job: job.jobCode, error: String(e.message || e) });
+        }
+      }
+
+      await logRun('success', {
+        details: {
+          mode: 'metadata',
+          jobsUpserted,
+          totalJobs: allJobs.length,
+          activeJobs: activeJobs.length,
+          costCodesUpserted: totalCostCodes,
+          costCodeErrors: ccErrors,
+        },
+      });
+
+      return json({
+        ok: true,
+        mode: 'metadata',
+        jobsUpserted,
+        totalJobs: allJobs.length,
+        activeJobs: activeJobs.length,
+        costCodesUpserted: totalCostCodes,
+        costCodeErrors: ccErrors.length,
+        durationMs: Date.now() - startedAt,
       });
     }
 
@@ -356,7 +466,9 @@ async function listJobs(token: string, buId: string) {
     jobCode: String(j.jobCode || j.code || j.number || '').trim(),
     name:    String(j.name || j.description || ''),
     status:  String(j.status || j.jobStatus || ''),
-    startDate: j.startDate, endDate: j.endDate,
+    startDate: j.startDate || null,
+    endDate: j.endDate || null,
+    _raw: j, // preserve full API response for metadata sync
   })).filter(j => j.jobCode);
 }
 
