@@ -78,6 +78,14 @@ interface EquipObservation {
   timesSeen: number;
   raw?: any;             // a sample raw timecard equipment entry for forward-compat
 }
+// Per-day equipment assignment row for hcss_equipment_history.
+// Keyed by (hcss_code, date, job_code) — mirrors Store.crewHistory.
+interface EquipHistoryRow {
+  hcss_code: string;
+  date: string;        // YYYY-MM-DD
+  job_code: string;
+  hours: number;       // total hours on that machine for that day on that job
+}
 interface DetailRow {
   job_number: string; date: string; cost_code: string; foreman: string;
   cost_code_desc: string; unit: string;
@@ -374,6 +382,10 @@ Deno.serve(async (req) => {
     // Equipment accumulator — keyed by HCSS equipment code. Tracks latest
     // observation across ALL jobs in this run so we can set last_seen correctly.
     const equipAcc = new Map<string, EquipObservation>();
+    // Per-day history accumulator — keyed by "code|date|job". Feeds
+    // hcss_equipment_history so the Equipment Planner can auto-populate
+    // past cells with the job each machine was actually on.
+    const equipHistAcc = new Map<string, EquipHistoryRow>();
 
     for (const job of activeJobs) {
       try {
@@ -389,8 +401,8 @@ Deno.serve(async (req) => {
         ]);
         rows.push(...mergeJobRows(job.jobCode, tcs, qs));
         // Equipment extraction piggybacks on the same timecard details we
-        // already parsed — essentially free.
-        extractEquipmentObservations(job.jobCode, tcs, equipAcc);
+        // already parsed — essentially free. Populates both roster + history.
+        extractEquipmentObservations(job.jobCode, tcs, equipAcc, equipHistAcc);
       } catch (e) {
         errors.push({ job: job.jobCode, error: String(e.message || e) });
       }
@@ -437,6 +449,31 @@ Deno.serve(async (req) => {
       }
     }
 
+    // 7. Upsert equipment day-by-day history.
+    // Same approach as (6) but the conflict key is the full (code, date, job)
+    // composite. Powers auto-populated past cells in the Equipment Planner.
+    let equipHistUpserted = 0;
+    if (equipHistAcc.size > 0) {
+      const histRows = Array.from(equipHistAcc.values()).map(h => ({
+        hcss_code: h.hcss_code,
+        date: h.date,
+        job_code: h.job_code,
+        hours: h.hours,
+        synced_at: new Date().toISOString(),
+      }));
+      for (let i = 0; i < histRows.length; i += 200) {
+        const chunk = histRows.slice(i, i + 200);
+        const { error, count } = await supa
+          .from('hcss_equipment_history')
+          .upsert(chunk, { onConflict: 'hcss_code,date,job_code', count: 'exact' });
+        if (error) {
+          errors.push({ job: '(equipment-history)', error: `hcss_equipment_history upsert: ${error.message}` });
+          break;
+        }
+        equipHistUpserted += count || chunk.length;
+      }
+    }
+
     const status = errors.length ? 'partial' : 'success';
     await logRun(status, {
       jobs_synced: activeJobs.length,
@@ -452,6 +489,8 @@ Deno.serve(async (req) => {
         topJobsByRows: topCountsByJob(rows),
         equipmentDiscovered: equipAcc.size,
         equipmentUpserted: equipUpserted,
+        equipmentHistoryRows: equipHistAcc.size,
+        equipmentHistoryUpserted: equipHistUpserted,
       },
     });
 
@@ -461,6 +500,7 @@ Deno.serve(async (req) => {
       jobsSynced: activeJobs.length,
       totalJobsFound: jobs.length,
       rowsUpserted: updated,
+      equipmentHistoryUpserted: equipHistUpserted,
       equipmentDiscovered: equipAcc.size,
       equipmentUpserted: equipUpserted,
       errors,
@@ -734,18 +774,24 @@ function mergeJobRows(jobCode: string, timeCards: any[], _quantities: any[]): De
 }
 
 // -------------------- EQUIPMENT EXTRACTION --------------------
-// Walk the timecard detail structure and accumulate one observation per
-// unique equipment code seen in this sync run, tracking the most recent
-// job + date it appeared on. Feeds the hcss_equipment table.
+// Walk the timecard detail structure and accumulate:
+//   (a) one observation per unique equipment code (latest job/date) → feeds hcss_equipment
+//   (b) one row per (code, date, job) with total hours → feeds hcss_equipment_history
+// Both pieces are collected in the same pass since timecards are expensive to fetch.
 function extractEquipmentObservations(
   jobCode: string,
   timeCards: any[],
   acc: Map<string, EquipObservation>,
+  histAcc: Map<string, EquipHistoryRow>,
 ) {
   const fmtDate = (v: any) => {
     if (!v) return '';
     const d = new Date(v);
     return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  };
+  const toNum = (v: any) => {
+    const n = Number(v);
+    return isFinite(n) ? n : 0;
   };
   for (const tc of timeCards) {
     const d = fmtDate(tc.date);
@@ -755,6 +801,16 @@ function extractEquipmentObservations(
       const code = String(eq.equipmentCode || eq.code || '').trim();
       if (!code) continue;
       const desc = String(eq.equipmentDescription || eq.description || '').trim();
+
+      // Sum hours for this machine on this timecard (all cost codes)
+      const allHours: any[] = [
+        ...(eq.totalHours || []),
+        ...(eq.operatingHours || []),
+      ];
+      let tcHours = 0;
+      for (const h of allHours) tcHours += toNum(h.hours);
+
+      // --- (a) latest-observation accumulator ---
       const existing = acc.get(code);
       if (!existing) {
         acc.set(code, {
@@ -767,13 +823,25 @@ function extractEquipmentObservations(
         });
       } else {
         existing.timesSeen += 1;
-        // Prefer a non-blank description if we didn't have one.
         if (!existing.description && desc) existing.description = desc;
-        // Track the most recent (job, date) pair.
         if (d > existing.lastSeenDate) {
           existing.lastSeenDate = d;
           existing.lastSeenJob = jobCode;
         }
+      }
+
+      // --- (b) per-day history accumulator ---
+      const histKey = `${code}|${d}|${jobCode}`;
+      const histRow = histAcc.get(histKey);
+      if (histRow) {
+        histRow.hours += tcHours;
+      } else {
+        histAcc.set(histKey, {
+          hcss_code: code,
+          date: d,
+          job_code: jobCode,
+          hours: tcHours,
+        });
       }
     }
   }

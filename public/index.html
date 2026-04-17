@@ -592,20 +592,8 @@ tr:hover{background:#FAF8F5}
     <label>Description</label>
     <input type="text" id="equipDesc" placeholder="e.g., CAT 330 Excavator">
     <label>Category</label>
-    <select id="equipCategory">
-      <option value="Excavator">Excavator</option>
-      <option value="Dozer">Dozer</option>
-      <option value="Loader">Loader</option>
-      <option value="Truck">Truck</option>
-      <option value="Scraper">Scraper</option>
-      <option value="Grader">Grader</option>
-      <option value="Roller">Roller</option>
-      <option value="Skid Steer">Skid Steer</option>
-      <option value="Backhoe">Backhoe</option>
-      <option value="Crane">Crane</option>
-      <option value="Trailer">Trailer</option>
-      <option value="Support">Support</option>
-      <option value="Other">Other</option>
+    <select id="equipCategory" onchange="if(this.value==='__new__'){addCustomEquipCategory()}">
+      <!-- Options populated dynamically from EQUIP_CATEGORIES in openEquipModal() -->
     </select>
     <label>Current Location (optional)</label>
     <select id="equipLocation"><option value="">— Select Job —</option></select>
@@ -644,7 +632,7 @@ tr:hover{background:#FAF8F5}
 // ═══════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════
-const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], crewPlan:{}, subs:{}, staging:{type:null,data:[]}, _pinAuth:{}, equipment:{}, equipPlan:{} };
+const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], crewPlan:{}, subs:{}, staging:{type:null,data:[]}, _pinAuth:{}, equipment:{}, equipPlan:{}, equipHistory:{} };
 let _globalSchedByDisc=false;
 let _schedSort='pred'; // default sort: predecessor order
 let _schedSortDir='asc'; // sort direction: asc or desc
@@ -863,8 +851,83 @@ function deleteSub(id){
 // Store.equipment: { id → { id, code, description, category, location, notes } }
 // Store.equipPlan: { "equipId|YYYY-MM-DD" → { jobCode, note, confirmed:true, ts } }
 
-const EQUIP_CATEGORIES=['Excavator','Dozer','Loader','Truck','Scraper','Grader','Roller','Skid Steer','Backhoe','Crane','Trailer','Support','Other'];
-const EQUIP_CAT_COLORS={'Excavator':'#F26722','Dozer':'#E8B931','Loader':'#4A90D9','Truck':'#708090','Scraper':'#CD853F','Grader':'#7B68EE','Roller':'#2E8B57','Skid Steer':'#16A085','Backhoe':'#B9AB99','Crane':'#E67E22','Trailer':'#3E4D3E','Support':'#95a5a6','Other':'#bdc3c7'};
+// Built-in equipment categories + colors. User can add more via the "+ New Category…"
+// option in the Edit Equipment modal; custom ones are merged in on load from localStorage.
+const EQUIP_CATEGORIES_BUILTIN=['Excavator','Dozer','Loader','Truck','Scraper','Grader','Roller','Skid Steer','Backhoe','Crane','Trailer','Support','Other'];
+const EQUIP_CAT_COLORS_BUILTIN={'Excavator':'#F26722','Dozer':'#E8B931','Loader':'#4A90D9','Truck':'#708090','Scraper':'#CD853F','Grader':'#7B68EE','Roller':'#2E8B57','Skid Steer':'#16A085','Backhoe':'#B9AB99','Crane':'#E67E22','Trailer':'#3E4D3E','Support':'#95a5a6','Other':'#bdc3c7'};
+let EQUIP_CATEGORIES=[...EQUIP_CATEGORIES_BUILTIN];
+let EQUIP_CAT_COLORS={...EQUIP_CAT_COLORS_BUILTIN};
+const _CUSTOM_CAT_PALETTE=['#D35400','#2ECC71','#9B59B6','#1ABC9C','#F39C12','#E74C3C','#3498DB','#34495E','#16A085','#C0392B','#8E44AD','#27AE60'];
+function loadCustomEquipCategories(){
+  try{
+    const raw=localStorage.getItem('bdc_equip_categories');
+    if(!raw)return;
+    const saved=JSON.parse(raw); // { name: color }
+    Object.entries(saved).forEach(([name,color])=>{
+      if(!EQUIP_CATEGORIES.includes(name))EQUIP_CATEGORIES.push(name);
+      EQUIP_CAT_COLORS[name]=color;
+    });
+  }catch(e){console.warn('loadCustomEquipCategories:',e)}
+}
+function persistCustomEquipCategories(){
+  // Persist only the non-built-in ones — keeps the file small and lets us
+  // tweak the built-ins centrally in future deploys.
+  const custom={};
+  EQUIP_CATEGORIES.forEach(name=>{
+    if(!EQUIP_CATEGORIES_BUILTIN.includes(name)){
+      custom[name]=EQUIP_CAT_COLORS[name]||'#999';
+    }
+  });
+  localStorage.setItem('bdc_equip_categories',JSON.stringify(custom));
+}
+loadCustomEquipCategories();
+// Called when user picks "+ New Category…" from the select. Prompts for a name,
+// assigns a color from the palette, persists, and selects it in the dropdown.
+function addCustomEquipCategory(){
+  const sel=document.getElementById('equipCategory');
+  // Guard: user cancelled or entered blank — revert the select.
+  const name=prompt('New equipment category name:');
+  if(!name||!name.trim()){
+    // Revert to previous selection (first real option)
+    const fallback=EQUIP_CATEGORIES.find(c=>c!=='Other')||'Other';
+    if(sel)sel.value=fallback;
+    return;
+  }
+  const clean=name.trim();
+  if(EQUIP_CATEGORIES.includes(clean)){
+    alert(`"${clean}" already exists.`);
+    if(sel)sel.value=clean;
+    return;
+  }
+  // Pick a color not already used if possible
+  const used=new Set(Object.values(EQUIP_CAT_COLORS));
+  const color=_CUSTOM_CAT_PALETTE.find(c=>!used.has(c))||_CUSTOM_CAT_PALETTE[EQUIP_CATEGORIES.length%_CUSTOM_CAT_PALETTE.length];
+  EQUIP_CATEGORIES.push(clean);
+  EQUIP_CAT_COLORS[clean]=color;
+  persistCustomEquipCategories();
+  // Rebuild select options + select the new one
+  populateEquipCategorySelect(clean);
+}
+// Rebuild the <select> options from EQUIP_CATEGORIES. Called by openEquipModal
+// and by addCustomEquipCategory. `selected` sets the current value.
+function populateEquipCategorySelect(selected){
+  const sel=document.getElementById('equipCategory');
+  if(!sel)return;
+  sel.innerHTML='';
+  EQUIP_CATEGORIES.forEach(c=>{
+    const opt=document.createElement('option');
+    opt.value=c;opt.textContent=c;
+    sel.appendChild(opt);
+  });
+  // Separator + add-new option
+  const sep=document.createElement('option');
+  sep.disabled=true;sep.textContent='──────────';
+  sel.appendChild(sep);
+  const addOpt=document.createElement('option');
+  addOpt.value='__new__';addOpt.textContent='+ New Category…';
+  sel.appendChild(addOpt);
+  if(selected&&EQUIP_CATEGORIES.includes(selected))sel.value=selected;
+}
 let _editingEquipId=null;
 let _equipWeekPlannerDate=new Date(); // current week for weekly planner
 let _eqResViewWeekOffset=0; // resource view offset
@@ -932,6 +995,48 @@ async function loadHcssEquipment(){
     return 0;
   }
 }
+
+// HCSS equipment day-by-day history — mirrors Store.crewHistory. Keyed by
+// "equipId|YYYY-MM-DD" → { jobCode }. Dominant-job resolution when a
+// machine appears on multiple jobs the same day (most hours wins).
+let _equipHistIndex=null;
+function _buildEquipHistIndex(){
+  _equipHistIndex={};
+  const scratch={}; // key → { jobCode → hours }
+  Object.values(Store.equipHistory||{}).forEach(r=>{
+    const id=equipIdFromCode(r.hcss_code);
+    const k=id+'|'+r.date;
+    if(!scratch[k])scratch[k]={};
+    scratch[k][r.job_code]=(scratch[k][r.job_code]||0)+Number(r.hours||0);
+  });
+  Object.entries(scratch).forEach(([k,byJob])=>{
+    const top=Object.entries(byJob).sort((a,b)=>b[1]-a[1])[0];
+    _equipHistIndex[k]={jobCode:top[0],hours:top[1]};
+  });
+}
+async function loadHcssEquipmentHistory(){
+  try{
+    const {data,error}=await sb.from('hcss_equipment_history')
+      .select('hcss_code,date,job_code,hours')
+      .order('date',{ascending:false});
+    if(error){console.warn('loadHcssEquipmentHistory:',error);return 0}
+    Store.equipHistory={};
+    (data||[]).forEach(r=>{
+      const k=`${r.hcss_code}|${r.date}|${r.job_code}`;
+      Store.equipHistory[k]=r;
+    });
+    _equipHistIndex=null; // Invalidate — rebuild on first lookup
+    log(`HCSS equipment history: ${data?.length||0} day-rows loaded`);
+    return data?.length||0;
+  }catch(e){
+    console.warn('loadHcssEquipmentHistory failed:',e);
+    return 0;
+  }
+}
+function getEquipHistCell(equipId,dateISO){
+  if(!_equipHistIndex)_buildEquipHistIndex();
+  return _equipHistIndex[equipId+'|'+dateISO]||null;
+}
 function persistEquipPlan(){
   localStorage.setItem('bdc_equip_plan',JSON.stringify(Store.equipPlan));
 }
@@ -993,8 +1098,12 @@ function getEquipLastKnownLocation(equipId){
 // Get the effective cell for an equipment piece on a date
 // Priority: 1) Confirmed plan → 2) null (no auto-suggestion yet)
 function getEquipEffectiveCell(equipId,dateISO){
+  // 1. User-entered plan always wins (lets user override historical data).
   const planned=getEquipPlanCell(equipId,dateISO);
   if(planned&&planned.confirmed)return {jobCode:planned.jobCode,note:planned.note||'',source:'plan'};
+  // 2. Fall back to HCSS timecard history (mirrors how crew planner uses crewHistory).
+  const hist=getEquipHistCell(equipId,dateISO);
+  if(hist)return {jobCode:hist.jobCode,note:'',source:'history'};
   return null;
 }
 
@@ -1013,13 +1122,19 @@ function openEquipModal(editId){
     const eq=Store.equipment[editId];
     document.getElementById('equipCode').value=eq.code||'';
     document.getElementById('equipDesc').value=eq.description||'';
-    document.getElementById('equipCategory').value=eq.category||'Other';
+    // Ensure the equipment's current category (even a legacy one not in our list) is selectable
+    if(eq.category&&!EQUIP_CATEGORIES.includes(eq.category)){
+      EQUIP_CATEGORIES.push(eq.category);
+      if(!EQUIP_CAT_COLORS[eq.category])EQUIP_CAT_COLORS[eq.category]=_CUSTOM_CAT_PALETTE[EQUIP_CATEGORIES.length%_CUSTOM_CAT_PALETTE.length];
+      persistCustomEquipCategories();
+    }
+    populateEquipCategorySelect(eq.category||'Other');
     document.getElementById('equipLocation').value=eq.location||'';
     document.getElementById('equipNotes').value=eq.notes||'';
   }else{
     document.getElementById('equipCode').value='';
     document.getElementById('equipDesc').value='';
-    document.getElementById('equipCategory').value='Excavator';
+    populateEquipCategorySelect('Excavator');
     document.getElementById('equipLocation').value='';
     document.getElementById('equipNotes').value='';
   }
@@ -2367,7 +2482,9 @@ async function hcssSyncNow(){
     await hcssLoadSyncStatus();
     // Refresh HCSS equipment roster — new machines may have been discovered.
     const nEq=await loadHcssEquipment();
+    await loadHcssEquipmentHistory();
     if(nEq>0)refreshEquipUI();
+    else refreshEquipUI(); // history may have updated even if roster didn't
   }catch(e){
     log('HCSS sync failed: '+e.message);
     if(el)el.textContent='Error: '+e.message;
@@ -2386,7 +2503,9 @@ async function hcssBackfill(){
     await hcssLoadSyncStatus();
     // Refresh HCSS equipment roster — full history means lots of new machines.
     const nEq=await loadHcssEquipment();
+    await loadHcssEquipmentHistory();
     if(nEq>0)refreshEquipUI();
+    else refreshEquipUI(); // history may have updated even if roster didn't
     alert(`Backfill complete.\n${j.jobsSynced} jobs · ${j.rowsUpserted} rows${j.equipmentDiscovered?` · ${j.equipmentDiscovered} equipment`:''} · ${Math.round(j.durationMs/1000)}s\n\nFrom now on the daily 5am cron will only pull the last 14 days.`);
   }catch(e){
     log('HCSS backfill failed: '+e.message);
@@ -3114,6 +3233,9 @@ loadEquipment();
 loadEquipPlan();
 // Async — non-blocking. Re-renders the current tab if it was showing equipment.
 loadHcssEquipment().then(n=>{
+  if(n>0)refreshEquipUI();
+});
+loadHcssEquipmentHistory().then(n=>{
   if(n>0)refreshEquipUI();
 });
 // Init user label
