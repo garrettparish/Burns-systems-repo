@@ -292,6 +292,7 @@ tr:hover{background:#FAF8F5}
   <button class="sub-tab" data-sub="jcs" onclick="navSub('production','jcs')">Job Cost Schedule</button>
   <button class="sub-tab" data-sub="production" onclick="navSub('production','production')">Production Tracker</button>
   <button class="sub-tab" data-sub="crews" onclick="navSub('production','crews')">Crews</button>
+  <button class="sub-tab" data-sub="equipment" onclick="navSub('production','equipment')">Equipment</button>
 </div>
 
 <!-- GLOBAL VIEW -->
@@ -343,6 +344,11 @@ tr:hover{background:#FAF8F5}
   <!-- Sub-panel: Crews -->
   <div id="sub-crews" class="sub-panel">
     <div id="crewsContent"></div>
+  </div>
+
+  <!-- Sub-panel: Equipment Planner -->
+  <div id="sub-equipment" class="sub-panel">
+    <div id="equipmentContent"></div>
   </div>
 
   <!-- Sub-panel: EVA -->
@@ -574,11 +580,68 @@ tr:hover{background:#FAF8F5}
   </div>
 </div>
 
+<!-- EQUIPMENT ADD/EDIT MODAL -->
+<div class="modal-bg" id="equipModal">
+  <div class="modal">
+    <h3 id="equipModalTitle">Add Equipment</h3>
+    <label>Equipment Code / Unit #</label>
+    <input type="text" id="equipCode" placeholder="e.g., EX-330-01, T-740-03">
+    <label>Description</label>
+    <input type="text" id="equipDesc" placeholder="e.g., CAT 330 Excavator">
+    <label>Category</label>
+    <select id="equipCategory">
+      <option value="Excavator">Excavator</option>
+      <option value="Dozer">Dozer</option>
+      <option value="Loader">Loader</option>
+      <option value="Truck">Truck</option>
+      <option value="Scraper">Scraper</option>
+      <option value="Grader">Grader</option>
+      <option value="Roller">Roller</option>
+      <option value="Skid Steer">Skid Steer</option>
+      <option value="Backhoe">Backhoe</option>
+      <option value="Crane">Crane</option>
+      <option value="Trailer">Trailer</option>
+      <option value="Support">Support</option>
+      <option value="Other">Other</option>
+    </select>
+    <label>Current Location (optional)</label>
+    <select id="equipLocation"><option value="">— Select Job —</option></select>
+    <label>Notes</label>
+    <input type="text" id="equipNotes" placeholder="e.g., Needs service, rented unit">
+    <div class="modal-actions">
+      <button class="del-btn" id="equipDeleteBtn" onclick="deleteEquipConfirm()" style="margin-right:auto;display:none;">Delete</button>
+      <button class="btn-secondary" onclick="closeEquipModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveEquip()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- EQUIPMENT ASSIGN MODAL -->
+<div class="modal-bg" id="equipAssignModal">
+  <div class="modal">
+    <h3>Assign Equipment to Job</h3>
+    <label>Equipment</label>
+    <select id="eqAssignEquipSelect"></select>
+    <label>Job</label>
+    <select id="eqAssignJobSelect"></select>
+    <label>Start Date</label>
+    <input type="date" id="eqAssignStart">
+    <label>End Date</label>
+    <input type="date" id="eqAssignEnd">
+    <label>Note</label>
+    <input type="text" id="eqAssignNote" placeholder="e.g., Rough grading phase">
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeEquipAssignModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveEquipAssignment()">Assign</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════
-const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], crewPlan:{}, subs:{}, staging:{type:null,data:[]}, _pinAuth:{} };
+const Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], crewPlan:{}, subs:{}, staging:{type:null,data:[]}, _pinAuth:{}, equipment:{}, equipPlan:{} };
 let _globalSchedByDisc=false;
 let _schedSort='pred'; // default sort: predecessor order
 let _schedSortDir='asc'; // sort direction: asc or desc
@@ -789,6 +852,506 @@ function deleteSub(id){
     });
   });
   persistSubs();renderCrews();
+}
+
+// ═══════════════════════════════════════════
+// EQUIPMENT PLANNER — Fleet management & scheduling
+// ═══════════════════════════════════════════
+// Store.equipment: { id → { id, code, description, category, location, notes, assignments:[] } }
+// Store.equipPlan: { "equipId|YYYY-MM-DD" → { jobCode, note, confirmed:true, ts } }
+
+const EQUIP_CATEGORIES=['Excavator','Dozer','Loader','Truck','Scraper','Grader','Roller','Skid Steer','Backhoe','Crane','Trailer','Support','Other'];
+const EQUIP_CAT_COLORS={'Excavator':'#F26722','Dozer':'#E8B931','Loader':'#4A90D9','Truck':'#708090','Scraper':'#CD853F','Grader':'#7B68EE','Roller':'#2E8B57','Skid Steer':'#16A085','Backhoe':'#B9AB99','Crane':'#E67E22','Trailer':'#3E4D3E','Support':'#95a5a6','Other':'#bdc3c7'};
+let _editingEquipId=null;
+let _equipView='grid'; // 'grid' or 'gantt'
+let _equipWeekOffset=0; // 0 = current week
+
+function persistEquipment(){
+  localStorage.setItem('bdc_equipment',JSON.stringify(Store.equipment));
+}
+function loadEquipment(){
+  const s=localStorage.getItem('bdc_equipment');
+  if(s){try{Store.equipment=JSON.parse(s)}catch(e){log('Could not load equipment from storage')}}
+}
+function persistEquipPlan(){
+  localStorage.setItem('bdc_equip_plan',JSON.stringify(Store.equipPlan));
+}
+function loadEquipPlan(){
+  const s=localStorage.getItem('bdc_equip_plan');
+  if(s){try{Store.equipPlan=JSON.parse(s)}catch(e){log('Could not load equip plan')}}
+}
+
+function setEquipPlan(equipId,dateISO,jobCode,note){
+  Store.equipPlan[equipId+'|'+dateISO]={jobCode,note:note||'',confirmed:true,ts:Date.now()};
+  persistEquipPlan();
+}
+function clearEquipPlanCell(equipId,dateISO){
+  delete Store.equipPlan[equipId+'|'+dateISO];
+  persistEquipPlan();
+}
+function getEquipPlanCell(equipId,dateISO){
+  return Store.equipPlan[equipId+'|'+dateISO]||null;
+}
+function setEquipPlanWeek(equipId,weekStartISO,jobCode,note){
+  const ws=new Date(weekStartISO+'T00:00:00');
+  for(let i=0;i<5;i++){
+    const d=new Date(ws);d.setDate(d.getDate()+i);
+    setEquipPlan(equipId,d.toISOString().split('T')[0],jobCode,note);
+  }
+  persistEquipPlan();
+}
+
+// Get last known job for a piece of equipment (from plan, then actuals)
+function getEquipLastKnownLocation(equipId){
+  const eq=Store.equipment[equipId];
+  if(!eq)return null;
+  // 1. Manual override
+  if(eq.location){
+    const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==eq.location);
+    return {jobCode:eq.location,jobName:jobEntry?jobEntry[1].meta?.name||eq.location:eq.location,source:'manual'};
+  }
+  // 2. Most recent plan entry
+  const today=new Date().toISOString().split('T')[0];
+  let bestDate='',bestJob=null;
+  Object.entries(Store.equipPlan).forEach(([key,val])=>{
+    if(!key.startsWith(equipId+'|'))return;
+    const d=key.split('|')[1];
+    if(d<=today&&d>bestDate){bestDate=d;bestJob=val.jobCode}
+  });
+  if(bestJob){
+    const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==bestJob);
+    return {jobCode:bestJob,jobName:jobEntry?jobEntry[1].meta?.name||bestJob:bestJob,source:'plan',date:bestDate};
+  }
+  // 3. Check HCSS actuals for equipment code match
+  const eqCode=(eq.code||'').toLowerCase();
+  let bestActDate='',bestActJob=null;
+  Object.entries(Store.jobs).forEach(([jk,job])=>{
+    if(!job.actualsDetail)return;
+    // actualsDetail doesn't carry per-equipment detail yet, so skip for now
+  });
+  return null;
+}
+
+// ── Equipment Modal Functions ──
+function openEquipModal(editId){
+  _editingEquipId=editId||null;
+  document.getElementById('equipModalTitle').textContent=editId?'Edit Equipment':'Add Equipment';
+  document.getElementById('equipDeleteBtn').style.display=editId?'inline-block':'none';
+  // Populate job dropdown
+  const locSel=document.getElementById('equipLocation');
+  locSel.innerHTML='<option value="">— None / Yard —</option>';
+  Object.entries(Store.jobs).forEach(([k,j])=>{
+    const num=j.meta?.number||'';
+    if(num)locSel.innerHTML+=`<option value="${esc(num)}">${esc(num)} — ${esc(j.meta?.name||'')}</option>`;
+  });
+  if(editId&&Store.equipment[editId]){
+    const eq=Store.equipment[editId];
+    document.getElementById('equipCode').value=eq.code||'';
+    document.getElementById('equipDesc').value=eq.description||'';
+    document.getElementById('equipCategory').value=eq.category||'Other';
+    document.getElementById('equipLocation').value=eq.location||'';
+    document.getElementById('equipNotes').value=eq.notes||'';
+  }else{
+    document.getElementById('equipCode').value='';
+    document.getElementById('equipDesc').value='';
+    document.getElementById('equipCategory').value='Excavator';
+    document.getElementById('equipLocation').value='';
+    document.getElementById('equipNotes').value='';
+  }
+  document.getElementById('equipModal').classList.add('show');
+}
+function closeEquipModal(){
+  document.getElementById('equipModal').classList.remove('show');
+  _editingEquipId=null;
+}
+function saveEquip(){
+  const code=document.getElementById('equipCode').value.trim();
+  const desc=document.getElementById('equipDesc').value.trim();
+  const cat=document.getElementById('equipCategory').value;
+  const loc=document.getElementById('equipLocation').value;
+  const notes=document.getElementById('equipNotes').value.trim();
+  if(!code){alert('Equipment code is required');return}
+  const id=_editingEquipId||code.toLowerCase().replace(/[^a-z0-9]/g,'-');
+  if(!_editingEquipId&&Store.equipment[id]){alert('Equipment with this code already exists');return}
+  if(!Store.equipment[id])Store.equipment[id]={id,assignments:[]};
+  const eq=Store.equipment[id];
+  eq.code=code;eq.description=desc;eq.category=cat;eq.location=loc;eq.notes=notes;
+  persistEquipment();closeEquipModal();renderEquipmentPlanner();
+}
+function deleteEquipConfirm(){
+  if(!_editingEquipId)return;
+  if(!confirm('Delete "'+Store.equipment[_editingEquipId]?.description+'"? This removes the equipment and all its plan entries.'))return;
+  // Clean plan entries
+  Object.keys(Store.equipPlan).forEach(k=>{
+    if(k.startsWith(_editingEquipId+'|'))delete Store.equipPlan[k];
+  });
+  delete Store.equipment[_editingEquipId];
+  persistEquipment();persistEquipPlan();closeEquipModal();renderEquipmentPlanner();
+}
+
+// ── Equipment Assignment Modal ──
+function openEquipAssignModal(preselectedEquipId){
+  const eqSel=document.getElementById('eqAssignEquipSelect');
+  const jobSel=document.getElementById('eqAssignJobSelect');
+  eqSel.innerHTML='';jobSel.innerHTML='';
+  Object.values(Store.equipment).sort((a,b)=>(a.code||'').localeCompare(b.code||'')).forEach(eq=>{
+    eqSel.innerHTML+=`<option value="${esc(eq.id)}">${esc(eq.code)} — ${esc(eq.description||eq.category)}</option>`;
+  });
+  Object.entries(Store.jobs).forEach(([k,j])=>{
+    const num=j.meta?.number||'';
+    if(num)jobSel.innerHTML+=`<option value="${esc(num)}">${esc(num)} — ${esc(j.meta?.name||'')}</option>`;
+  });
+  if(preselectedEquipId)eqSel.value=preselectedEquipId;
+  // Default dates
+  const today=new Date();
+  document.getElementById('eqAssignStart').value=today.toISOString().split('T')[0];
+  const twoWeeks=new Date(today);twoWeeks.setDate(twoWeeks.getDate()+14);
+  document.getElementById('eqAssignEnd').value=twoWeeks.toISOString().split('T')[0];
+  document.getElementById('eqAssignNote').value='';
+  document.getElementById('equipAssignModal').classList.add('show');
+}
+function closeEquipAssignModal(){
+  document.getElementById('equipAssignModal').classList.remove('show');
+}
+function saveEquipAssignment(){
+  const equipId=document.getElementById('eqAssignEquipSelect').value;
+  const jobCode=document.getElementById('eqAssignJobSelect').value;
+  const start=document.getElementById('eqAssignStart').value;
+  const end=document.getElementById('eqAssignEnd').value;
+  const note=document.getElementById('eqAssignNote').value.trim();
+  if(!equipId||!jobCode||!start||!end){alert('All fields are required');return}
+  if(end<start){alert('End date must be after start date');return}
+  // Set plan entries for each weekday in the range
+  const s=new Date(start+'T00:00:00');
+  const e=new Date(end+'T00:00:00');
+  let count=0;
+  for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){
+    const dow=d.getDay();
+    if(dow===0||dow===6)continue; // skip weekends
+    setEquipPlan(equipId,d.toISOString().split('T')[0],jobCode,note);
+    count++;
+  }
+  // Also update the equipment's current location
+  if(Store.equipment[equipId])Store.equipment[equipId].location=jobCode;
+  persistEquipment();
+  closeEquipAssignModal();renderEquipmentPlanner();
+  log(`Assigned ${Store.equipment[equipId]?.code||equipId} to job ${jobCode} for ${count} days`);
+}
+
+// ── Bulk Quick-Assign from Weekly Grid ──
+function equipGridAssign(equipId,weekStartISO){
+  const eq=Store.equipment[equipId];
+  if(!eq)return;
+  // Build job list for dropdown
+  const jobOpts=[];
+  Object.entries(Store.jobs).forEach(([k,j])=>{
+    const num=j.meta?.number||'';
+    if(num)jobOpts.push({code:num,name:j.meta?.name||num});
+  });
+  if(jobOpts.length===0){alert('No jobs available');return}
+  // Simple prompt with job selection
+  const choices=jobOpts.map((j,i)=>`${i+1}. ${j.code} — ${j.name}`).join('\n');
+  const pick=prompt('Assign '+eq.code+' for week of '+weekStartISO+':\n\n'+choices+'\n\nEnter number (or "clear" to remove):');
+  if(!pick)return;
+  if(pick.toLowerCase()==='clear'){
+    const ws=new Date(weekStartISO+'T00:00:00');
+    for(let i=0;i<5;i++){
+      const d=new Date(ws);d.setDate(d.getDate()+i);
+      clearEquipPlanCell(equipId,d.toISOString().split('T')[0]);
+    }
+    renderEquipmentPlanner();return;
+  }
+  const idx=parseInt(pick)-1;
+  if(isNaN(idx)||idx<0||idx>=jobOpts.length){alert('Invalid selection');return}
+  setEquipPlanWeek(equipId,weekStartISO,jobOpts[idx].code,'');
+  if(Store.equipment[equipId])Store.equipment[equipId].location=jobOpts[idx].code;
+  persistEquipment();
+  renderEquipmentPlanner();
+}
+
+// Get the dominant job for an equipment piece in a given week
+function getEquipWeekJob(equipId,weekStartISO){
+  const ws=new Date(weekStartISO+'T00:00:00');
+  const jobCounts={};
+  for(let i=0;i<5;i++){
+    const d=new Date(ws);d.setDate(d.getDate()+i);
+    const cell=getEquipPlanCell(equipId,d.toISOString().split('T')[0]);
+    if(cell&&cell.jobCode){
+      jobCounts[cell.jobCode]=(jobCounts[cell.jobCode]||0)+1;
+    }
+  }
+  const sorted=Object.entries(jobCounts).sort((a,b)=>b[1]-a[1]);
+  if(sorted.length===0)return null;
+  return {jobCode:sorted[0][0],days:sorted[0][1],multi:sorted.length>1};
+}
+
+// ═══════════════════════════════════════════
+// RENDER EQUIPMENT PLANNER
+// ═══════════════════════════════════════════
+function renderEquipmentPlanner(){
+  const el=document.getElementById('equipmentContent');
+  if(!el)return;
+  const allEquip=Object.values(Store.equipment).sort((a,b)=>{
+    if(a.category!==b.category)return (a.category||'').localeCompare(b.category||'');
+    return (a.code||'').localeCompare(b.code||'');
+  });
+
+  let h='';
+
+  // ── Header Bar ──
+  h+=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <button class="btn-primary btn-sm" onclick="openEquipModal()">+ Add Equipment</button>
+    <button class="btn-primary btn-sm" onclick="openEquipAssignModal()">+ Assign to Job</button>
+    <div style="flex:1;"></div>
+    <div style="display:flex;gap:4px;background:var(--ash);border-radius:6px;padding:2px;">
+      <button class="${_equipView==='grid'?'btn-primary':'btn-secondary'} btn-sm" onclick="_equipView='grid';renderEquipmentPlanner()" style="padding:4px 12px;font-size:11px;">Weekly Grid</button>
+      <button class="${_equipView==='gantt'?'btn-primary':'btn-secondary'} btn-sm" onclick="_equipView='gantt';renderEquipmentPlanner()" style="padding:4px 12px;font-size:11px;">Timeline</button>
+    </div>
+  </div>`;
+
+  if(allEquip.length===0){
+    h+='<div class="empty-state"><h2>No Equipment Added</h2><p>Click "+ Add Equipment" to start building your fleet roster. Equipment can be scheduled across jobs with the weekly grid or timeline view.</p></div>';
+    el.innerHTML=h;return;
+  }
+
+  // ── Fleet Summary Cards ──
+  const catCounts={};
+  allEquip.forEach(eq=>{catCounts[eq.category]=(catCounts[eq.category]||0)+1});
+  h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">';
+  Object.entries(catCounts).sort((a,b)=>b[1]-a[1]).forEach(([cat,count])=>{
+    const color=EQUIP_CAT_COLORS[cat]||'#999';
+    h+=`<div style="background:var(--card);border:1px solid var(--border);border-left:4px solid ${color};border-radius:6px;padding:8px 14px;min-width:100px;">
+      <div style="font-size:20px;font-weight:700;color:${color};">${count}</div>
+      <div style="font-size:11px;color:var(--text-light);">${esc(cat)}${count>1?'s':''}</div>
+    </div>`;
+  });
+  h+='</div>';
+
+  if(_equipView==='grid'){
+    h+=renderEquipWeeklyGrid(allEquip);
+  }else{
+    h+=renderEquipGantt(allEquip);
+  }
+
+  // ── Fleet Roster Table ──
+  h+='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Fleet Roster</span><span style="font-size:11px;color:var(--text-light);">'+allEquip.length+' machines</span></div>';
+  h+='<div class="table-wrap"><table style="font-size:12px;">';
+  h+='<tr><th style="background:var(--ash);font-weight:600;">Code</th><th style="background:var(--ash);font-weight:600;">Description</th><th style="background:var(--ash);font-weight:600;">Category</th><th style="background:var(--ash);font-weight:600;">Current Location</th><th style="background:var(--ash);font-weight:600;">Notes</th><th style="background:var(--ash);font-weight:600;width:60px;">Edit</th></tr>';
+  let lastCat='';
+  allEquip.forEach(eq=>{
+    if(eq.category!==lastCat){
+      lastCat=eq.category;
+      const color=EQUIP_CAT_COLORS[eq.category]||'#999';
+      h+=`<tr><td colspan="6" style="background:${color}11;font-weight:600;color:${color};padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">${esc(eq.category)}s</td></tr>`;
+    }
+    const loc=getEquipLastKnownLocation(eq.id);
+    const locStr=loc?`<span style="color:var(--green);font-weight:500;">${esc(loc.jobCode)}</span> <span style="color:var(--text-light);font-size:10px;">${esc(loc.jobName)}</span>`:'<span style="color:var(--text-light);">— Yard —</span>';
+    h+=`<tr>`;
+    h+=`<td style="font-weight:600;">${esc(eq.code)}</td>`;
+    h+=`<td>${esc(eq.description||'')}</td>`;
+    h+=`<td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${EQUIP_CAT_COLORS[eq.category]||'#999'};margin-right:4px;"></span>${esc(eq.category)}</td>`;
+    h+=`<td>${locStr}</td>`;
+    h+=`<td style="color:var(--text-light);font-size:11px;">${esc(eq.notes||'')}</td>`;
+    h+=`<td><button class="edit-btn" onclick="openEquipModal('${esc(eq.id)}')" style="font-size:10px;padding:2px 8px;">Edit</button></td>`;
+    h+=`</tr>`;
+  });
+  h+='</table></div></div>';
+
+  el.innerHTML=h;
+}
+
+// ── Weekly Grid View ──
+function renderEquipWeeklyGrid(allEquip){
+  const today=new Date();today.setHours(0,0,0,0);
+  // Calculate week starts (Mon) for 8 weeks centered around current offset
+  const weeks=[];
+  const baseMonday=new Date(today);
+  baseMonday.setDate(baseMonday.getDate()-baseMonday.getDay()+1); // This Monday
+  for(let w=-1+_equipWeekOffset;w<7+_equipWeekOffset;w++){
+    const ws=new Date(baseMonday);ws.setDate(ws.getDate()+w*7);
+    weeks.push(ws.toISOString().split('T')[0]);
+  }
+
+  // Build job color palette
+  const jobColors={};let colorIdx=0;
+  const palette=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22','#8B4513','#4682B4'];
+
+  let h='<div class="card"><div class="card-title" style="justify-content:space-between;"><span>Equipment Schedule — Weekly Grid</span>';
+  h+=`<div style="display:flex;gap:6px;align-items:center;">
+    <button class="edit-btn" onclick="_equipWeekOffset-=4;renderEquipmentPlanner()" style="padding:2px 8px;">&larr; Earlier</button>
+    <button class="edit-btn" onclick="_equipWeekOffset=0;renderEquipmentPlanner()" style="padding:2px 8px;">Today</button>
+    <button class="edit-btn" onclick="_equipWeekOffset+=4;renderEquipmentPlanner()" style="padding:2px 8px;">Later &rarr;</button>
+  </div>`;
+  h+='</div>';
+  h+='<div class="table-wrap"><table style="font-size:11px;table-layout:fixed;">';
+
+  // Header row
+  h+='<tr><th style="background:var(--ash);font-weight:600;min-width:140px;position:sticky;left:0;z-index:2;">Equipment</th>';
+  weeks.forEach(ws=>{
+    const d=new Date(ws+'T00:00:00');
+    const isThisWeek=ws===baseMonday.toISOString().split('T')[0]&&_equipWeekOffset<=0&&_equipWeekOffset>=-1;
+    const mon=d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    const fri=new Date(d);fri.setDate(fri.getDate()+4);
+    const friStr=fri.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    const bg=isThisWeek?'var(--green)':'var(--ash)';
+    const fg=isThisWeek?'#fff':'inherit';
+    h+=`<th style="background:${bg};color:${fg};font-weight:600;text-align:center;min-width:110px;font-size:10px;">${mon} — ${friStr}</th>`;
+  });
+  h+='</tr>';
+
+  // Equipment rows grouped by category
+  let lastCat='';
+  allEquip.forEach(eq=>{
+    if(eq.category!==lastCat){
+      lastCat=eq.category;
+      const color=EQUIP_CAT_COLORS[eq.category]||'#999';
+      h+=`<tr><td colspan="${weeks.length+1}" style="background:${color}11;font-weight:600;color:${color};padding:4px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;">${esc(eq.category)}s</td></tr>`;
+    }
+    h+=`<tr><td style="font-weight:500;background:var(--card);position:sticky;left:0;z-index:1;border-right:2px solid var(--border);">
+      <div style="font-size:12px;">${esc(eq.code)}</div>
+      <div style="font-size:10px;color:var(--text-light);">${esc(eq.description||'')}</div>
+    </td>`;
+    weeks.forEach(ws=>{
+      const weekJob=getEquipWeekJob(eq.id,ws);
+      if(weekJob){
+        if(!jobColors[weekJob.jobCode]){jobColors[weekJob.jobCode]=palette[colorIdx%palette.length];colorIdx++}
+        const color=jobColors[weekJob.jobCode];
+        const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==weekJob.jobCode);
+        const jobName=jobEntry?jobEntry[1].meta?.name||weekJob.jobCode:weekJob.jobCode;
+        const daysLabel=weekJob.days<5?` (${weekJob.days}d)`:'';
+        h+=`<td style="background:${color}18;cursor:pointer;text-align:center;border:1px solid ${color}33;" onclick="equipGridAssign('${esc(eq.id)}','${ws}')" title="${esc(jobName)}${daysLabel}">
+          <div style="color:${color};font-weight:600;font-size:11px;">${esc(weekJob.jobCode)}</div>
+          <div style="font-size:9px;color:var(--text-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px;">${esc(jobName)}</div>
+          ${weekJob.multi?'<div style="font-size:8px;color:var(--orange);">split</div>':''}
+        </td>`;
+      }else{
+        h+=`<td style="text-align:center;cursor:pointer;color:var(--text-light);font-size:18px;" onclick="equipGridAssign('${esc(eq.id)}','${ws}')" title="Click to assign">+</td>`;
+      }
+    });
+    h+='</tr>';
+  });
+
+  h+='</table></div>';
+
+  // Job color legend
+  if(Object.keys(jobColors).length>0){
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;padding:0 4px;">';
+    Object.entries(jobColors).forEach(([jc,color])=>{
+      const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==jc);
+      const jn=jobEntry?jobEntry[1].meta?.name||jc:jc;
+      h+=`<div style="display:flex;align-items:center;gap:4px;font-size:10px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};"></span>${esc(jc)} — ${esc(jn)}</div>`;
+    });
+    h+='</div>';
+  }
+
+  h+='</div>';
+  return h;
+}
+
+// ── Gantt Timeline View ──
+function renderEquipGantt(allEquip){
+  // Build timeline from plan entries
+  let minDate=null,maxDate=null;
+  const today=new Date();today.setHours(0,0,0,0);
+  // Scan all plan entries to find date range
+  Object.keys(Store.equipPlan).forEach(k=>{
+    const d=new Date(k.split('|')[1]+'T00:00:00');
+    if(!minDate||d<minDate)minDate=d;
+    if(!maxDate||d>maxDate)maxDate=d;
+  });
+  // Default range: 2 weeks back to 6 weeks forward
+  if(!minDate){minDate=new Date(today);minDate.setDate(minDate.getDate()-14)}
+  if(!maxDate){maxDate=new Date(today);maxDate.setDate(maxDate.getDate()+42)}
+  // Extend range a bit
+  const rangeStart=new Date(Math.min(minDate,new Date(today.getTime()-14*86400000)));
+  const rangeEnd=new Date(Math.max(maxDate,new Date(today.getTime()+42*86400000)));
+  const totalDays=Math.max(1,(rangeEnd-rangeStart)/86400000);
+
+  const jobColors={};let colorIdx=0;
+  const palette=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22'];
+
+  let h='<div class="card"><div class="card-title">Equipment Schedule — Timeline</div>';
+  h+='<div style="overflow-x:auto;">';
+
+  // Month headers
+  h+='<div style="display:flex;"><div style="min-width:160px;flex-shrink:0;"></div><div style="flex:1;display:flex;position:relative;">';
+  const mc=new Date(rangeStart);mc.setDate(1);
+  while(mc<=rangeEnd){
+    const ms=Math.max(0,(mc-rangeStart)/86400000)/totalDays*100;
+    h+=`<div style="position:absolute;left:${ms}%;font-size:10px;color:var(--text-light);border-left:1px solid var(--border);padding-left:4px;top:0;">${mc.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;
+    mc.setMonth(mc.getMonth()+1);
+  }
+  h+='</div></div>';
+  h+='<div style="margin-top:18px;">';
+
+  // Equipment rows
+  let lastCat='';
+  allEquip.forEach(eq=>{
+    if(eq.category!==lastCat){
+      lastCat=eq.category;
+      const color=EQUIP_CAT_COLORS[eq.category]||'#999';
+      h+=`<div style="background:${color}11;padding:3px 10px;font-size:10px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.5px;">${esc(eq.category)}s</div>`;
+    }
+
+    // Find contiguous job spans
+    const spans=[];
+    let currentJob=null,spanStart=null;
+    for(let d=new Date(rangeStart);d<=rangeEnd;d.setDate(d.getDate()+1)){
+      const iso=d.toISOString().split('T')[0];
+      const cell=getEquipPlanCell(eq.id,iso);
+      const jc=cell?cell.jobCode:null;
+      if(jc!==currentJob){
+        if(currentJob&&spanStart){
+          spans.push({jobCode:currentJob,start:new Date(spanStart),end:new Date(d)});
+        }
+        currentJob=jc;
+        spanStart=jc?new Date(d):null;
+      }
+    }
+    if(currentJob&&spanStart){
+      spans.push({jobCode:currentJob,start:new Date(spanStart),end:new Date(rangeEnd)});
+    }
+
+    h+=`<div style="display:flex;align-items:center;min-height:28px;border-bottom:1px solid var(--border);">`;
+    h+=`<div style="min-width:160px;flex-shrink:0;font-size:11px;padding:2px 8px;"><span style="font-weight:600;">${esc(eq.code)}</span> <span style="color:var(--text-light);font-size:10px;">${esc(eq.description||'')}</span></div>`;
+    h+=`<div style="flex:1;position:relative;height:22px;">`;
+
+    spans.forEach(span=>{
+      if(!jobColors[span.jobCode]){jobColors[span.jobCode]=palette[colorIdx%palette.length];colorIdx++}
+      const color=jobColors[span.jobCode];
+      const l=Math.max(0,(span.start-rangeStart)/86400000)/totalDays*100;
+      const w=Math.max(0.5,((span.end-span.start)/86400000)/totalDays*100);
+      const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==span.jobCode);
+      const jn=jobEntry?jobEntry[1].meta?.name||span.jobCode:span.jobCode;
+      h+=`<div style="position:absolute;left:${l}%;width:${w}%;height:18px;top:2px;background:${color};border-radius:3px;opacity:0.85;display:flex;align-items:center;justify-content:center;overflow:hidden;" title="${esc(span.jobCode)} — ${esc(jn)}">
+        <span style="color:#fff;font-size:9px;font-weight:600;text-shadow:0 1px 2px rgba(0,0,0,.3);white-space:nowrap;">${esc(span.jobCode)}</span>
+      </div>`;
+    });
+
+    // Today line
+    if(today>=rangeStart&&today<=rangeEnd){
+      const tp=(today-rangeStart)/86400000/totalDays*100;
+      h+=`<div style="position:absolute;left:${tp}%;top:0;bottom:0;width:2px;background:var(--red);opacity:0.6;z-index:1;"></div>`;
+    }
+
+    h+='</div></div>';
+  });
+
+  h+='</div>';
+
+  // Legend
+  if(Object.keys(jobColors).length>0){
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;padding:4px;">';
+    Object.entries(jobColors).forEach(([jc,color])=>{
+      const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==jc);
+      const jn=jobEntry?jobEntry[1].meta?.name||jc:jc;
+      h+=`<div style="display:flex;align-items:center;gap:4px;font-size:10px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color};"></span>${esc(jc)} — ${esc(jn)}</div>`;
+    });
+    h+='</div>';
+  }
+
+  h+='</div>';
+  return h;
 }
 
 function crewDisplayName(id){
@@ -2434,6 +2997,7 @@ function renderActiveSubTab(){
     jcs:renderJobCostSchedule,
     production:renderProduction,
     crews:renderCrews,
+    equipment:renderEquipmentPlanner,
     eva:renderEVA,
     forecast:renderForecast,
     payapps:renderPayApps,
@@ -2454,6 +3018,9 @@ loadCrewHistory();
 loadSubs();
 // Load crew plan from local storage
 loadCrewPlan();
+// Load equipment from local storage
+loadEquipment();
+loadEquipPlan();
 // Init user label
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // Initialize nav to default: Schedule & Financials > Overview
