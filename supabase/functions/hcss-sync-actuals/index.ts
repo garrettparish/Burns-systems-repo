@@ -538,10 +538,28 @@ function isJobActive(j: any): boolean {
 }
 
 async function listTimeCards(token: string, buCode: string, jobId: string, sinceISO: string | null) {
-  // EP.timeCards already includes ?jobId=, so append with &
+  // Step 1: List timecard summaries via /timeCardInfo (returns ids, dates, foreman)
   const base = EP.timeCards(buCode, jobId);
   const url = sinceISO ? `${base}&startDate=${sinceISO}` : base;
-  return await hcssGetPaginated(url, token);
+  const summaries = await hcssGetPaginated(url, token);
+
+  // Step 2: Fetch full detail for each timecard via /timeCards/{id}
+  // This gives us costCodes[], employees[] with hours, equipment[]
+  const details: any[] = [];
+  for (const tc of summaries) {
+    if (!tc.id) continue;
+    try {
+      const detail = await hcssGet(
+        `${HCSS_API_BASE}/heavyjob/api/v1/timeCards/${tc.id}`,
+        token
+      );
+      details.push(detail);
+    } catch (e) {
+      // Individual timecard fetch failed — skip it, don't block the whole sync
+      console.warn(`Failed to fetch timecard detail ${tc.id}: ${e.message || e}`);
+    }
+  }
+  return details;
 }
 
 async function listQuantities(token: string, buCode: string, jobId: string, sinceISO: string | null) {
@@ -561,73 +579,107 @@ async function listQuantities(token: string, buCode: string, jobId: string, sinc
 }
 
 // -------------------- MERGE / NORMALIZE --------------------
-// HCSS time cards contain labor + equipment costs keyed by date/costCode/foreman.
-// HCSS quantities contain installed quantity by date/costCode.
-// We accumulate both into the same composite-key map so the final DetailRow
-// mirrors exactly what parseActualsDetailRaw() produces from the XLSX file.
-function mergeJobRows(jobCode: string, timeCards: any[], quantities: any[]): DetailRow[] {
+// HCSS timecard detail structure (from GET /timeCards/{id}):
+//   - costCodes[]: { timeCardCostCodeId, costCodeCode, quantity, unitOfMeasure, isTm }
+//   - employees[]: { employeeCode, employeeDescription, payClassCode,
+//                    regularHours[{timeCardCostCodeId, hours}],
+//                    overtimeHours[{timeCardCostCodeId, hours}],
+//                    costAdjustments[{timeCardCostCodeId, amount}] }
+//   - equipment[]: { equipmentCode, equipmentDescription,
+//                    totalHours[{timeCardCostCodeId, hours}],
+//                    operatingHours[{timeCardCostCodeId, hours}] }
+//
+// We produce one DetailRow per (date, costCode, foreman) by:
+//   1. Building a costCodeId → costCode lookup from costCodes[]
+//   2. Summing employee regular + OT hours per costCode
+//   3. Summing equipment hours per costCode
+//   4. Grabbing quantity from costCodes[].quantity
+function mergeJobRows(jobCode: string, timeCards: any[], _quantities: any[]): DetailRow[] {
   const map = new Map<string, DetailRow>();
-  const key = (date: string, code: string, foreman: string) => `${date}|${code}|${foreman}`;
-  const pick = (o: any, keys: string[]): any => {
-    for (const k of keys) if (o[k] != null) return o[k];
-    return undefined;
-  };
+  const rowKey = (date: string, code: string, foreman: string) => `${date}|${code}|${foreman}`;
   const num = (v: any) => { const n = Number(v); return isFinite(n) ? n : 0; };
-  const date = (v: any) => {
+  const fmtDate = (v: any) => {
     if (!v) return '';
     const d = new Date(v);
     return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
   };
 
-  // Time cards — one row per (date, cost code, foreman) with cost breakdown.
   for (const tc of timeCards) {
-    // Some HCSS TC shapes nest entries under `entries` or `costCodeEntries`.
-    const entries: any[] = Array.isArray(tc.entries) ? tc.entries
-                        : Array.isArray(tc.costCodeEntries) ? tc.costCodeEntries
-                        : [tc];
-    for (const e of entries) {
-      const d = date(pick(e, ['date', 'workDate', 'timeCardDate']) || pick(tc, ['date', 'workDate', 'timeCardDate']));
-      const costCode = String(pick(e, ['costCode', 'costCodeCode', 'code']) || '').trim();
-      if (!d || !costCode) continue;
-      const foreman = String(pick(e, ['foreman', 'foremanName']) || pick(tc, ['foreman', 'foremanName']) || '').trim();
-      const k = key(d, costCode, foreman);
-      let row = map.get(k);
-      if (!row) {
-        row = blankRow(jobCode, d, costCode, foreman);
-        row.cost_code_desc = String(pick(e, ['costCodeDescription', 'description']) || '');
-        row.unit = String(pick(e, ['unit', 'units', 'unitOfMeasure']) || '');
-        map.set(k, row);
-      }
-      row.actual_labor_hours  += num(pick(e, ['laborHours', 'actualLaborHours', 'hours']));
-      row.actual_equip_hours  += num(pick(e, ['equipmentHours', 'actualEquipmentHours', 'equipHours']));
-      row.actual_labor_cost   += num(pick(e, ['laborCost', 'actualLaborCost']));
-      row.actual_equip_cost   += num(pick(e, ['equipmentCost', 'actualEquipmentCost']));
-      row.actual_mat_cost     += num(pick(e, ['materialCost', 'actualMaterialCost']));
-      row.actual_sub_cost     += num(pick(e, ['subcontractCost', 'actualSubcontractCost']));
-      row.expected_labor_hours+= num(pick(e, ['expectedLaborHours', 'budgetLaborHours']));
-      row.expected_labor_cost += num(pick(e, ['expectedLaborCost',  'budgetLaborCost']));
-      row.expected_equip_cost += num(pick(e, ['expectedEquipmentCost', 'budgetEquipmentCost']));
-      row.expected_mat_cost   += num(pick(e, ['expectedMaterialCost',  'budgetMaterialCost']));
-      row.expected_sub_cost   += num(pick(e, ['expectedSubcontractCost','budgetSubcontractCost']));
-    }
-  }
+    const d = fmtDate(tc.date);
+    if (!d) continue;
+    const foreman = String(tc.foremanDescription || tc.foremanCode || '').trim();
 
-  // Quantities — attach installed qty to the matching (date, code, foreman) row.
-  // If the quantity row has no foreman, we attach it to the foreman='' row.
-  for (const q of quantities) {
-    const d = date(pick(q, ['date', 'workDate', 'reportDate']));
-    const costCode = String(pick(q, ['costCode', 'code']) || '').trim();
-    if (!d || !costCode) continue;
-    const foreman = String(pick(q, ['foreman', 'foremanName']) || '').trim();
-    const k = key(d, costCode, foreman);
-    let row = map.get(k);
-    if (!row) {
-      row = blankRow(jobCode, d, costCode, foreman);
-      row.cost_code_desc = String(pick(q, ['costCodeDescription', 'description']) || '');
-      row.unit = String(pick(q, ['unit', 'units']) || '');
-      map.set(k, row);
+    // Build costCodeId → {code, unit, qty} lookup
+    const ccMap = new Map<string, { code: string; unit: string; qty: number }>();
+    const costCodes: any[] = tc.costCodes || [];
+    for (const cc of costCodes) {
+      const code = String(cc.costCodeCode || cc.code || '').trim();
+      if (!code) continue;
+      ccMap.set(cc.timeCardCostCodeId, {
+        code,
+        unit: String(cc.unitOfMeasure || ''),
+        qty: num(cc.quantity),
+      });
     }
-    row.actual_qty += num(pick(q, ['quantity', 'actualQuantity', 'installedQuantity']));
+
+    // If no cost codes on this timecard, skip it
+    if (ccMap.size === 0) continue;
+
+    // Initialize rows for each cost code
+    for (const [_ccId, cc] of ccMap) {
+      const k = rowKey(d, cc.code, foreman);
+      if (!map.has(k)) {
+        const row = blankRow(jobCode, d, cc.code, foreman);
+        row.unit = cc.unit;
+        row.actual_qty = cc.qty;
+        map.set(k, row);
+      } else {
+        // Accumulate quantity if same key from different timecard
+        map.get(k)!.actual_qty += cc.qty;
+      }
+    }
+
+    // Sum employee hours per cost code
+    const employees: any[] = tc.employees || [];
+    for (const emp of employees) {
+      const regHours: any[] = emp.regularHours || [];
+      const otHours: any[] = emp.overtimeHours || [];
+      const dotHours: any[] = emp.doubleOvertimeHours || [];
+      const adjustments: any[] = emp.costAdjustments || [];
+
+      for (const h of [...regHours, ...otHours, ...dotHours]) {
+        const cc = ccMap.get(h.timeCardCostCodeId);
+        if (!cc) continue;
+        const k = rowKey(d, cc.code, foreman);
+        const row = map.get(k);
+        if (row) row.actual_labor_hours += num(h.hours);
+      }
+
+      // Cost adjustments (labor cost overrides/additions)
+      for (const adj of adjustments) {
+        const cc = ccMap.get(adj.timeCardCostCodeId);
+        if (!cc) continue;
+        const k = rowKey(d, cc.code, foreman);
+        const row = map.get(k);
+        if (row) row.actual_labor_cost += num(adj.amount);
+      }
+    }
+
+    // Sum equipment hours per cost code
+    const equipment: any[] = tc.equipment || [];
+    for (const eq of equipment) {
+      const allHours: any[] = [
+        ...(eq.totalHours || []),
+        ...(eq.operatingHours || []),
+      ];
+      for (const h of allHours) {
+        const cc = ccMap.get(h.timeCardCostCodeId);
+        if (!cc) continue;
+        const k = rowKey(d, cc.code, foreman);
+        const row = map.get(k);
+        if (row) row.actual_equip_hours += num(h.hours);
+      }
+    }
   }
 
   return Array.from(map.values());
