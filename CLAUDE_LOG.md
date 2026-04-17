@@ -13,7 +13,7 @@
 - **GitHub:** garrettparish (https://github.com/garrettparish)
 - **Netlify:** Active account (existing)
 - **Supabase:** Active account (existing)
-- **Collaborator:** Nic (suggested the GitHub + auto-deploy workflow)
+- **Collaborator:** Nic Parish (brother) — runs burns-finance Supabase, uses Spectrum accounting
 
 ---
 
@@ -30,150 +30,82 @@
 
 ## Projects
 
-### Project 1: Burns Systems
+### Project 1: Burns Systems — Project Controls App
 - **Repo:** https://github.com/garrettparish/Burns-systems-repo
 - **Netlify site:** https://bdcprojectcontrols.netlify.app
 - **Supabase project:** burns-project-controls (org: nic@burnsdirt.com)
 - **Supabase URL:** https://sxzvlazmkxnbsoayhuln.supabase.co
 - **Supabase ref:** sxzvlazmkxnbsoayhuln
-- **DB table:** `jobs` (id TEXT PK, data JSONB, created_at, updated_at)
-- **Stack:** Vanilla HTML/CSS/JS + SheetJS (xlsx.js) + Supabase (persistence)
-- **Status:** Phase 1A complete — Import, Dashboard, Bid Items, Schedule, Global View, Mapping
-- **Key files:** public/index.html (main app), netlify.toml, deploy.command, .github/workflows/deploy.yml
+- **DB tables:** `jobs` (JSONB), `hcss_jobs`, `hcss_cost_codes`, `actuals_detail_sync`, `sync_log`
+- **Stack:** Vanilla HTML/CSS/JS + SheetJS (xlsx.js) + Supabase (persistence) + Supabase Edge Functions (Deno)
+- **Key files:** `public/index.html` (main app — ~9000+ lines), `supabase/functions/hcss-sync-actuals/index.ts`
 
-*(Add new project blocks here as we start them)*
-
----
-
-## Current Focus
-
-- **Active project:** Burns Systems — Project Controls App
-- **Repo:** https://github.com/garrettparish/Burns-systems-repo
-- **Branch:** main
-- **Working on:** Phase 1A bug fixes — date handling, cost breakdown, parser improvements
-- **Blocked on:** User needs to push latest index.html via deploy.command, then re-import data
-- **Priority:** Push fixes, re-import Steel Driver 775 (all 3 files), verify dashboard/gantt/global view
+### Nic's Finance Dashboard (read-only access)
+- **Supabase project:** burns-finance (`bodcpnytvonucefnbmyz.supabase.co`)
+- **Netlify site:** burns-finance.netlify.app
+- **Schema:** `burns_dirt` (Spectrum accounting data — jobs, phase codes, actuals)
+- **Our app reads from this** via second Supabase client with `db: { schema: 'burns_dirt' }`
 
 ---
 
-## Session Log
+## Current App State (as of 2026-04-17)
 
-### 2026-04-03 — Session 1
-- **What we did:**
-  - Created CLAUDE_LOG.md (this file) for cross-session context
-  - Created SETUP_GUIDE.md with step-by-step deploy pipeline instructions
-  - Created netlify.toml (build config, security headers, SPA support ready)
-  - Created .github/workflows/deploy.yml (CI/CD pipeline, Supabase migration support)
-  - Created deploy.command (one-click deploy button for Mac Desktop)
-  - Set up GitHub account (garrettparish) and Burns-systems-repo
-  - Connected repo to Netlify (project: bdcprojectcontrols, URL: bdcprojectcontrols.netlify.app)
-  - Set up Git with Personal Access Token + osxkeychain credential helper
-  - Verified deploy button works — full pipeline is live
-  - Local repo lives at: ~/Desktop/Burns System Repo/
-- **Decisions made:**
-  - Multi-project setup (not monorepo) — each project gets its own repo
-  - Push-to-main = production deploy (simple, standard)
-  - CLAUDE_LOG.md lives in desktop workspace for persistence
-  - GitHub Actions for CI (free tier, native integration)
-  - Nic's suggestion: GitHub terminal with auto-deploy + Claude context log
-- **Garrett's current state:**
-  - Creating GitHub account right now
-  - Already has Netlify and Supabase accounts
-  - Working on multiple projects (not just one)
-- **Open questions:**
-  - What's the first project we're building?
-  - GitHub username (need to update this log)
-  - Supabase project name/ref
-  - Netlify team/site name
-- **Next steps:**
-  - Garrett: finish GitHub setup, share username + repo URL
-  - Connect repo to Netlify
-  - Connect Supabase project
-  - Set env vars (Supabase keys in Netlify)
-  - First project kickoff
+### Working Features
+- **Import System:** HeavyBid Activities, HeavyBid Bid Items, Smartsheet Schedule parsers
+- **Schedule & Financials tab:** Overview, Pay Items, EVA, Forecast, Pay Apps, Cash Flow, Job Cost (Spectrum)
+- **Production tab:** Planning (Weekly Crew Planner + 16-week Resource View), Schedule (Gantt + task table), Job Cost Schedule, Production Tracker, Crews, Equipment Planner
+- **Global View:** Multi-job timeline, resource view
+- **HCSS Auto-Sync:** Edge Function syncs timecards from HeavyJob API into Supabase. Daily 5am cron + manual sync. 102 rows across 10 jobs confirmed working.
+- **Spectrum Job Cost:** Reads from Nic's burns-finance Supabase. 88 Spectrum jobs, phase codes with Current Estimate, JTD Actual, etc.
+- **Crew Planner:** Auto-discovers crews from HCSS foreman data. Weekly day-by-day planner with suggestion engine. 16-week resource outlook. Click-to-assign popovers.
+- **Equipment Planner:** Manual fleet roster with categories. Weekly day-by-day planner (mirrors crew planner layout). 16-week equipment outlook. Click-to-assign popovers. Fleet roster table with current location tracking.
 
-### 2026-04-03 — Session 2 (Cowork — multi-session)
-- **What we did:**
-  - Built complete Phase 1A project controls app (single-file HTML/CSS/JS, 837 lines, 67KB)
-  - **Import system:** HeavyBid Activities parser, HeavyBid Bid Items parser, Smartsheet Schedule parser
-  - **Import → Review → Confirm workflow** with inline edit/delete/add, checkboxes for row selection
-  - **Schedule → Bid Item Mapping step:** auto-suggest via keyword matching + discipline inference, manual override dropdowns grouped by discipline, progress bar, confirm flow
-  - **Job Dashboard:** KPI row (Contract, Direct, Overhead, Profit, Man Hours, Items, Duration), horizontal cost breakdown bars, discipline summary table, bid items table sorted by contract value, Gantt chart
-  - **Global View:** multi-job timeline with discipline bars using real schedule dates (from taskMap or keyword fallback), job summary table
-  - **Bid Items tab:** primary operational view with discipline filter chips, search, drill-down to child activities, variance detection
-  - **Schedule tab:** Gantt chart + task list with edit capability
-  - **Cost layer structure finalized:** Direct Cost + Overhead (Indirects + Addon/Bond) + Profit (Markup) = Contract (Takeoff Total)
-  - **Contract auto-calculated** from bid items — no manual entry, removed from job creation modal
-  - Moved app from Cowork outputs into `public/index.html` in the Burns System Repo
-  - **Tested with 3 jobs:** SteelDriver 775 (15 bid items, 61 activities, 41 tasks), SteelPro 772 (19 bid items, 54 activities, 58 tasks), Stone Blvd 765 (103 bid items, 116 activities, 64 tasks)
-  - Burns Dirt branding: Green #3E4D3E, Midnight #363636, Sand #B9AB99, Orange #F26722, Oswald + Source Serif 4 fonts
-- **Decisions made:**
-  - Bid items are the primary operational unit (not activities) — activities are audit/drill-down only
-  - Data hierarchy: Activities → Bid Items → Phase Codes → Pay Items
-  - Discipline derived from dominant activity code range (10000=General, 20000=Erosion, etc.)
-  - Overhead = Indirects + Addon/Bond (combined), Profit = Markup, Contract = Takeoff Total
-  - Schedule→Bid Item mapping happens as a setup step after import, not embedded in the views
-  - Single-file HTML for Phase 1A; will split into src/ modules when adding Supabase
-- **Key architecture:**
-  - `Store = { jobs:{}, activeJob:null, crews:{}, staging:{} }` — all state in memory
-  - Each job: `{ meta, activities[], bidItems[], schedule[], taskMap:{} }`
-  - taskMap: `{ taskIndex: bidItemId }` — links schedule tasks to bid items
-  - SheetJS (xlsx.js) for in-browser Excel parsing
-  - All views re-render from Store on data changes
-- **Files changed:**
-  - `public/index.html` — complete Phase 1A app (replaced placeholder)
-  - `CLAUDE_LOG.md` — updated with session context
-- **Next steps:**
-  - Push to main to deploy to bdcprojectcontrols.netlify.app
-  - Test all 3 jobs end-to-end in deployed version
-  - Connect Supabase for persistence (save/load jobs across sessions)
-  - Phase 2 features: production tracking, percent complete, WIP reporting
+### Data Storage Pattern
+- **Supabase:** Jobs (JSONB), HCSS sync tables, Spectrum (read-only from burns-finance)
+- **localStorage:** Crews (`bdc_crews`, `bdc_crew_name_map`, `bdc_crew_history`, `bdc_crew_plan`), Subs (`bdc_subs`), Equipment (`bdc_equipment`, `bdc_equip_plan`)
 
-### 2026-04-03 — Session 3 (Cowork — continued from Session 2)
-- **What we did:**
-  - **Created Supabase `jobs` table** — table was never actually created (SQL got mangled in editor). Fixed via Chrome MCP → Supabase SQL editor.
-    - `CREATE TABLE jobs (id TEXT PRIMARY KEY, data JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`
-    - `ALTER TABLE jobs ENABLE ROW LEVEL SECURITY`
-    - `CREATE POLICY "Allow all access" ON jobs FOR ALL USING (true) WITH CHECK (true)`
-  - **Fixed date serialization bug** — `JSON.stringify` calls `.toJSON()` before the replacer, so Date→`{__date:...}` wrapping never happened. All dates stored as bare ISO strings. Created `serializeForStorage()` that manually walks the object tree.
-  - **Fixed date deserialization** — `reviveDates()` now catches both `{__date:...}` wrappers AND bare ISO strings (using `DATE_KEYS` set for known date fields: start, finish, startDate, endDate).
-  - **Added `toDate()` helper** — defensive Date conversion used in renderGantt, renderSchedule, renderDashboard, renderGlobalView. Handles Date objects, ISO strings, and null.
-  - **Fixed Gantt chart** — was empty because date strings caused `Math.min()` → NaN → all bars filtered out. Now converts dates before math.
-  - **Fixed schedule overview on dashboard** — same date issue. Also added fallback: if meta.startDate/endDate missing, computes from schedule tasks.
-  - **Fixed Global View** — same date→string issue in timeline bar positioning.
-  - **Fixed activity parser** — added `col()` helper with 6+ name variants per cost column (Perm Mat, Permanent Material, Perm Material, etc.). Handles HeavyBid column name differences across versions.
-  - **Added "Other Direct" cost category** — when known cost columns (labor+burden+material+equip+subs) don't sum to directTotal, the gap shows as "Other Direct" in the cost breakdown.
-  - **Fixed bid items parser** — same `col()` treatment for flexible column matching.
-- **Root causes found:**
-  - Supabase `jobs` table never existed (SQL was mangled in web editor)
-  - `JSON.stringify` replacer receives `.toJSON()` output (strings), not raw Date objects
-  - HeavyBid column headers vary by version — parser was too strict
-- **Files changed:**
-  - `public/index.html` — all fixes above (~930 lines now)
-  - `CLAUDE_LOG.md` — updated with session context
-- **Known issue:** User needs to **re-import Steel Driver 775 data** after deploy, since the old data in Supabase has 0s for material/equipment/subs (parsed before the column name fix). Delete the existing job, create new, re-import all 3 files.
-- **Next steps:**
-  - Push to main via deploy.command
-  - Delete existing Steel Driver job in app, re-import with fixed parser
-  - Verify: Gantt, cost breakdown, schedule overview, global view all working
-  - Test with all 3 jobs
+### HCSS API Integration (RESOLVED & WORKING)
+- **Auth:** OAuth2 Client Credentials → `https://api.hcssapps.com/identity/connect/token`
+- **Working endpoints:** `/heavyjob/api/v1/businessUnits`, `/jobs`, `/costCodes`, `/employees`, `/timeCardInfo` (list), `/timeCards/{id}` (detail)
+- **Two-step timecard fetch:** List summaries via `/timeCardInfo?jobId=`, then detail via `/timeCards/{id}` for each
+- **Pagination:** Cursor-based (`cursor` + `limit`), NOT offset-based
+- **All IDs must be HCSS UUIDs**, not job codes
+- **Equipment list endpoint:** Returns 404 (not provisioned), but equipment data IS embedded in timecard details
+- **Quantities endpoint:** Returns 404, but quantity per cost code is in timecard detail
+
+### Pending / Not Yet Done
+- **Backfill All:** Has not been run yet — only 7 days of HCSS timecard history synced
+- **Schedule tab on Financials nav:** User requested this (add Schedule sub-tab to the Schedule & Financials nav, same as the one on Production tab) — NOT YET BUILT
+- **Equipment auto-discovery from HCSS:** Edge Function doesn't extract individual equipment codes from timecards yet — equipment roster is manual entry only
+- **HCSS API Setup Guide:** Generated as `HCSS_API_Setup_Guide.docx` for Nic — complete
 
 ---
 
-## Open TODOs
+## Key Architecture
 
-- [x] Garrett: Finish creating GitHub account
-- [x] Create first GitHub repo
-- [x] Link repo to Netlify (auto-deploy on push to main)
-- [x] Copy netlify.toml and .github/ into repo
-- [x] First project kickoff — Phase 1A app built
-- [ ] Push Phase 1A to main → deploy to bdcprojectcontrols.netlify.app
-- [ ] Test all 3 jobs: SteelDriver 775, SteelPro 772, Stone Blvd 765
-- [x] Link Supabase project for data persistence
-- [x] Supabase client wired into app (auto-save on import/edit, auto-load on startup)
-- [ ] Phase 2: Supabase integration (save/load jobs, auth)
-- [ ] Phase 2: Refine schedule→bid item mapping with saved state
-- [ ] Future: Phase Codes, Pay Items, billing module, WIP reporting
+- `Store = { jobs:{}, activeJob:null, crews:{}, crewNameMap:{}, crewHistory:[], crewPlan:{}, subs:{}, staging:{}, _pinAuth:{}, equipment:{}, equipPlan:{} }`
+- Each job: `{ meta, activities[], bidItems[], schedule[], taskMap:{}, actualsDetail[], actuals:{} }`
+- Single-file app: `public/index.html`
+- Edge Function: `supabase/functions/hcss-sync-actuals/index.ts` (Deno runtime)
+- Rendering: `renderActiveSubTab()` dispatches to per-tab render functions
+- Sub-tab nav: `navSub(group, sub)` — groups are `financials` and `production`
+- Equipment Planner: `renderEquipmentPlanner()` — mirrors `renderPlanning()` pattern exactly
+
+---
+
+## Key File Reference
+
+| File | Purpose |
+|------|---------|
+| `public/index.html` | Main app — all UI, logic, state management (~9000+ lines) |
+| `supabase/functions/hcss-sync-actuals/index.ts` | HCSS API sync Edge Function |
+| `supabase/migrations/20260409_hcss_sync.sql` | Creates `actuals_detail_sync`, `sync_log`, cron |
+| `supabase/migrations/20260414_hcss_metadata_sync.sql` | Creates `hcss_jobs`, `hcss_cost_codes` |
+| `HCSS_API_Reference.md` | Full HCSS API documentation |
+| `HCSS_API_Setup_Guide.docx` | Complete walkthrough doc for Nic |
+| `CLAUDE_LOG.md` | This file — session context |
+| `deploy.command` | One-click deploy script (Mac) |
+| `netlify.toml` | Netlify build config |
 
 ---
 
@@ -181,85 +113,55 @@
 
 | Decision | Rationale | Date |
 |----------|-----------|------|
-| Multi-project (separate repos) | Garrett working on multiple projects, cleaner separation | 2026-04-03 |
-| CLAUDE_LOG.md on desktop | Persists across sessions, accessible to Claude always | 2026-04-03 |
-| Push-to-main = production deploy | Simple, standard CI/CD — no complex branching needed yet | 2026-04-03 |
-| GitHub Actions for CI | Free tier, native GitHub integration, easy to extend | 2026-04-03 |
-| Netlify for frontend hosting | Already has account, great DX, auto-deploy built in | 2026-04-03 |
-| Supabase for backend | Already has account, Postgres + auth + storage in one | 2026-04-03 |
-| Bid items as primary unit | Activities are audit-only; bid items drive all views and tracking | 2026-04-03 |
-| Overhead = Indirects + Addon/Bond | Combined into single bucket; Profit = Markup; Contract = Takeoff Total | 2026-04-03 |
-| Schedule→Bid Item mapping as setup step | Post-import mapping step, not inferred at render time | 2026-04-03 |
-| Single-file HTML for Phase 1A | Simple deploy, split into modules when adding Supabase | 2026-04-03 |
+| Multi-project (separate repos) | Garrett working on multiple projects | 2026-04-03 |
+| Push-to-main = production deploy | Simple CI/CD | 2026-04-03 |
+| Bid items as primary unit | Activities are audit-only; bid items drive views | 2026-04-03 |
+| Single-file HTML app | Simple deploy, keeps everything together | 2026-04-03 |
+| localStorage for crews/equipment | No deploy needed, instant, mirrors in-memory Store | 2026-04-14 |
+| Two-step HCSS timecard fetch | `/timeCardInfo` = summaries only; `/timeCards/{id}` = full detail | 2026-04-16 |
+| Cursor-based pagination for HCSS | HCSS doesn't support skip/limit — must use cursor + limit | 2026-04-16 |
+| Equipment planner mirrors crew planner | User specifically requested same layout as Planning tab | 2026-04-17 |
+| Read Spectrum via second Supabase client | Nic's burns-finance project has accounting data we need | 2026-04-14 |
 
 ---
 
-## Tech Preferences & Patterns
+## User Preferences (Garrett)
 
-- **Default frontend:** HTML/CSS/JS (vanilla) unless otherwise specified
-- **Preferred style:** Lightweight, clean, user-friendly
-- **Approach:** Modular and easy to adjust (iterative workflow)
-- **Garrett's role:** Product designer + builder
-- **Claude's role:** Expert dev partner — proactive suggestions, challenge decisions
-
----
-
-## Repo Template (for new projects)
-
-```
-project-name/
-├── CLAUDE_LOG.md          ← symlink or copy of this file
-├── netlify.toml           ← Netlify build config
-├── .github/
-│   └── workflows/
-│       └── deploy.yml     ← CI/CD pipeline
-├── public/                ← static assets + index.html
-│   └── index.html
-├── src/                   ← application source
-│   ├── app.js
-│   └── style.css
-├── supabase/
-│   └── migrations/        ← DB schema changes
-├── package.json
-└── .gitignore
-```
+- **Communication:** Direct, practical, skip fluff. Don't give little updates — work silently and report final results.
+- **Role:** Product designer + builder, experienced with construction project controls
+- **Collaborator Nic:** Brother, handles finance/accounting side, uses Spectrum
+- **Deploy workflow:** Pushes front-end via GitHub (auto-deploys to Netlify). Edge Functions via `supabase functions deploy`.
+- **Proactive suggestions welcome** — challenge decisions when a better approach exists
 
 ---
 
-## Useful Commands
+## Session Log
 
-```bash
-# Clone a repo
-git clone https://github.com/garrettparish/project-name.git
+### 2026-04-03 — Sessions 1-3
+- Built complete Phase 1A project controls app
+- Set up GitHub, Netlify, Supabase infrastructure
+- Import system, Dashboard, Bid Items, Schedule, Global View
+- Fixed date serialization, parser bugs, Supabase table creation
 
-# Standard workflow
-git add .
-git commit -m "describe changes"
-git push origin main          # triggers Netlify auto-deploy
+### 2026-04-14 — Sessions 4-5
+- Built HCSS API integration (Edge Function)
+- Discovered correct endpoints after extensive troubleshooting with HCSS support
+- Built Spectrum Job Cost integration (reads from Nic's burns-finance Supabase)
+- Added Weekly Crew Planner, Resource View, Production Tracker
 
-# Supabase CLI
-supabase login
-supabase link --project-ref YOUR_REF
-supabase db push              # push migrations
-supabase db diff              # see pending changes
+### 2026-04-16 — Session 6
+- Fixed HCSS timecard sync (was 404 → now working: 102 rows, 10 jobs)
+- Three root causes: wrong paths, wrong ID format, wrong pagination
+- Implemented two-step fetch (timeCardInfo → timeCards/{id})
+- Tested Spectrum integration live (88 jobs, 300 phase codes confirmed)
 
-# Netlify CLI (optional)
-netlify login
-netlify link
-netlify deploy --prod         # manual deploy
-netlify open                  # open site in browser
-```
-
----
-
-## Notes for Claude
-
-- **ALWAYS read this file first** when starting a new session
-- **ALWAYS update the Session Log** before ending a session
-- Keep "Current Focus" accurate — this is the quick-glance section
-- When starting a new project, add it to the Projects section
-- Track all decisions in the Decisions table with rationale
-- If Garrett mentions Nic, he's a collaborator — note any of his suggestions
-- Garrett prefers direct, practical communication — skip fluff
-- Proactively suggest improvements, don't wait to be asked
-- When multiple projects exist, always confirm which one we're working on
+### 2026-04-17 — Session 7 (Current)
+- Generated HCSS_API_Setup_Guide.docx for Nic
+- Built Equipment Planner tab (Production → Equipment)
+  - First version: custom grid + gantt views
+  - Rewrote to match Planning tab pattern per user feedback
+  - Weekly Equipment Planner (day-by-day, click-to-assign popovers)
+  - 16-week Equipment Outlook (resource view)
+  - Fleet Roster with category grouping and location tracking
+- User requested: Schedule view on Financials tab — NOT YET BUILT
+- Updated CLAUDE_LOG.md and all reference docs for session handoff
