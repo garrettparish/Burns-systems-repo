@@ -75,9 +75,12 @@
 
 ### Pending / Not Yet Done
 - **Backfill All:** Has not been run yet — only 7 days of HCSS timecard history synced
-- **Schedule tab on Financials nav:** User requested this (add Schedule sub-tab to the Schedule & Financials nav, same as the one on Production tab) — NOT YET BUILT
 - **Equipment auto-discovery from HCSS:** Edge Function doesn't extract individual equipment codes from timecards yet — equipment roster is manual entry only
 - **HCSS API Setup Guide:** Generated as `HCSS_API_Setup_Guide.docx` for Nic — complete
+
+### Recently Shipped
+- **Schedule sub-tab on Financials nav (2026-04-17):** Added Schedule button to `subNav-financials` and added `'schedule'` to `NAV_GROUPS.financials` (also backfilled `'jobcost'` and `'equipment'` which were missing from their respective groups). Same `sub-schedule` panel is shared between Financials and Production — both routes call `renderSchedule()` via the existing dispatcher. Verified live.
+- **Equipment Planner deployed (2026-04-17):** Production > Equipment sub-tab live — weekly planner + 16-week outlook (mirrors crew planner). Verified live.
 
 ---
 
@@ -165,3 +168,9 @@
   - Fleet Roster with category grouping and location tracking
 - User requested: Schedule view on Financials tab — NOT YET BUILT
 - Updated CLAUDE_LOG.md and all reference docs for session handoff
+
+### 2026-04-17 — Session 8
+- Added Schedule sub-tab to Schedule & Financials nav (same `renderSchedule()` / `sub-schedule` panel used by Production > Schedule)
+- Updated `NAV_GROUPS`: added `schedule` + `jobcost` to financials, added `equipment` to production (these were missing and would have reset the sub-tab when switching top tabs)
+- Deployed Equipment Planner and the Schedule-in-Financials change via `deploy.command` (commits 90f55c1 + 90d719a on main)
+- Verified live on bdcprojectcontrols.netlify.app — Financials → Schedule renders KPIs + Gantt; Production → Equipment renders weekly planner + 16-week outlook
