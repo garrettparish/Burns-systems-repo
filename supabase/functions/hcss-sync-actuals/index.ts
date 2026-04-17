@@ -188,9 +188,30 @@ Deno.serve(async (req) => {
             headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
           });
           const txt = await resp.text();
-          results.push({ label: c.label, status: resp.status, body: txt.substring(0, 300) });
+          results.push({ label: c.label, status: resp.status, body: txt.substring(0, 2000) });
         } catch (e) {
           results.push({ label: c.label, status: 0, body: String(e) });
+        }
+      }
+
+      // Phase 2: If timeCardInfo returned 200, grab the first TC id and fetch its detail
+      let tcDetailSample: any = null;
+      const tcListResult = results.find(r => r.label.includes('timeCardInfo (CORRECT)') && r.status === 200);
+      if (tcListResult) {
+        try {
+          const parsed = JSON.parse(tcListResult.body);
+          const firstTc = parsed?.results?.[0];
+          if (firstTc?.id) {
+            // Try GET /timeCardInfo/{id} for full detail with cost code entries
+            const detailUrl = `${HCSS_API_BASE}/heavyjob/api/v1/timeCardInfo/${firstTc.id}`;
+            const detailResp = await fetch(detailUrl, {
+              headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+            });
+            const detailTxt = await detailResp.text();
+            tcDetailSample = { status: detailResp.status, body: detailTxt.substring(0, 3000) };
+          }
+        } catch (e) {
+          tcDetailSample = { status: 0, body: String(e) };
         }
       }
 
@@ -201,6 +222,7 @@ Deno.serve(async (req) => {
         totalJobs: testJobs.length,
         jobSamples,
         results,
+        tcDetailSample,
       });
     }
 
