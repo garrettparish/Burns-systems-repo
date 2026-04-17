@@ -292,8 +292,7 @@ tr:hover{background:#FAF8F5}
   <button class="sub-tab" data-sub="schedule" onclick="navSub('production','schedule')">Schedule</button>
   <button class="sub-tab" data-sub="jcs" onclick="navSub('production','jcs')">Job Cost Schedule</button>
   <button class="sub-tab" data-sub="production" onclick="navSub('production','production')">Production Tracker</button>
-  <button class="sub-tab" data-sub="crews" onclick="navSub('production','crews')">Crews</button>
-  <button class="sub-tab" data-sub="equipment" onclick="navSub('production','equipment')">Equipment</button>
+  <button class="sub-tab" data-sub="settings" onclick="navSub('production','settings')">Settings</button>
 </div>
 
 <!-- GLOBAL VIEW -->
@@ -342,13 +341,16 @@ tr:hover{background:#FAF8F5}
     <div id="productionContent"></div>
   </div>
 
-  <!-- Sub-panel: Crews -->
-  <div id="sub-crews" class="sub-panel">
-    <div id="crewsContent"></div>
+  <!-- Sub-panel: Settings (Crew + Equipment + Subs rosters) -->
+  <div id="sub-settings" class="sub-panel">
+    <div id="settingsContent"></div>
   </div>
 
-  <!-- Sub-panel: Equipment Planner -->
-  <div id="sub-equipment" class="sub-panel">
+  <!-- Legacy panels kept hidden for backward-compatible function calls. -->
+  <div id="sub-crews" class="sub-panel" style="display:none;">
+    <div id="crewsContent"></div>
+  </div>
+  <div id="sub-equipment" class="sub-panel" style="display:none;">
     <div id="equipmentContent"></div>
   </div>
 
@@ -877,6 +879,59 @@ function loadEquipment(){
   const s=localStorage.getItem('bdc_equipment');
   if(s){try{Store.equipment=JSON.parse(s)}catch(e){log('Could not load equipment from storage')}}
 }
+// Derive a deterministic localStorage id from a code. MUST match the logic
+// in saveEquip() so HCSS-discovered codes naturally collide with any manual
+// entries the user already created for the same machine.
+function equipIdFromCode(code){return String(code||'').toLowerCase().replace(/[^a-z0-9]/g,'-')}
+// Pull HCSS-discovered equipment from Supabase and merge into Store.equipment.
+// Called on startup and after a manual sync. Never overwrites user-assigned
+// fields (category, notes, manual location). Flags newly discovered items
+// with _needsCategory so the UI can prompt the user to categorize them.
+async function loadHcssEquipment(){
+  try{
+    const {data,error}=await sb.from('hcss_equipment')
+      .select('hcss_code,description,last_seen_job_code,last_seen_date')
+      .order('last_seen_date',{ascending:false});
+    if(error){console.warn('loadHcssEquipment:',error);return 0}
+    if(!data||!data.length)return 0;
+    let added=0,merged=0;
+    data.forEach(row=>{
+      const code=String(row.hcss_code||'').trim();
+      if(!code)return;
+      const id=equipIdFromCode(code);
+      const existing=Store.equipment[id];
+      if(!existing){
+        Store.equipment[id]={
+          id,
+          code,
+          description:row.description||'',
+          category:'Other',
+          location:'',
+          notes:'',
+          source:'hcss',
+          _needsCategory:true,
+          hcssLastSeenJob:row.last_seen_job_code||'',
+          hcssLastSeenDate:row.last_seen_date||'',
+        };
+        added++;
+      }else{
+        // Existing entry — merge ONLY HCSS-sourced fields.
+        if(!existing.description&&row.description)existing.description=row.description;
+        existing.hcssLastSeenJob=row.last_seen_job_code||existing.hcssLastSeenJob||'';
+        existing.hcssLastSeenDate=row.last_seen_date||existing.hcssLastSeenDate||'';
+        // Tag source if not already tagged — preserves manual-entry flag
+        if(!existing.source)existing.source='manual';
+        merged++;
+      }
+    });
+    persistEquipment();
+    log(`HCSS equipment: ${added} new, ${merged} merged (${data.length} total)`);
+    return added+merged;
+  }catch(e){
+    console.warn('loadHcssEquipment failed:',e);
+    return 0;
+  }
+}
 function persistEquipPlan(){
   localStorage.setItem('bdc_equip_plan',JSON.stringify(Store.equipPlan));
 }
@@ -925,6 +980,12 @@ function getEquipLastKnownLocation(equipId){
   if(bestJob){
     const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==bestJob);
     return {jobCode:bestJob,jobName:jobEntry?jobEntry[1].meta?.name||bestJob:bestJob,source:'plan',date:bestDate};
+  }
+  // 3. Fall back to HCSS last-seen job from timecards (auto-discovered).
+  if(eq.hcssLastSeenJob){
+    const jc=eq.hcssLastSeenJob;
+    const jobEntry=Object.entries(Store.jobs).find(([k,j])=>String(j.meta?.number||'')==jc);
+    return {jobCode:jc,jobName:jobEntry?jobEntry[1].meta?.name||jc:jc,source:'hcss',date:eq.hcssLastSeenDate||''};
   }
   return null;
 }
@@ -975,12 +1036,14 @@ function saveEquip(){
   const loc=document.getElementById('equipLocation').value;
   const notes=document.getElementById('equipNotes').value.trim();
   if(!code){alert('Equipment code is required');return}
-  const id=_editingEquipId||code.toLowerCase().replace(/[^a-z0-9]/g,'-');
+  const id=_editingEquipId||equipIdFromCode(code);
   if(!_editingEquipId&&Store.equipment[id]){alert('Equipment with this code already exists');return}
   if(!Store.equipment[id])Store.equipment[id]={id};
   const eq=Store.equipment[id];
   eq.code=code;eq.description=desc;eq.category=cat;eq.location=loc;eq.notes=notes;
-  persistEquipment();closeEquipModal();renderEquipmentPlanner();
+  // User has saved — category is now confirmed, clear the needs-category flag.
+  eq._needsCategory=false;
+  persistEquipment();closeEquipModal();refreshEquipUI();
 }
 function deleteEquipConfirm(){
   if(!_editingEquipId)return;
@@ -989,7 +1052,7 @@ function deleteEquipConfirm(){
     if(k.startsWith(_editingEquipId+'|'))delete Store.equipPlan[k];
   });
   delete Store.equipment[_editingEquipId];
-  persistEquipment();persistEquipPlan();closeEquipModal();renderEquipmentPlanner();
+  persistEquipment();persistEquipPlan();closeEquipModal();refreshEquipUI();
 }
 
 // ── Equipment Assignment Modal (date range assign) ──
@@ -1032,15 +1095,28 @@ function saveEquipAssignment(){
     count++;
   }
   if(Store.equipment[equipId])Store.equipment[equipId].location=jobCode;
-  persistEquipment();closeEquipAssignModal();renderEquipmentPlanner();
+  persistEquipment();closeEquipAssignModal();refreshEquipUI();
   log(`Assigned ${Store.equipment[equipId]?.code||equipId} to job ${jobCode} for ${count} days`);
+}
+
+// Refresh whichever UI currently shows equipment — Planning tab (mode=equipment),
+// Settings (Fleet Roster), or the legacy Equipment panel. Used by modals and
+// popovers that don't know which context they were opened from.
+function refreshEquipUI(){
+  if(_activeSubTab==='planning'&&document.getElementById('planningContent'))renderPlanning();
+  else if(_activeSubTab==='settings'&&document.getElementById('settingsContent'))renderSettings();
+  else if(document.getElementById('equipmentContent'))renderEquipmentPlanner();
 }
 
 // ═══════════════════════════════════════════
 // RENDER EQUIPMENT PLANNER (mirrors renderPlanning)
 // ═══════════════════════════════════════════
-function renderEquipmentPlanner(){
-  const el=document.getElementById('equipmentContent');
+function renderEquipmentPlanner(ctx){
+  // ctx === 'planning'  → render into #planningContent, prepend mode toggle, skip Fleet Roster (roster lives in Settings)
+  // ctx undefined (default) → render into #equipmentContent (legacy — keeps old callers working)
+  const isPlanning=ctx==='planning';
+  const elId=isPlanning?'planningContent':'equipmentContent';
+  const el=document.getElementById(elId);
   if(!el)return;
   const equipList=Object.values(Store.equipment).sort((a,b)=>{
     if(a.category!==b.category)return (a.category||'').localeCompare(b.category||'');
@@ -1048,13 +1124,17 @@ function renderEquipmentPlanner(){
   });
 
   if(equipList.length===0){
-    el.innerHTML=`<div class="empty-state"><h2>No Equipment Added</h2><p>Click "+ Add Equipment" to build your fleet roster, then schedule machines across jobs.</p>
-      <button class="btn-primary" onclick="openEquipModal()" style="margin-top:12px;">+ Add Equipment</button></div>`;
+    const prefix=isPlanning?_planningModeToggleHtml():'';
+    el.innerHTML=prefix+`<div class="empty-state"><h2>No Equipment Yet</h2><p>Run an HCSS sync to auto-discover equipment from timecards, or add machines manually in Settings.</p>
+      <button class="btn-primary" onclick="navSub('production','settings')" style="margin-top:12px;">Go to Settings</button></div>`;
     return;
   }
 
   const todayISO=new Date().toISOString().split('T')[0];
-  let h='';
+  // Re-render target: in Planning context, route through renderPlanning() so the mode toggle
+  // stays respected; otherwise call back into this same renderer for the legacy Equipment tab.
+  const rerender=isPlanning?'renderPlanning()':'renderEquipmentPlanner()';
+  let h=isPlanning?_planningModeToggleHtml():'';
 
   // ══ WEEKLY EQUIPMENT PLANNER (day-by-day, like Weekly Crew Planner) ══
   const weekStart=new Date(_equipWeekPlannerDate);
@@ -1068,10 +1148,10 @@ function renderEquipmentPlanner(){
   h+=`<button class="btn-primary btn-sm" onclick="openEquipAssignModal()" style="font-size:11px;">+ Assign Range</button>`;
   h+=`</div></div>`;
   h+=`<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_equipWeekPlannerDate);d.setDate(d.getDate()-7);_equipWeekPlannerDate=d;renderEquipmentPlanner();">← Prev Week</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_equipWeekPlannerDate);d.setDate(d.getDate()-7);_equipWeekPlannerDate=d;${rerender};">← Prev Week</button>`;
   h+=`<span style="font-family:Oswald;font-size:14px;font-weight:600;min-width:180px;">Week of ${weekLabel}</span>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_equipWeekPlannerDate);d.setDate(d.getDate()+7);_equipWeekPlannerDate=d;renderEquipmentPlanner();">Next Week →</button>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:var(--bg);" onclick="_equipWeekPlannerDate=new Date();renderEquipmentPlanner();">Today</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;" onclick="const d=new Date(_equipWeekPlannerDate);d.setDate(d.getDate()+7);_equipWeekPlannerDate=d;${rerender};">Next Week →</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:var(--bg);" onclick="_equipWeekPlannerDate=new Date();${rerender};">Today</button>`;
   h+=`</div>`;
 
   h+=`<div style="overflow-x:auto;position:relative;"><table style="width:100%;border-collapse:collapse;" id="eqWeekPlannerTable">`;
@@ -1131,9 +1211,9 @@ function renderEquipmentPlanner(){
 
   h+='<div class="card" style="margin-top:24px;"><div class="card-title" style="justify-content:space-between;"><span>Equipment Outlook — 16 Weeks</span>';
   h+=`<div style="display:flex;gap:6px;">`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_eqResViewWeekOffset=Math.max(-8,_eqResViewWeekOffset-4);renderEquipmentPlanner();">← Earlier</button>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_eqResViewWeekOffset=0;renderEquipmentPlanner();">This Week</button>`;
-  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_eqResViewWeekOffset+=4;renderEquipmentPlanner();">Later →</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_eqResViewWeekOffset=Math.max(-8,_eqResViewWeekOffset-4);${rerender};">← Earlier</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_eqResViewWeekOffset=0;${rerender};">This Week</button>`;
+  h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_eqResViewWeekOffset+=4;${rerender};">Later →</button>`;
   h+=`</div></div>`;
 
   h+=`<div style="overflow-x:auto;position:relative;"><table style="width:100%;border-collapse:collapse;" id="eqResViewTable">`;
@@ -1205,28 +1285,42 @@ function renderEquipmentPlanner(){
   h+=`</tr></table></div></div>`;
 
   // ══ FLEET ROSTER (collapsible) ══
-  h+=`<div class="card" style="margin-top:24px;"><div class="card-title" style="justify-content:space-between;cursor:pointer;" onclick="const t=this.nextElementSibling;t.style.display=t.style.display==='none'?'block':'none';this.querySelector('.toggle-arrow').textContent=t.style.display==='none'?'▸':'▾';"><span><span class="toggle-arrow">▾</span> Fleet Roster — ${equipList.length} machines</span><button class="btn-primary btn-sm" onclick="event.stopPropagation();openEquipModal()">+ Add Machine</button></div>`;
-  h+='<div><div class="table-wrap"><table style="font-size:12px;">';
-  h+='<tr><th style="background:var(--ash);font-weight:600;">Code</th><th style="background:var(--ash);font-weight:600;">Description</th><th style="background:var(--ash);font-weight:600;">Category</th><th style="background:var(--ash);font-weight:600;">Current Location</th><th style="background:var(--ash);font-weight:600;">Notes</th><th style="background:var(--ash);font-weight:600;width:60px;">Edit</th></tr>';
-  lastCat='';
-  equipList.forEach(eq=>{
-    if(eq.category!==lastCat){
-      lastCat=eq.category;
-      const catColor=EQUIP_CAT_COLORS[eq.category]||'#999';
-      h+=`<tr><td colspan="6" style="background:${catColor}11;font-weight:600;color:${catColor};padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">${esc(eq.category)}s</td></tr>`;
-    }
-    const loc=getEquipLastKnownLocation(eq.id);
-    const locStr=loc?`<span style="color:var(--green);font-weight:500;">${esc(loc.jobCode)}</span> <span style="color:var(--text-light);font-size:10px;">${esc(loc.jobName||'')}</span>`:'<span style="color:var(--text-light);">— Yard —</span>';
-    h+=`<tr>`;
-    h+=`<td style="font-weight:600;">${esc(eq.code)}</td>`;
-    h+=`<td>${esc(eq.description||'')}</td>`;
-    h+=`<td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${EQUIP_CAT_COLORS[eq.category]||'#999'};margin-right:4px;"></span>${esc(eq.category)}</td>`;
-    h+=`<td>${locStr}</td>`;
-    h+=`<td style="color:var(--text-light);font-size:11px;">${esc(eq.notes||'')}</td>`;
-    h+=`<td><button class="edit-btn" onclick="openEquipModal('${esc(eq.id)}')" style="font-size:10px;padding:2px 8px;">Edit</button></td>`;
-    h+=`</tr>`;
-  });
-  h+='</table></div></div></div>';
+  // Skipped when embedded in Planning tab — the roster lives on Settings.
+  if(!isPlanning){
+    const nNeedsCat=equipList.filter(eq=>eq._needsCategory).length;
+    const nHcss=equipList.filter(eq=>eq.source==='hcss').length;
+    const rosterSub=[
+      `${equipList.length} machines`,
+      nHcss?`<span style="color:var(--orange);">${nHcss} from HCSS</span>`:null,
+      nNeedsCat?`<span style="color:#b38500;">${nNeedsCat} need category</span>`:null,
+    ].filter(Boolean).join(' · ');
+    h+=`<div class="card" style="margin-top:24px;"><div class="card-title" style="justify-content:space-between;cursor:pointer;" onclick="const t=this.nextElementSibling;t.style.display=t.style.display==='none'?'block':'none';this.querySelector('.toggle-arrow').textContent=t.style.display==='none'?'▸':'▾';"><span><span class="toggle-arrow">▾</span> Fleet Roster — ${rosterSub}</span><button class="btn-primary btn-sm" onclick="event.stopPropagation();openEquipModal()">+ Add Machine</button></div>`;
+    h+='<div><div class="table-wrap"><table style="font-size:12px;">';
+    h+='<tr><th style="background:var(--ash);font-weight:600;">Code</th><th style="background:var(--ash);font-weight:600;">Description</th><th style="background:var(--ash);font-weight:600;">Category</th><th style="background:var(--ash);font-weight:600;">Current Location</th><th style="background:var(--ash);font-weight:600;">Notes</th><th style="background:var(--ash);font-weight:600;width:60px;">Edit</th></tr>';
+    lastCat='';
+    equipList.forEach(eq=>{
+      if(eq.category!==lastCat){
+        lastCat=eq.category;
+        const catColor=EQUIP_CAT_COLORS[eq.category]||'#999';
+        h+=`<tr><td colspan="6" style="background:${catColor}11;font-weight:600;color:${catColor};padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">${esc(eq.category)}s</td></tr>`;
+      }
+      const loc=getEquipLastKnownLocation(eq.id);
+      const locStr=loc?`<span style="color:var(--green);font-weight:500;">${esc(loc.jobCode)}</span> <span style="color:var(--text-light);font-size:10px;">${esc(loc.jobName||'')}</span>${loc.source==='hcss'?` <span style="color:var(--orange);font-size:9px;">(HCSS)</span>`:''}`:'<span style="color:var(--text-light);">— Yard —</span>';
+      const hcssBadge=eq.source==='hcss'?` <span style="display:inline-block;padding:1px 5px;background:#F2672222;color:#F26722;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="Auto-discovered from HCSS timecards">HCSS</span>`:'';
+      const catCell=eq._needsCategory
+        ? `<span onclick="openEquipModal('${esc(eq.id)}')" style="display:inline-block;padding:3px 8px;background:#fff3cd;color:#664d03;border:1px solid #ffe69c;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;" title="Click to assign a category">⚠ Set Category</span>`
+        : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${EQUIP_CAT_COLORS[eq.category]||'#999'};margin-right:4px;"></span>${esc(eq.category)}`;
+      h+=`<tr>`;
+      h+=`<td style="font-weight:600;">${esc(eq.code)}${hcssBadge}</td>`;
+      h+=`<td>${esc(eq.description||'')}</td>`;
+      h+=`<td>${catCell}</td>`;
+      h+=`<td>${locStr}</td>`;
+      h+=`<td style="color:var(--text-light);font-size:11px;">${esc(eq.notes||'')}</td>`;
+      h+=`<td><button class="edit-btn" onclick="openEquipModal('${esc(eq.id)}')" style="font-size:10px;padding:2px 8px;">Edit</button></td>`;
+      h+=`</tr>`;
+    });
+    h+='</table></div></div></div>';
+  }
 
   // Popover container
   h+=`<div id="equipPopover" style="display:none;position:fixed;z-index:1000;background:var(--white);border:2px solid var(--green);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.18);min-width:260px;max-width:340px;font-size:13px;"></div>`;
@@ -1323,7 +1417,7 @@ function assignEquipFromPopover(equipId,dateISO,jobCode,isWeek){
   if(Store.equipment[equipId])Store.equipment[equipId].location=jobCode;
   persistEquipment();
   closeEquipPopover();
-  renderEquipmentPlanner();
+  refreshEquipUI();
 }
 
 function clearEquipFromPopover(equipId,dateISO,isWeek){
@@ -1337,7 +1431,7 @@ function clearEquipFromPopover(equipId,dateISO,isWeek){
     clearEquipPlanCell(equipId,dateISO);
   }
   closeEquipPopover();
-  renderEquipmentPlanner();
+  refreshEquipUI();
 }
 
 function crewDisplayName(id){
@@ -2261,7 +2355,8 @@ async function hcssSyncNow(){
   if(el)el.textContent='Syncing…';
   try{
     const j=await hcssCallFn({trigger:'manual'});
-    log(`HCSS sync: ${j.status} · ${j.jobsSynced} jobs (${j.totalJobsFound||'?'} total) · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s`);
+    const eqMsg=typeof j.equipmentUpserted==='number'?` · ${j.equipmentUpserted} equipment`:'';
+    log(`HCSS sync: ${j.status} · ${j.jobsSynced} jobs (${j.totalJobsFound||'?'} total) · ${j.rowsUpserted} rows${eqMsg} · ${Math.round(j.durationMs/1000)}s`);
     if(j.errors&&j.errors.length)log('HCSS sync had '+j.errors.length+' per-job errors (see sync_log)');
     if(j.debug)console.log('HCSS sync debug:',JSON.stringify(j.debug,null,2));
     if(j.totalJobsFound===0&&j.debug){
@@ -2270,6 +2365,9 @@ async function hcssSyncNow(){
     // After syncing, refresh front-end actuals for every loaded job
     await hcssLoadIntoActiveJob();
     await hcssLoadSyncStatus();
+    // Refresh HCSS equipment roster — new machines may have been discovered.
+    const nEq=await loadHcssEquipment();
+    if(nEq>0)refreshEquipUI();
   }catch(e){
     log('HCSS sync failed: '+e.message);
     if(el)el.textContent='Error: '+e.message;
@@ -2281,11 +2379,15 @@ async function hcssBackfill(){
   if(el)el.textContent='Backfilling full history — this may take several minutes…';
   try{
     const j=await hcssCallFn({trigger:'manual',fullHistory:true});
-    log(`HCSS BACKFILL: ${j.status} · ${j.jobsSynced} jobs · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s`);
+    const eqMsg=typeof j.equipmentUpserted==='number'?` · ${j.equipmentUpserted} equipment`:'';
+    log(`HCSS BACKFILL: ${j.status} · ${j.jobsSynced} jobs · ${j.rowsUpserted} rows${eqMsg} · ${Math.round(j.durationMs/1000)}s`);
     if(j.errors&&j.errors.length)log('Backfill had '+j.errors.length+' per-job errors (see sync_log)');
     await hcssLoadIntoActiveJob();
     await hcssLoadSyncStatus();
-    alert(`Backfill complete.\n${j.jobsSynced} jobs · ${j.rowsUpserted} rows · ${Math.round(j.durationMs/1000)}s\n\nFrom now on the daily 5am cron will only pull the last 14 days.`);
+    // Refresh HCSS equipment roster — full history means lots of new machines.
+    const nEq=await loadHcssEquipment();
+    if(nEq>0)refreshEquipUI();
+    alert(`Backfill complete.\n${j.jobsSynced} jobs · ${j.rowsUpserted} rows${j.equipmentDiscovered?` · ${j.equipmentDiscovered} equipment`:''} · ${Math.round(j.durationMs/1000)}s\n\nFrom now on the daily 5am cron will only pull the last 14 days.`);
   }catch(e){
     log('HCSS backfill failed: '+e.message);
     if(el)el.textContent='Backfill error: '+e.message;
@@ -2595,7 +2697,7 @@ let _activeNavTab='financials';
 // Group definitions — which sub-tabs belong to each top tab
 const NAV_GROUPS={
   financials:['overview','biditems','eva','forecast','payapps','cashflow','jobcost','schedule'],
-  production:['planning','schedule','jcs','production','crews','equipment']
+  production:['planning','schedule','jcs','production','settings']
 };
 
 // Trade abbreviations and colors
@@ -2982,6 +3084,9 @@ function renderActiveSubTab(){
     schedule:renderSchedule,
     jcs:renderJobCostSchedule,
     production:renderProduction,
+    settings:renderSettings,
+    // Legacy routes (no longer surfaced in the sub-nav, kept for any
+    // direct link/handler that still references these sub-tab names).
     crews:renderCrews,
     equipment:renderEquipmentPlanner,
     eva:renderEVA,
@@ -3004,9 +3109,13 @@ loadCrewHistory();
 loadSubs();
 // Load crew plan from local storage
 loadCrewPlan();
-// Load equipment from local storage
+// Load equipment from local storage, then merge in any HCSS-discovered equipment
 loadEquipment();
 loadEquipPlan();
+// Async — non-blocking. Re-renders the current tab if it was showing equipment.
+loadHcssEquipment().then(n=>{
+  if(n>0)refreshEquipUI();
+});
 // Init user label
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // Initialize nav to default: Schedule & Financials > Overview
@@ -8216,19 +8325,49 @@ function renderProductionLog(job){
 // PLANNING VIEW — Interactive Weekly Planner + Resource View
 // ═══════════════════════════════════════════
 let _planPopover=null; // {crewId, dateISO, isWeek, weekStartISO}
+// Planning tab mode: 'crews' or 'equipment'. Persisted in localStorage so the
+// user's last choice sticks between sessions.
+let _planningMode=localStorage.getItem('bdc_planning_mode')||'crews';
+function setPlanningMode(m){
+  _planningMode=(m==='equipment'?'equipment':'crews');
+  localStorage.setItem('bdc_planning_mode',_planningMode);
+  renderPlanning();
+}
+function _planningModeToggleHtml(){
+  const m=_planningMode;
+  const btn=(mode,label,color)=>{
+    const active=m===mode;
+    const bg=active?color:'transparent';
+    const fg=active?'#fff':'var(--text)';
+    const border=active?color:'var(--border)';
+    return `<button class="btn-sm" style="background:${bg};color:${fg};border:1px solid ${border};padding:6px 18px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;letter-spacing:.5px;" onclick="setPlanningMode('${mode}')">${label}</button>`;
+  };
+  return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border);">
+    <span style="font-family:Oswald;font-size:10px;text-transform:uppercase;color:var(--text-light);letter-spacing:1px;">Resource:</span>
+    ${btn('crews','Crews','var(--green)')}
+    ${btn('equipment','Equipment','#F26722')}
+  </div>`;
+}
 
 function renderPlanning(){
   const el=document.getElementById('planningContent');
+  if(!el)return;
+  // Equipment mode: delegate to the shared equipment renderer, targeting
+  // planningContent and skipping the Fleet Roster (which lives in Settings).
+  if(_planningMode==='equipment'){
+    renderEquipmentPlanner('planning');
+    return;
+  }
   const crewList=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
   if(crewList.length===0){
-    el.innerHTML='<div class="empty-state"><h2>No Crews</h2><p>Import HeavyJob daily detail to auto-discover crews.</p></div>';
+    el.innerHTML=_planningModeToggleHtml()+'<div class="empty-state"><h2>No Crews</h2><p>Import HeavyJob daily detail to auto-discover crews.</p></div>';
     return;
   }
   _todayISO=new Date().toISOString().split('T')[0];
   const todayISO=_todayISO;
   _clearCellCache(); // Fresh cache each render
   if(!_histIndex)_buildHistIndex(); // Ensure index is built
-  let h='';
+  let h=_planningModeToggleHtml();
   // Job color palette — consistent colors per job across both views
   // _PLAN_PALETTE, _planJobColors, _planColorIdx are global (shared with Global View)
 
@@ -8792,7 +8931,13 @@ function renderProjectTradeView(){
 // CREWS TAB
 // ═══════════════════════════════════════════
 function renderCrews(){
+  // NAV NOTE: Crews is no longer a nav target — Settings (Production > Settings) replaced it.
+  // When any callback (renderCrewSettings, renameSub, etc.) calls renderCrews(), delegate to
+  // the Settings view if that's what the user is currently looking at. Keeps shared callbacks
+  // decoupled from which tab is active.
+  if(_activeSubTab==='settings')return renderSettings();
   const el=document.getElementById('crewsContent');
+  if(!el)return;
   const job=Store.jobs[Store.activeJob];
   if(!job){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
 
@@ -9013,6 +9158,138 @@ function renderCrews(){
       const displayName=crewDisplayName(crew.id);
       const originalId=crew.foreman;
       h+=`<tr><td>${esc(displayName)}</td><td>${esc(originalId)}</td><td style="display:flex;gap:8px;align-items:center;"><span onclick="this.style.display='none';this.nextElementSibling.style.display='inline';this.nextElementSibling.focus()" style="cursor:pointer;border-bottom:1px dashed var(--sand);font-size:11px;color:var(--orange);" title="Click to rename">Rename</span><input type="text" value="${esc(displayName)}" style="display:none;font-family:inherit;font-size:inherit;border:1px solid var(--orange);padding:2px 6px;border-radius:3px;width:160px;" onblur="saveCrewName('${esc(crew.id)}',this.value);this.style.display='none';this.previousElementSibling.style.display='inline'" onkeydown="if(event.key==='Enter'){this.blur()}"><span onclick="deleteCrew('${esc(crew.id)}')" style="cursor:pointer;font-size:11px;color:var(--red);border-bottom:1px dashed var(--red);" title="Delete this crew">Delete</span></td></tr>`;
+    });
+    h+='</table></div>';
+  }
+  h+='</div>';
+
+  el.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════
+// SETTINGS TAB — Crew + Fleet + Subs rosters (cross-job)
+// Lives under Production > Settings. Consolidates what used to be
+// the Crews and Equipment tab Fleet Roster / Subs cards.
+// ═══════════════════════════════════════════
+function renderSettings(){
+  const el=document.getElementById('settingsContent');
+  if(!el)return;
+
+  let h='';
+
+  // ── TAB HEADER ──
+  h+=`<div class="card" style="margin-bottom:16px;">`;
+  h+=`<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">`;
+  h+=`<div style="flex:1;min-width:260px;">`;
+  h+=`<div style="font-family:Oswald;font-size:18px;letter-spacing:.5px;margin-bottom:4px;">Settings</div>`;
+  h+=`<div style="font-size:12px;color:var(--text-light);">Manage crews, fleet equipment, and subcontractors. These rosters are shared across every job.</div>`;
+  h+=`</div>`;
+  // Quick links
+  h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;">`;
+  h+=`<a href="#settings-crews" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Crews</a>`;
+  h+=`<a href="#settings-fleet" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Fleet</a>`;
+  h+=`<a href="#settings-subs" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Subs</a>`;
+  h+=`</div>`;
+  h+=`</div></div>`;
+
+  // ══════════════════════════════════════════
+  // CREW SETTINGS
+  // ══════════════════════════════════════════
+  const allCrews=Object.values(Store.crews).sort((a,b)=>crewDisplayName(a.id).localeCompare(crewDisplayName(b.id)));
+  h+=`<div class="card" id="settings-crews"><div class="card-title" style="justify-content:space-between;"><span>Crew Roster — ${allCrews.length} crew${allCrews.length===1?'':'s'}</span><div style="display:flex;gap:6px;">`;
+  h+=`<button class="edit-btn" onclick="if(confirm('Clear all crews and re-discover from daily detail?')){Store.crews={};persistCrews();renderSettings()}" style="color:var(--red);border-color:var(--red);">Clear All</button>`;
+  h+=`<button class="edit-btn" onclick="clearCrewHistory()" style="color:var(--red);border-color:var(--red);">Clear History</button>`;
+  h+=`<button class="btn-primary btn-sm" onclick="openCrewAssignModal()">+ Assign to Job</button>`;
+  h+=`</div></div>`;
+  // renderCrewSettings takes a job arg but only uses it to key callbacks. Pass null — the
+  // inline handlers call renderCrews(), which we've made delegate to renderSettings when
+  // Settings is the active tab.
+  h+=renderCrewSettings(Store.jobs[Store.activeJob]||null);
+  h+=`</div>`;
+
+  // ── Legacy Crew Name Mapping ──
+  if(allCrews.length>0){
+    h+='<div class="card" style="border-color:var(--sand);"><div class="card-title" style="justify-content:space-between;color:var(--text-light);"><span>Crew Name Mapping (Legacy)</span></div>';
+    h+='<div class="table-wrap"><table style="font-size:12px;">';
+    h+='<tr><th style="background:var(--ash);font-weight:600;">Display Name</th><th style="background:var(--ash);font-weight:600;">Original ID</th><th style="background:var(--ash);font-weight:600;">Action</th></tr>';
+    allCrews.forEach(crew=>{
+      const displayName=crewDisplayName(crew.id);
+      const originalId=crew.foreman;
+      h+=`<tr><td>${esc(displayName)}</td><td>${esc(originalId)}</td><td style="display:flex;gap:8px;align-items:center;"><span onclick="this.style.display='none';this.nextElementSibling.style.display='inline';this.nextElementSibling.focus()" style="cursor:pointer;border-bottom:1px dashed var(--sand);font-size:11px;color:var(--orange);" title="Click to rename">Rename</span><input type="text" value="${esc(displayName)}" style="display:none;font-family:inherit;font-size:inherit;border:1px solid var(--orange);padding:2px 6px;border-radius:3px;width:160px;" onblur="saveCrewName('${esc(crew.id)}',this.value);this.style.display='none';this.previousElementSibling.style.display='inline'" onkeydown="if(event.key==='Enter'){this.blur()}"><span onclick="deleteCrew('${esc(crew.id)}')" style="cursor:pointer;font-size:11px;color:var(--red);border-bottom:1px dashed var(--red);" title="Delete this crew">Delete</span></td></tr>`;
+    });
+    h+='</table></div></div>';
+  }
+
+  // ══════════════════════════════════════════
+  // FLEET ROSTER
+  // ══════════════════════════════════════════
+  const equipList=Object.values(Store.equipment).sort((a,b)=>{
+    const ca=(a.category||'Other'),cb=(b.category||'Other');
+    if(ca!==cb)return ca.localeCompare(cb);
+    return (a.code||'').localeCompare(b.code||'');
+  });
+  const nNeedsCat=equipList.filter(eq=>eq._needsCategory).length;
+  const nHcss=equipList.filter(eq=>eq.source==='hcss').length;
+  const rosterSub=[
+    `${equipList.length} machine${equipList.length===1?'':'s'}`,
+    nHcss?`<span style="color:var(--orange);">${nHcss} from HCSS</span>`:null,
+    nNeedsCat?`<span style="color:#b38500;">${nNeedsCat} need category</span>`:null,
+  ].filter(Boolean).join(' · ');
+  h+=`<div class="card" id="settings-fleet"><div class="card-title" style="justify-content:space-between;"><span>Fleet Roster — ${rosterSub}</span><button class="btn-primary btn-sm" onclick="openEquipModal()">+ Add Machine</button></div>`;
+  if(equipList.length===0){
+    h+='<div style="padding:20px;text-align:center;color:var(--text-light);font-size:13px;">No equipment yet. HCSS sync auto-discovers machines from timecards, or add one manually.</div>';
+  }else{
+    h+='<div class="table-wrap"><table style="font-size:12px;">';
+    h+='<tr><th style="background:var(--ash);font-weight:600;">Code</th><th style="background:var(--ash);font-weight:600;">Description</th><th style="background:var(--ash);font-weight:600;">Category</th><th style="background:var(--ash);font-weight:600;">Current Location</th><th style="background:var(--ash);font-weight:600;">Notes</th><th style="background:var(--ash);font-weight:600;width:60px;">Edit</th></tr>';
+    let lastCat='';
+    equipList.forEach(eq=>{
+      if(eq.category!==lastCat){
+        lastCat=eq.category;
+        const catColor=EQUIP_CAT_COLORS[eq.category]||'#999';
+        h+=`<tr><td colspan="6" style="background:${catColor}11;font-weight:600;color:${catColor};padding:6px 10px;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">${esc(eq.category)}s</td></tr>`;
+      }
+      const loc=getEquipLastKnownLocation(eq.id);
+      const locStr=loc?`<span style="color:var(--green);font-weight:500;">${esc(loc.jobCode)}</span> <span style="color:var(--text-light);font-size:10px;">${esc(loc.jobName||'')}</span>${loc.source==='hcss'?` <span style="color:var(--orange);font-size:9px;">(HCSS)</span>`:''}`:'<span style="color:var(--text-light);">— Yard —</span>';
+      const hcssBadge=eq.source==='hcss'?` <span style="display:inline-block;padding:1px 5px;background:#F2672222;color:#F26722;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="Auto-discovered from HCSS timecards">HCSS</span>`:'';
+      const catCell=eq._needsCategory
+        ? `<span onclick="openEquipModal('${esc(eq.id)}')" style="display:inline-block;padding:3px 8px;background:#fff3cd;color:#664d03;border:1px solid #ffe69c;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;" title="Click to assign a category">⚠ Set Category</span>`
+        : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${EQUIP_CAT_COLORS[eq.category]||'#999'};margin-right:4px;"></span>${esc(eq.category)}`;
+      h+=`<tr>`;
+      h+=`<td style="font-weight:600;">${esc(eq.code)}${hcssBadge}</td>`;
+      h+=`<td>${esc(eq.description||'')}</td>`;
+      h+=`<td>${catCell}</td>`;
+      h+=`<td>${locStr}</td>`;
+      h+=`<td style="color:var(--text-light);font-size:11px;">${esc(eq.notes||'')}</td>`;
+      h+=`<td><button class="edit-btn" onclick="openEquipModal('${esc(eq.id)}')" style="font-size:10px;padding:2px 8px;">Edit</button></td>`;
+      h+=`</tr>`;
+    });
+    h+='</table></div>';
+  }
+  h+='</div>';
+
+  // ══════════════════════════════════════════
+  // SUBCONTRACTORS
+  // ══════════════════════════════════════════
+  const allSubs=Object.values(Store.subs).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  h+=`<div class="card" id="settings-subs"><div class="card-title" style="justify-content:space-between;"><span>Subcontractors — ${allSubs.length}</span><button class="btn-primary btn-sm" onclick="addSubPrompt()">+ Add Sub</button></div>`;
+  if(allSubs.length===0){
+    h+='<div style="padding:16px;text-align:center;color:var(--text-light);font-size:13px;">No subcontractors added yet. Add subs here and they\'ll appear in the schedule crew picker across all jobs.</div>';
+  }else{
+    h+='<div class="table-wrap"><table style="font-size:12px;">';
+    h+='<tr><th style="background:var(--ash);font-weight:600;">Name</th><th style="background:var(--ash);font-weight:600;">Trade / Type</th><th style="background:var(--ash);font-weight:600;">Active Tasks</th><th style="background:var(--ash);font-weight:600;width:80px;">Actions</th></tr>';
+    allSubs.forEach(sub=>{
+      let taskCount=0;
+      Object.values(Store.jobs).forEach(j=>{
+        (j.schedule||[]).forEach(t=>{
+          if(t.crews&&t.crews.includes('_sub:'+sub.id))taskCount++;
+        });
+      });
+      h+=`<tr>`;
+      h+=`<td><input type="text" value="${esc(sub.name)}" onblur="renameSub('${esc(sub.id)}',this.value)" onkeydown="if(event.key==='Enter')this.blur()" style="border:1px solid var(--border);padding:3px 6px;border-radius:4px;font-size:12px;width:160px;font-family:inherit;"></td>`;
+      h+=`<td><input type="text" value="${esc(sub.trade||'')}" onblur="updateSubTrade('${esc(sub.id)}',this.value)" onkeydown="if(event.key==='Enter')this.blur()" style="border:1px solid var(--border);padding:3px 6px;border-radius:4px;font-size:12px;width:120px;font-family:inherit;" placeholder="e.g. Paving, Electrical"></td>`;
+      h+=`<td class="num" style="color:${taskCount>0?'var(--green)':'var(--text-light)'};">${taskCount}</td>`;
+      h+=`<td><button class="del-btn" onclick="deleteSub('${esc(sub.id)}')" style="font-size:10px;padding:2px 8px;">Delete</button></td>`;
+      h+=`</tr>`;
     });
     h+='</table></div>';
   }

@@ -36,7 +36,7 @@
 - **Supabase project:** burns-project-controls (org: nic@burnsdirt.com)
 - **Supabase URL:** https://sxzvlazmkxnbsoayhuln.supabase.co
 - **Supabase ref:** sxzvlazmkxnbsoayhuln
-- **DB tables:** `jobs` (JSONB), `hcss_jobs`, `hcss_cost_codes`, `actuals_detail_sync`, `sync_log`
+- **DB tables:** `jobs` (JSONB), `hcss_jobs`, `hcss_cost_codes`, `hcss_equipment`, `actuals_detail_sync`, `sync_log`
 - **Stack:** Vanilla HTML/CSS/JS + SheetJS (xlsx.js) + Supabase (persistence) + Supabase Edge Functions (Deno)
 - **Key files:** `public/index.html` (main app — ~9000+ lines), `supabase/functions/hcss-sync-actuals/index.ts`
 
@@ -53,7 +53,7 @@
 ### Working Features
 - **Import System:** HeavyBid Activities, HeavyBid Bid Items, Smartsheet Schedule parsers
 - **Schedule & Financials tab:** Overview, Pay Items, EVA, Forecast, Pay Apps, Cash Flow, Job Cost (Spectrum)
-- **Production tab:** Planning (Weekly Crew Planner + 16-week Resource View), Schedule (Gantt + task table), Job Cost Schedule, Production Tracker, Crews, Equipment Planner
+- **Production tab:** Planning (Weekly Planner + 16-week Resource View with Crews/Equipment mode toggle), Schedule (Gantt + task table), Job Cost Schedule, Production Tracker, Settings (Crew Roster + Fleet Roster + Subcontractors)
 - **Global View:** Multi-job timeline, resource view
 - **HCSS Auto-Sync:** Edge Function syncs timecards from HeavyJob API into Supabase. Daily 5am cron + manual sync. 102 rows across 10 jobs confirmed working.
 - **Spectrum Job Cost:** Reads from Nic's burns-finance Supabase. 88 Spectrum jobs, phase codes with Current Estimate, JTD Actual, etc.
@@ -74,11 +74,12 @@
 - **Quantities endpoint:** Returns 404, but quantity per cost code is in timecard detail
 
 ### Pending / Not Yet Done
-- **Backfill All:** Has not been run yet — only 7 days of HCSS timecard history synced
-- **Equipment auto-discovery from HCSS:** Edge Function doesn't extract individual equipment codes from timecards yet — equipment roster is manual entry only
+- **Backfill All:** Has not been run yet — only 7 days of HCSS timecard history synced. Now that equipment auto-discovery is wired in, running Backfill will populate the Fleet Roster across the full history in one pass.
 - **HCSS API Setup Guide:** Generated as `HCSS_API_Setup_Guide.docx` for Nic — complete
 
 ### Recently Shipped
+- **Planning tab crew/equipment toggle + Settings tab (2026-04-17):** Consolidated the old Crews and Equipment sub-tabs. Planning now has a Resource toggle at the top (`Crews` / `Equipment`) that re-renders into the same `#planningContent` div — persisted to `localStorage` as `bdc_planning_mode`. New `sub-settings` panel under Production holds all cross-job rosters in one place: Crew Roster (with Clear All / Clear History / + Assign to Job), Legacy Crew Name Mapping, Fleet Roster (identical UI to the old Equipment tab roster — HCSS badges + ⚠ Set Category chips), Subcontractors. `renderEquipmentPlanner(ctx)` now takes a context arg; `ctx==='planning'` targets `#planningContent`, prepends the mode toggle, and skips the Fleet Roster (roster lives in Settings only). Shared callbacks from modals/popovers route through a new `refreshEquipUI()` helper that picks Planning / Settings / legacy Equipment based on `_activeSubTab`. `renderCrews()` short-circuits to `renderSettings()` when Settings is active, so all the shared `persistCrews();renderCrews();` / `persistSubs();renderCrews();` call sites keep working. Nav: `NAV_GROUPS.production = ['planning','schedule','jcs','production','settings']`; legacy `sub-crews` / `sub-equipment` panels retained but hidden (`display:none`) for backward compat.
+- **Equipment auto-discovery from HCSS (2026-04-17):** `hcss-sync-actuals` Edge Function now extracts `equipmentCode` + `equipmentDescription` from every timecard detail and upserts into new `public.hcss_equipment` table. Front-end fetches it on startup via `loadHcssEquipment()` and merges into `Store.equipment`, flagging new entries with `_needsCategory:true` and `source:'hcss'`. Fleet Roster table shows an orange `HCSS` badge + a yellow "⚠ Set Category" prompt next to uncategorized machines — clicking opens the existing Edit modal. `getEquipLastKnownLocation()` now falls back to `hcssLastSeenJob`/`hcssLastSeenDate` so the Current Location column auto-populates. Migration: `supabase/migrations/20260417_hcss_equipment.sql`. Merge rules: user-assigned fields (category/notes/manual location) never touched by sync; HCSS only owns code/description/last-seen.
 - **Schedule sub-tab on Financials nav (2026-04-17):** Added Schedule button to `subNav-financials` and added `'schedule'` to `NAV_GROUPS.financials` (also backfilled `'jobcost'` and `'equipment'` which were missing from their respective groups). Same `sub-schedule` panel is shared between Financials and Production — both routes call `renderSchedule()` via the existing dispatcher. Verified live.
 - **Equipment Planner deployed (2026-04-17):** Production > Equipment sub-tab live — weekly planner + 16-week outlook (mirrors crew planner). Verified live.
 
@@ -174,3 +175,15 @@
 - Updated `NAV_GROUPS`: added `schedule` + `jobcost` to financials, added `equipment` to production (these were missing and would have reset the sub-tab when switching top tabs)
 - Deployed Equipment Planner and the Schedule-in-Financials change via `deploy.command` (commits 90f55c1 + 90d719a on main)
 - Verified live on bdcprojectcontrols.netlify.app — Financials → Schedule renders KPIs + Gantt; Production → Equipment renders weekly planner + 16-week outlook
+
+### 2026-04-17 — Session 9 (Current)
+- **HCSS equipment auto-discovery** end-to-end:
+  - Migration: `supabase/migrations/20260417_hcss_equipment.sql` creates `public.hcss_equipment`
+  - Edge Function: `hcss-sync-actuals` extracts `equipmentCode`/`equipmentDescription` from every timecard detail, tracks most recent job+date per machine, upserts in 50-row chunks. Response now includes `equipmentDiscovered` + `equipmentUpserted`
+  - Front-end: new `loadHcssEquipment()` merges discovered machines into `Store.equipment` with `_needsCategory:true`, `source:'hcss'`, default category `Other`. Fleet Roster shows HCSS badge + "⚠ Set Category" chip until user confirms via the Edit modal. `getEquipLastKnownLocation()` falls back to `hcssLastSeenJob`/`hcssLastSeenDate`.
+- **Planning tab refactor + Settings tab:**
+  - Planning now has a Resource toggle at the top (Crews / Equipment), persisted in `localStorage.bdc_planning_mode`. Equipment mode calls `renderEquipmentPlanner('planning')` which targets `#planningContent` and skips the Fleet Roster.
+  - New Production > Settings sub-tab (`sub-settings` / `settingsContent`). Houses: Crew Roster (reuses `renderCrewSettings`), Legacy Crew Name Mapping, Fleet Roster, Subcontractors — all cross-job rosters consolidated in one place.
+  - Removed Crews and Equipment buttons from `subNav-production`. `NAV_GROUPS.production = ['planning','schedule','jcs','production','settings']`. Legacy `sub-crews`/`sub-equipment` panels kept hidden for backward-compatible render calls.
+  - New `refreshEquipUI()` helper routes refreshes to Planning / Settings / legacy based on `_activeSubTab`. `renderCrews()` short-circuits to `renderSettings()` when Settings is active.
+- **Pending deploy:** new migration + Edge Function + front-end changes — run `supabase db push`, `supabase functions deploy hcss-sync-actuals`, then `deploy.command` to push front-end.

@@ -70,6 +70,14 @@ interface TokenResponse { access_token: string; token_type: string; expires_in: 
 // so discovery mode can surface it to the caller for debugging.
 let _lastGrantedScope: string | null = null;
 interface SyncRequest { trigger?: 'cron'|'manual'|'api'; discover?: boolean; syncMetadata?: boolean; scanEndpoints?: boolean; lookbackDays?: number; jobNumber?: string; fullHistory?: boolean }
+interface EquipObservation {
+  code: string;
+  description: string;
+  lastSeenDate: string;  // YYYY-MM-DD
+  lastSeenJob: string;   // job code (not UUID)
+  timesSeen: number;
+  raw?: any;             // a sample raw timecard equipment entry for forward-compat
+}
 interface DetailRow {
   job_number: string; date: string; cost_code: string; foreman: string;
   cost_code_desc: string; unit: string;
@@ -363,6 +371,9 @@ Deno.serve(async (req) => {
     const since = lookback == null ? null : isoDaysAgo(lookback);
     const rows: DetailRow[] = [];
     const errors: { job: string; error: string }[] = [];
+    // Equipment accumulator — keyed by HCSS equipment code. Tracks latest
+    // observation across ALL jobs in this run so we can set last_seen correctly.
+    const equipAcc = new Map<string, EquipObservation>();
 
     for (const job of activeJobs) {
       try {
@@ -377,12 +388,15 @@ Deno.serve(async (req) => {
           listQuantities(token, buIdentifier, job.id, since),
         ]);
         rows.push(...mergeJobRows(job.jobCode, tcs, qs));
+        // Equipment extraction piggybacks on the same timecard details we
+        // already parsed — essentially free.
+        extractEquipmentObservations(job.jobCode, tcs, equipAcc);
       } catch (e) {
         errors.push({ job: job.jobCode, error: String(e.message || e) });
       }
     }
 
-    // 5. Upsert
+    // 5. Upsert actuals
     let inserted = 0, updated = 0;
     if (rows.length) {
       const { error, count } = await supa
@@ -391,6 +405,36 @@ Deno.serve(async (req) => {
       if (error) throw new Error(`Upsert failed: ${error.message}`);
       // Supabase returns total affected, not split insert/update. Report in "rows_updated".
       updated = count || rows.length;
+    }
+
+    // 6. Upsert equipment observations (HCSS-owned fields only).
+    // We omit first_seen_at so the column default (now()) applies on INSERT
+    // and ON CONFLICT DO UPDATE leaves it untouched — preserving true first-seen.
+    // User-assigned fields (category, notes) live in front-end localStorage
+    // and are never touched by this table.
+    let equipUpserted = 0;
+    if (equipAcc.size > 0) {
+      const equipRows = Array.from(equipAcc.values()).map(e => ({
+        hcss_code: e.code,
+        description: e.description,
+        last_seen_job_code: e.lastSeenJob,
+        last_seen_date: e.lastSeenDate,
+        times_seen: e.timesSeen,
+        raw: e.raw || null,
+        synced_at: new Date().toISOString(),
+      }));
+      for (let i = 0; i < equipRows.length; i += 50) {
+        const chunk = equipRows.slice(i, i + 50);
+        const { error, count } = await supa
+          .from('hcss_equipment')
+          .upsert(chunk, { onConflict: 'hcss_code', count: 'exact' });
+        if (error) {
+          // Non-fatal — actuals already saved. Record error and keep going.
+          errors.push({ job: '(equipment)', error: `hcss_equipment upsert: ${error.message}` });
+          break;
+        }
+        equipUpserted += count || chunk.length;
+      }
     }
 
     const status = errors.length ? 'partial' : 'success';
@@ -406,6 +450,8 @@ Deno.serve(async (req) => {
         totalJobs: jobs.length,
         errors,
         topJobsByRows: topCountsByJob(rows),
+        equipmentDiscovered: equipAcc.size,
+        equipmentUpserted: equipUpserted,
       },
     });
 
@@ -415,6 +461,8 @@ Deno.serve(async (req) => {
       jobsSynced: activeJobs.length,
       totalJobsFound: jobs.length,
       rowsUpserted: updated,
+      equipmentDiscovered: equipAcc.size,
+      equipmentUpserted: equipUpserted,
       errors,
       durationMs: Date.now() - startedAt,
       debug: {
@@ -683,6 +731,52 @@ function mergeJobRows(jobCode: string, timeCards: any[], _quantities: any[]): De
   }
 
   return Array.from(map.values());
+}
+
+// -------------------- EQUIPMENT EXTRACTION --------------------
+// Walk the timecard detail structure and accumulate one observation per
+// unique equipment code seen in this sync run, tracking the most recent
+// job + date it appeared on. Feeds the hcss_equipment table.
+function extractEquipmentObservations(
+  jobCode: string,
+  timeCards: any[],
+  acc: Map<string, EquipObservation>,
+) {
+  const fmtDate = (v: any) => {
+    if (!v) return '';
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  };
+  for (const tc of timeCards) {
+    const d = fmtDate(tc.date);
+    if (!d) continue;
+    const equipment: any[] = tc.equipment || [];
+    for (const eq of equipment) {
+      const code = String(eq.equipmentCode || eq.code || '').trim();
+      if (!code) continue;
+      const desc = String(eq.equipmentDescription || eq.description || '').trim();
+      const existing = acc.get(code);
+      if (!existing) {
+        acc.set(code, {
+          code,
+          description: desc,
+          lastSeenDate: d,
+          lastSeenJob: jobCode,
+          timesSeen: 1,
+          raw: { equipmentCode: code, equipmentDescription: desc },
+        });
+      } else {
+        existing.timesSeen += 1;
+        // Prefer a non-blank description if we didn't have one.
+        if (!existing.description && desc) existing.description = desc;
+        // Track the most recent (job, date) pair.
+        if (d > existing.lastSeenDate) {
+          existing.lastSeenDate = d;
+          existing.lastSeenJob = jobCode;
+        }
+      }
+    }
+  }
 }
 
 function blankRow(jobCode: string, date: string, costCode: string, foreman: string): DetailRow {
