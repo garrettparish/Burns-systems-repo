@@ -194,24 +194,47 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Phase 2: If timeCardInfo returned 200, grab the first TC id and fetch its detail
-      let tcDetailSample: any = null;
+      // Phase 2: Try multiple detail URL patterns to find the one with cost code entries
+      const tcDetailResults: { url: string; status: number; body: string }[] = [];
       const tcListResult = results.find(r => r.label.includes('timeCardInfo (CORRECT)') && r.status === 200);
       if (tcListResult) {
         try {
           const parsed = JSON.parse(tcListResult.body);
           const firstTc = parsed?.results?.[0];
           if (firstTc?.id) {
-            // Try GET /timeCardInfo/{id} for full detail with cost code entries
-            const detailUrl = `${HCSS_API_BASE}/heavyjob/api/v1/timeCardInfo/${firstTc.id}`;
-            const detailResp = await fetch(detailUrl, {
-              headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
-            });
-            const detailTxt = await detailResp.text();
-            tcDetailSample = { status: detailResp.status, body: detailTxt.substring(0, 3000) };
+            const detailCandidates = [
+              `${HCSS_API_BASE}/heavyjob/api/v1/timeCardInfo/${firstTc.id}`,
+              `${HCSS_API_BASE}/heavyjob/api/v1/timeCard/${firstTc.id}`,
+              `${HCSS_API_BASE}/heavyjob/api/v1/timeCards/${firstTc.id}`,
+              `${HCSS_API_BASE}/heavyjob/api/v1/timecards/${firstTc.id}`,
+              `${HCSS_API_BASE}/heavyjob/api/v1/timeCard?id=${firstTc.id}`,
+            ];
+            for (const url of detailCandidates) {
+              try {
+                const resp = await fetch(url, {
+                  headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+                });
+                const txt = await resp.text();
+                tcDetailResults.push({ url, status: resp.status, body: txt.substring(0, 3000) });
+              } catch (e) {
+                tcDetailResults.push({ url, status: 0, body: String(e) });
+              }
+            }
+            // Also try POST /timeCardInfo with the TC id in the body
+            try {
+              const postResp = await fetch(`${HCSS_API_BASE}/heavyjob/api/v1/timeCardInfo`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: [firstTc.id], jobId: firstTc.jobId }),
+              });
+              const postTxt = await postResp.text();
+              tcDetailResults.push({ url: 'POST /timeCardInfo', status: postResp.status, body: postTxt.substring(0, 3000) });
+            } catch (e) {
+              tcDetailResults.push({ url: 'POST /timeCardInfo', status: 0, body: String(e) });
+            }
           }
         } catch (e) {
-          tcDetailSample = { status: 0, body: String(e) };
+          tcDetailResults.push({ url: 'parse-error', status: 0, body: String(e) });
         }
       }
 
@@ -222,7 +245,7 @@ Deno.serve(async (req) => {
         totalJobs: testJobs.length,
         jobSamples,
         results,
-        tcDetailSample,
+        tcDetailResults,
       });
     }
 
