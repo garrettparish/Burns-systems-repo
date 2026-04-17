@@ -216,7 +216,31 @@ We built a scan function that tries every plausible endpoint path combination. H
 
 **Key takeaway:** All data that works is under `/heavyjob/api/v1/`. The `e360` product is not provisioned for our account (all e360 calls return 404 with "E360 service may not exist or may be down"). The `setups` product returns 403 even with the correct scopes.
 
-**Waiting on HCSS:** We emailed HCSS support asking: "The timecard endpoints under `/heavyjob/api/v1/timeCards` return 404 for our account. What product or subscription do we need to access timecard data via API?"
+**RESOLVED (2026-04-16):** HCSS support confirmed the 404s were NOT a permissions issue — we were using the wrong endpoint paths AND wrong ID format. Root causes:
+1. **Wrong path:** We used `/heavyjob/api/v1/timeCards` — correct path is `/heavyjob/api/v1/timeCardInfo`
+2. **Wrong ID type:** `jobId` param must be the HCSS UUID (from jobs list `id` field), NOT the job code string
+3. **Wrong pagination:** HCSS uses cursor-based pagination (`cursor` + `limit`), not `skip`/`limit`
+
+**Correct endpoints (from developer.hcssapps.com API Reference):**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/heavyjob/api/v1/timeCardInfo` | GET | Returns time cards (cursor-paginated) |
+| `/heavyjob/api/v1/timeCardApprovalInfo` | GET | Returns time card approvals |
+| `/heavyjob/api/v1/timeCardInfo` | POST | Returns time cards (POST variant) |
+| `/heavyjob/api/v1/timeCardInfo/{id}` | GET | Returns single time card by ID |
+| `/heavyjob/api/v1/timeCardInfo/{id}` | PUT | Updates a time card |
+
+**Query params for GET /timeCardInfo:**
+- `jobId` (uuid) — HCSS job GUID, omit for all jobs
+- `foremanId` (uuid) — HCSS foreman GUID
+- `employeeId` (uuid) — filter by employee
+- `startDate` (yyyy-MM-dd) — inclusive start
+- `endDate` (yyyy-MM-dd) — inclusive end
+- `modifiedSince` (RFC-3339) — incremental sync
+- `cursor` (string) — pagination cursor from response metadata
+- `limit` (int32, default 1000) — page size
+- `isApproved`, `isAccepted`, `isReviewed` (boolean) — status filters
+- `businessUnitId` (uuid) — filter by BU
 
 ---
 

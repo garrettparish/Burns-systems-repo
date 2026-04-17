@@ -51,11 +51,14 @@ const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '14', 10
 
 // Endpoint paths — ALL under heavyjob product (confirmed via endpoint scan 2026-04-14).
 // businessUnits returned 200 from heavyjob; setups returned 403, e360 returned 404.
+// FIXED 2026-04-16: HCSS developer docs confirm the correct endpoint is /timeCardInfo
+// (not /timeCards). All ID params (jobId, foremanId, etc.) must be HCSS UUIDs.
+// Pagination is cursor-based (cursor + limit), NOT skip-based.
 const EP = {
   businessUnits: `${HCSS_API_BASE}/heavyjob/api/v1/businessUnits`,
   jobs:          (buId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/jobs?businessUnitId=${encodeURIComponent(buId)}`,
-  timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${encodeURIComponent(jobId)}`,
-  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/quantities?jobId=${encodeURIComponent(jobId)}`,
+  timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/timeCardInfo?jobId=${encodeURIComponent(jobId)}`,
+  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/costCodeTransactionInfo?jobId=${encodeURIComponent(jobId)}`,
 };
 
 // -------------------- TYPES --------------------
@@ -154,30 +157,21 @@ Deno.serve(async (req) => {
       const jobSamples = testJobs.slice(0, 10).map(j => ({ code: j.jobCode, id: (j.id || '').substring(0, 8), name: j.name, status: j.status }));
 
       const TC_CANDIDATES = [
-        // HeavyJob v1
-        { label: 'hj/v1/timeCards',          url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${testJobId}&count=1` },
-        { label: 'hj/v1/timecards',          url: `${HCSS_API_BASE}/heavyjob/api/v1/timecards?jobId=${testJobId}&count=1` },
-        // HeavyJob v2
-        { label: 'hj/v2/timeCards',          url: `${HCSS_API_BASE}/heavyjob/api/v2/timeCards?jobId=${testJobId}&count=1` },
-        { label: 'hj/v2/timecards',          url: `${HCSS_API_BASE}/heavyjob/api/v2/timecards?jobId=${testJobId}&count=1` },
-        // No product prefix
-        { label: 'api/v1/timeCards',         url: `${HCSS_API_BASE}/api/v1/timeCards?jobId=${testJobId}&count=1` },
-        { label: 'api/v1/timecards',         url: `${HCSS_API_BASE}/api/v1/timecards?jobId=${testJobId}&count=1` },
-        // Timecards product prefix
-        { label: 'timecards/v1/timeCards',   url: `${HCSS_API_BASE}/timecards/api/v1/timeCards?jobId=${testJobId}&count=1` },
-        { label: 'timecards/v1/timecards',   url: `${HCSS_API_BASE}/timecards/api/v1/timecards?jobId=${testJobId}&count=1` },
-        // E360 (may not be provisioned)
-        { label: 'e360/v1/timeCards',        url: `${HCSS_API_BASE}/e360/api/v1/timeCards?count=1` },
-        // HJ costCodes (known working — get with real job)
-        { label: 'hj/v1/costCodes',          url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${testJobId}` },
-        // HJ other data endpoints
-        { label: 'hj/v1/employees',          url: `${HCSS_API_BASE}/heavyjob/api/v1/employees?count=1` },
-        { label: 'hj/v1/equipment',          url: `${HCSS_API_BASE}/heavyjob/api/v1/equipment?count=1` },
-        { label: 'hj/v1/dailies',            url: `${HCSS_API_BASE}/heavyjob/api/v1/dailies?jobId=${testJobId}&count=1` },
-        { label: 'hj/v1/dailyLogs',          url: `${HCSS_API_BASE}/heavyjob/api/v1/dailyLogs?jobId=${testJobId}&count=1` },
-        { label: 'hj/v1/foremen',            url: `${HCSS_API_BASE}/heavyjob/api/v1/foremen?jobId=${testJobId}` },
-        { label: 'hj/v1/tags',               url: `${HCSS_API_BASE}/heavyjob/api/v1/tags` },
-        { label: 'hj/v1/costTypes',          url: `${HCSS_API_BASE}/heavyjob/api/v1/costTypes` },
+        // ── Confirmed correct paths from HCSS developer docs (2026-04-16) ──
+        // IMPORTANT: jobId must be HCSS UUID, not job code
+        { label: 'hj/v1/timeCardInfo (CORRECT)',  url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCardInfo?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/timeCardApprovalInfo',    url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCardApprovalInfo?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/costCodeTransactionInfo',  url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodeTransactionInfo?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/costCodeProgress',         url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodeProgress?jobId=${testJobId}&limit=1` },
+        // ── Old guesses (all returned 404 — leaving for reference) ──
+        { label: 'hj/v1/timeCards (WRONG)',   url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/quantities (WRONG)',  url: `${HCSS_API_BASE}/heavyjob/api/v1/quantities?jobId=${testJobId}&limit=1` },
+        // ── Other data endpoints ──
+        { label: 'hj/v1/costCodes',           url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${testJobId}` },
+        { label: 'hj/v1/employees',           url: `${HCSS_API_BASE}/heavyjob/api/v1/employees?limit=1` },
+        { label: 'hj/v1/equipment',           url: `${HCSS_API_BASE}/heavyjob/api/v1/equipment?limit=1` },
+        { label: 'hj/v1/foremen',             url: `${HCSS_API_BASE}/heavyjob/api/v1/foremen?jobId=${testJobId}` },
+        { label: 'hj/v1/costTypes',           url: `${HCSS_API_BASE}/heavyjob/api/v1/costTypes` },
       ];
 
       const results: { label: string; status: number; body: string }[] = [];
@@ -320,9 +314,15 @@ Deno.serve(async (req) => {
 
     for (const job of activeJobs) {
       try {
+        // CRITICAL: HCSS API requires UUID jobId, NOT the job code string.
+        // job.id is the HCSS UUID from the jobs list response.
+        if (!job.id) {
+          errors.push({ job: job.jobCode, error: 'Missing HCSS UUID (job.id) — cannot query timecards' });
+          continue;
+        }
         const [tcs, qs] = await Promise.all([
-          listTimeCards(token, buIdentifier, job.id || job.jobCode, since),
-          listQuantities(token, buIdentifier, job.id || job.jobCode, since),
+          listTimeCards(token, buIdentifier, job.id, since),
+          listQuantities(token, buIdentifier, job.id, since),
         ]);
         rows.push(...mergeJobRows(job.jobCode, tcs, qs));
       } catch (e) {
@@ -421,24 +421,31 @@ async function hcssGet(url: string, token: string): Promise<any> {
 }
 
 async function hcssGetPaginated(url: string, token: string): Promise<any[]> {
-  // HCSS paginates with skip/limit on most collection endpoints.
-  // If the list is returned at top level, we handle that too.
+  // HCSS uses cursor-based pagination (confirmed via developer.hcssapps.com).
+  // Response shape: { results/items/data: [...], metadata: { nextCursor: "..." } }
+  // Pass cursor as query param to get next page. limit defaults to 1000.
   const out: any[] = [];
-  const pageSize = 500;
-  let skip = 0;
+  const pageSize = 1000;
+  let cursor: string | null = null;
+  let pages = 0;
   for (;;) {
     const sep = url.includes('?') ? '&' : '?';
-    const pageUrl = `${url}${sep}skip=${skip}&limit=${pageSize}`;
+    const pageUrl = cursor
+      ? `${url}${sep}limit=${pageSize}&cursor=${encodeURIComponent(cursor)}`
+      : `${url}${sep}limit=${pageSize}`;
     const data = await hcssGet(pageUrl, token);
     const items: any[] = Array.isArray(data) ? data
+                       : Array.isArray(data?.results) ? data.results
                        : Array.isArray(data?.items) ? data.items
                        : Array.isArray(data?.data)  ? data.data
-                       : Array.isArray(data?.results) ? data.results
                        : [];
     out.push(...items);
-    if (items.length < pageSize) break;
-    skip += pageSize;
-    if (skip > 50000) break; // safety
+    // Check for nextCursor in metadata (HCSS cursor pagination)
+    const nextCursor = data?.metadata?.nextCursor || data?.nextCursor || null;
+    if (!nextCursor || items.length === 0) break;
+    cursor = nextCursor;
+    pages++;
+    if (pages > 100) break; // safety: max ~100k rows
   }
   return out;
 }
@@ -478,13 +485,17 @@ function isJobActive(j: any): boolean {
   return true;
 }
 
-async function listTimeCards(token: string, buCode: string, jobCode: string, sinceISO: string | null) {
-  const url = sinceISO ? `${EP.timeCards(buCode, jobCode)}?startDate=${sinceISO}` : EP.timeCards(buCode, jobCode);
+async function listTimeCards(token: string, buCode: string, jobId: string, sinceISO: string | null) {
+  // EP.timeCards already includes ?jobId=, so append with &
+  const base = EP.timeCards(buCode, jobId);
+  const url = sinceISO ? `${base}&startDate=${sinceISO}` : base;
   return await hcssGetPaginated(url, token);
 }
 
-async function listQuantities(token: string, buCode: string, jobCode: string, sinceISO: string | null) {
-  const url = sinceISO ? `${EP.quantities(buCode, jobCode)}?startDate=${sinceISO}` : EP.quantities(buCode, jobCode);
+async function listQuantities(token: string, buCode: string, jobId: string, sinceISO: string | null) {
+  // EP.quantities already includes ?jobId=, so append with &
+  const base = EP.quantities(buCode, jobId);
+  const url = sinceISO ? `${base}&startDate=${sinceISO}` : base;
   return await hcssGetPaginated(url, token);
 }
 
