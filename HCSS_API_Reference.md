@@ -1,14 +1,14 @@
 # HCSS API Integration Reference — Burns Dirt Construction
 
-**Last updated:** April 16, 2026
+**Last updated:** April 17, 2026
 **Author:** Garrett Parish (with Claude)
-**Status:** Partially working — jobs & cost codes syncing, timecards pending HCSS support
+**Status:** FULLY WORKING — jobs, cost codes, and timecards all syncing. 102 rows across 10 jobs. Daily 5am cron active.
 
 ---
 
 ## Quick Summary
 
-We have a working HCSS HeavyJob API integration that syncs **132 jobs** and **938 cost codes** into Supabase. Timecard/actuals endpoints are not yet available (all return 404 — we're waiting on HCSS support to enable them). The integration lives in a Supabase Edge Function and feeds into the Burns Project Controls app at `bdcprojectcontrols.netlify.app`.
+We have a fully working HCSS HeavyJob API integration that syncs **132 jobs**, **938 cost codes**, and **timecard actuals** into Supabase. The timecard sync uses a two-step fetch pattern (list via `/timeCardInfo`, detail via `/timeCards/{id}`). Last sync: 102 rows across 10 active jobs in 18 seconds. A daily 5am cron handles ongoing sync (14-day lookback). The integration lives in a Supabase Edge Function and feeds into the Burns Project Controls app at `bdcprojectcontrols.netlify.app`.
 
 ---
 
@@ -296,7 +296,7 @@ create table public.hcss_cost_codes (
 );
 ```
 
-**`actuals_detail_sync`** — Daily actuals (currently empty, waiting on timecard API)
+**`actuals_detail_sync`** — Daily actuals (102+ rows, synced from HCSS timecards)
 ```sql
 create table public.actuals_detail_sync (
   job_number          text        not null,
@@ -360,8 +360,8 @@ supabase functions deploy hcss-sync-actuals --no-verify-jwt
 |------|------|-------------|
 | Discover | `{"discover": true}` | Lists business units, no writes |
 | Sync Metadata | `{"syncMetadata": true}` | Pulls all jobs + cost codes into `hcss_jobs` / `hcss_cost_codes` |
-| Sync Actuals | `{"trigger": "manual"}` | Pulls timecards + quantities for last 14 days (currently 404) |
-| Backfill | `{"trigger": "manual", "fullHistory": true}` | Full history pull (currently 404) |
+| Sync Actuals | `{"trigger": "manual"}` | Pulls timecards for last 14 days (WORKING — 102 rows, 10 jobs) |
+| Backfill | `{"trigger": "manual", "fullHistory": true}` | Full history pull (WORKING — not yet run, will pull all history) |
 | Endpoint Scan | `{"scanEndpoints": true}` | Tries multiple endpoint paths, returns status codes for each |
 
 **Calling from the browser:**
@@ -380,9 +380,15 @@ const data = await response.json();
 
 ### Pagination
 
-HCSS uses `skip`/`limit` on most endpoints (heavyjob product). The e360 product (if it ever works) uses `cursor`/`count` with `beginDate`/`endDate`. Our edge function handles the `skip`/`limit` style automatically.
+HCSS uses **cursor-based pagination** (`cursor` + `limit`), NOT offset-based (`skip`/`limit`). Our Edge Function's `hcssGetPaginated()` handles this automatically — it reads `metadata.nextCursor` or `nextCursor` from each response page.
 
 Response arrays can be at the top level (raw array) or nested under `results`, `items`, or `data` — the code handles all four shapes.
+
+### Two-Step Timecard Fetch
+
+The `/timeCardInfo` endpoint only returns summary records (id, date, foremanId — no cost codes or hours). To get full detail, you must fetch each timecard individually via `/timeCards/{id}`. Our `listTimeCards()` function handles this automatically:
+1. `GET /timeCardInfo?jobId={uuid}` → list of summary records
+2. For each summary: `GET /timeCards/{id}` → full detail with costCodes[], employees[], equipment[]
 
 ---
 

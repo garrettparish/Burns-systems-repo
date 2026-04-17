@@ -285,6 +285,7 @@ tr:hover{background:#FAF8F5}
   <button class="sub-tab" data-sub="payapps" onclick="navSub('financials','payapps')">Pay Apps</button>
   <button class="sub-tab" data-sub="cashflow" onclick="navSub('financials','cashflow')">Cash Flow</button>
   <button class="sub-tab" data-sub="jobcost" onclick="navSub('financials','jobcost')">Job Cost</button>
+  <button class="sub-tab" data-sub="schedule" onclick="navSub('financials','schedule')">Schedule</button>
 </div>
 <div class="sub-nav" id="subNav-production">
   <button class="sub-tab" data-sub="planning" onclick="navSub('production','planning')">Planning</button>
@@ -2593,8 +2594,8 @@ let _activeNavTab='financials';
 
 // Group definitions — which sub-tabs belong to each top tab
 const NAV_GROUPS={
-  financials:['overview','biditems','eva','forecast','payapps','cashflow'],
-  production:['planning','schedule','jcs','production','crews']
+  financials:['overview','biditems','eva','forecast','payapps','cashflow','jobcost','schedule'],
+  production:['planning','schedule','jcs','production','crews','equipment']
 };
 
 // Trade abbreviations and colors
