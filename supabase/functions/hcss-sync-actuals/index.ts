@@ -58,7 +58,9 @@ const EP = {
   businessUnits: `${HCSS_API_BASE}/heavyjob/api/v1/businessUnits`,
   jobs:          (buId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/jobs?businessUnitId=${encodeURIComponent(buId)}`,
   timeCards:     (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/timeCardInfo?jobId=${encodeURIComponent(jobId)}`,
-  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/costCodeTransactionInfo?jobId=${encodeURIComponent(jobId)}`,
+  // Quantities endpoint: costCodeTransactionInfo returned 404 in scan.
+  // Trying costTypeQuantity as fallback. If both fail, sync runs timecard-only.
+  quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/costTypeQuantity?jobId=${encodeURIComponent(jobId)}`,
 };
 
 // -------------------- TYPES --------------------
@@ -163,6 +165,11 @@ Deno.serve(async (req) => {
         { label: 'hj/v1/timeCardApprovalInfo',    url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCardApprovalInfo?jobId=${testJobId}&limit=1` },
         { label: 'hj/v1/costCodeTransactionInfo',  url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodeTransactionInfo?jobId=${testJobId}&limit=1` },
         { label: 'hj/v1/costCodeProgress',         url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodeProgress?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/costTypeQuantity',         url: `${HCSS_API_BASE}/heavyjob/api/v1/costTypeQuantity?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/costTransaction',          url: `${HCSS_API_BASE}/heavyjob/api/v1/costTransaction?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/costInfo',                 url: `${HCSS_API_BASE}/heavyjob/api/v1/costInfo?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/quantityAdjustment',       url: `${HCSS_API_BASE}/heavyjob/api/v1/quantityAdjustment?jobId=${testJobId}&limit=1` },
+        { label: 'hj/v1/payItemTransaction',       url: `${HCSS_API_BASE}/heavyjob/api/v1/payItemTransaction?jobId=${testJobId}&limit=1` },
         // ── Old guesses (all returned 404 — leaving for reference) ──
         { label: 'hj/v1/timeCards (WRONG)',   url: `${HCSS_API_BASE}/heavyjob/api/v1/timeCards?jobId=${testJobId}&limit=1` },
         { label: 'hj/v1/quantities (WRONG)',  url: `${HCSS_API_BASE}/heavyjob/api/v1/quantities?jobId=${testJobId}&limit=1` },
@@ -494,9 +501,18 @@ async function listTimeCards(token: string, buCode: string, jobId: string, since
 
 async function listQuantities(token: string, buCode: string, jobId: string, sinceISO: string | null) {
   // EP.quantities already includes ?jobId=, so append with &
-  const base = EP.quantities(buCode, jobId);
-  const url = sinceISO ? `${base}&startDate=${sinceISO}` : base;
-  return await hcssGetPaginated(url, token);
+  // Gracefully degrade: if quantities endpoint 404s, return empty array
+  // so sync still works with timecard data alone.
+  try {
+    const base = EP.quantities(buCode, jobId);
+    const url = sinceISO ? `${base}&startDate=${sinceISO}` : base;
+    return await hcssGetPaginated(url, token);
+  } catch (e) {
+    // 404 or other error — quantities endpoint may not be provisioned
+    // Continue without quantities; timecards alone still provide labor/equip costs
+    console.warn(`Quantities fetch failed (non-fatal): ${e.message || e}`);
+    return [];
+  }
 }
 
 // -------------------- MERGE / NORMALIZE --------------------
