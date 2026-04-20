@@ -11,7 +11,7 @@
 :root{--green:#3E4D3E;--midnight:#363636;--sand:#B9AB99;--ash:#D6D6D6;--orange:#F26722;--white:#FFF;--bg:#F5F3F0;--card:#FFF;--border:#E0DCD6;--text:#363636;--text-light:#6B6B6B;--red:#C0392B;--yellow:#F39C12;--blue:#2980B9;--teal:#1ABC9C}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Source Serif 4',Georgia,serif;background:var(--bg);color:var(--text);min-height:100vh}
-.topbar{background:var(--green);color:var(--white);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);position:sticky;top:0;z-index:100}
+.topbar{background:var(--green);color:var(--white);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);position:sticky;top:0;z-index:200}
 .topbar-brand{font-family:Oswald,sans-serif;font-weight:700;font-size:20px;letter-spacing:1px;text-transform:uppercase}
 .topbar-brand span{color:var(--orange)}
 .topbar-phase{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:2px;text-transform:uppercase;opacity:.7}
@@ -272,17 +272,39 @@ tr:hover{background:#FAF8F5}
     </div>
 
     <div id="loginForm">
-      <p style="font-size:13px;color:var(--text-light);text-align:center;margin-bottom:18px;">Enter your email to sign in. We'll send you a one-click login link.</p>
-      <input id="loginEmail" type="email" autocomplete="email" placeholder="you@burnsdirt.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;margin-bottom:10px;" onkeydown="if(event.key==='Enter')handleLogin()">
-      <button id="loginBtn" onclick="handleLogin()" style="width:100%;padding:10px;background:var(--orange);color:white;border:none;border-radius:6px;font-family:Oswald;font-size:14px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#D55A1E'" onmouseout="this.style.background='var(--orange)'">Send magic link</button>
+      <p style="font-size:13px;color:var(--text-light);text-align:center;margin-bottom:18px;">Sign in with your Burns Dirt credentials.</p>
+      <input id="loginEmail" type="email" autocomplete="email" placeholder="you@burnsdirt.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;margin-bottom:10px;" onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus()">
+      <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Password" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;margin-bottom:10px;" onkeydown="if(event.key==='Enter')handleLogin()">
+      <button id="loginBtn" onclick="handleLogin()" style="width:100%;padding:10px;background:var(--orange);color:white;border:none;border-radius:6px;font-family:Oswald;font-size:14px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#D55A1E'" onmouseout="this.style.background='var(--orange)'">Sign in</button>
       <div id="loginError" style="color:var(--red);font-size:12px;margin-top:10px;min-height:14px;text-align:center;"></div>
+      <div style="text-align:center;margin-top:14px;font-size:12px;color:var(--text-light);">
+        <a href="#" onclick="event.preventDefault();showResetForm()" style="color:var(--orange);text-decoration:none;">First time, or forgot password?</a>
+      </div>
+    </div>
+
+    <div id="loginResetForm" style="display:none;">
+      <p style="font-size:13px;color:var(--text-light);text-align:center;margin-bottom:18px;">Enter your email. We'll send a link to set a new password.</p>
+      <input id="loginResetEmail" type="email" autocomplete="email" placeholder="you@burnsdirt.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;margin-bottom:10px;" onkeydown="if(event.key==='Enter')handleResetPassword()">
+      <button id="loginResetBtn" onclick="handleResetPassword()" style="width:100%;padding:10px;background:var(--orange);color:white;border:none;border-radius:6px;font-family:Oswald;font-size:14px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;" onmouseover="this.style.background='#D55A1E'" onmouseout="this.style.background='var(--orange)'">Send reset link</button>
+      <div id="loginResetError" style="color:var(--red);font-size:12px;margin-top:10px;min-height:14px;text-align:center;"></div>
+      <div style="text-align:center;margin-top:14px;font-size:12px;color:var(--text-light);">
+        <a href="#" onclick="event.preventDefault();resetLoginForm()" style="color:var(--orange);text-decoration:none;">Back to sign in</a>
+      </div>
     </div>
 
     <div id="loginSent" style="display:none;text-align:center;">
       <div style="font-size:40px;color:var(--green);margin-bottom:12px;">&#10004;</div>
       <div style="font-family:Oswald;font-size:16px;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:8px;">Check your inbox</div>
-      <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;">We sent a sign-in link to <strong id="loginSentEmail"></strong>. Click it to finish logging in.</p>
-      <button onclick="resetLoginForm()" style="background:none;border:none;color:var(--orange);font-size:12px;cursor:pointer;text-decoration:underline;">Use a different email</button>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;">We sent a password reset link to <strong id="loginSentEmail"></strong>. Click it, choose a new password, then come back here to sign in.</p>
+      <button onclick="resetLoginForm()" style="background:none;border:none;color:var(--orange);font-size:12px;cursor:pointer;text-decoration:underline;">Back to sign in</button>
+    </div>
+
+    <div id="loginSetPassword" style="display:none;">
+      <p style="font-size:13px;color:var(--text-light);text-align:center;margin-bottom:18px;">Set a new password for your account.</p>
+      <input id="newPassword" type="password" autocomplete="new-password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;margin-bottom:10px;" onkeydown="if(event.key==='Enter')document.getElementById('newPasswordConfirm').focus()">
+      <input id="newPasswordConfirm" type="password" autocomplete="new-password" placeholder="Confirm new password" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;margin-bottom:10px;" onkeydown="if(event.key==='Enter')handleSetPassword()">
+      <button id="setPasswordBtn" onclick="handleSetPassword()" style="width:100%;padding:10px;background:var(--orange);color:white;border:none;border-radius:6px;font-family:Oswald;font-size:14px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;" onmouseover="this.style.background='#D55A1E'" onmouseout="this.style.background='var(--orange)'">Save password &amp; continue</button>
+      <div id="setPasswordError" style="color:var(--red);font-size:12px;margin-top:10px;min-height:14px;text-align:center;"></div>
     </div>
   </div>
 </div>
@@ -2478,7 +2500,7 @@ const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // ═══════════════════════════════════════════
-// AUTH — magic-link login, gates app startup
+// AUTH — email+password login with reset flow, gates app startup
 // ═══════════════════════════════════════════
 let _currentUser = null;
 let _appBooted = false;
@@ -2516,35 +2538,115 @@ document.addEventListener('click', function(e){
   }
 });
 
+function _hideAllLoginPanels(){
+  ['loginForm','loginResetForm','loginSent','loginSetPassword'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.style.display = 'none';
+  });
+}
+function resetLoginForm(){
+  _hideAllLoginPanels();
+  const f = document.getElementById('loginForm');
+  if(f) f.style.display = 'block';
+  ['loginError','loginResetError','setPasswordError'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.textContent = '';
+  });
+  const pw = document.getElementById('loginPassword'); if(pw) pw.value = '';
+  const em = document.getElementById('loginEmail'); if(em) em.focus();
+}
+function showResetForm(){
+  _hideAllLoginPanels();
+  const r = document.getElementById('loginResetForm');
+  if(r) r.style.display = 'block';
+  // Pre-fill with whatever the user already typed on the sign-in screen
+  const typed = (document.getElementById('loginEmail')?.value || '').trim();
+  const rEm = document.getElementById('loginResetEmail');
+  if(rEm){ rEm.value = typed; rEm.focus(); }
+}
+function showSetPasswordForm(){
+  _hideAllLoginPanels();
+  const overlay = document.getElementById('loginOverlay');
+  if(overlay) overlay.style.display = 'flex';
+  const sp = document.getElementById('loginSetPassword');
+  if(sp) sp.style.display = 'block';
+  const np = document.getElementById('newPassword');
+  if(np){ np.value = ''; np.focus(); }
+  const npc = document.getElementById('newPasswordConfirm');
+  if(npc) npc.value = '';
+  const err = document.getElementById('setPasswordError');
+  if(err) err.textContent = '';
+}
+
 async function handleLogin(){
   const emailInput = document.getElementById('loginEmail');
+  const pwInput = document.getElementById('loginPassword');
   const errEl = document.getElementById('loginError');
   const btn = document.getElementById('loginBtn');
+  const email = (emailInput.value || '').trim().toLowerCase();
+  const password = pwInput.value || '';
+  errEl.textContent = '';
+  if(!email || !email.includes('@')){ errEl.textContent = 'Please enter a valid email.'; return; }
+  if(!password){ errEl.textContent = 'Please enter your password.'; return; }
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if(error){
+      // Supabase returns "Invalid login credentials" for both wrong password
+      // AND unconfirmed users — nudge toward the reset flow.
+      errEl.textContent = error.message || 'Sign in failed.';
+      return;
+    }
+    // onAuthStateChange SIGNED_IN handler will boot the app.
+  } catch(e){
+    errEl.textContent = e.message || 'Unexpected error.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign in';
+  }
+}
+
+async function handleResetPassword(){
+  const emailInput = document.getElementById('loginResetEmail');
+  const errEl = document.getElementById('loginResetError');
+  const btn = document.getElementById('loginResetBtn');
   const email = (emailInput.value || '').trim().toLowerCase();
   errEl.textContent = '';
   if(!email || !email.includes('@')){ errEl.textContent = 'Please enter a valid email.'; return; }
   btn.disabled = true; btn.textContent = 'Sending…';
   try {
-    const { error } = await sb.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin + window.location.pathname }
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname
     });
-    if(error){ errEl.textContent = error.message || 'Failed to send link.'; return; }
+    if(error){ errEl.textContent = error.message || 'Failed to send reset link.'; return; }
     document.getElementById('loginSentEmail').textContent = email;
-    document.getElementById('loginForm').style.display = 'none';
+    _hideAllLoginPanels();
     document.getElementById('loginSent').style.display = 'block';
   } catch(e){
     errEl.textContent = e.message || 'Unexpected error.';
   } finally {
-    btn.disabled = false; btn.textContent = 'Send magic link';
+    btn.disabled = false; btn.textContent = 'Send reset link';
   }
 }
-function resetLoginForm(){
-  document.getElementById('loginForm').style.display = 'block';
-  document.getElementById('loginSent').style.display = 'none';
-  document.getElementById('loginError').textContent = '';
-  const em = document.getElementById('loginEmail');
-  if(em){ em.value = ''; em.focus(); }
+
+async function handleSetPassword(){
+  const p1 = document.getElementById('newPassword').value || '';
+  const p2 = document.getElementById('newPasswordConfirm').value || '';
+  const errEl = document.getElementById('setPasswordError');
+  const btn = document.getElementById('setPasswordBtn');
+  errEl.textContent = '';
+  if(p1.length < 8){ errEl.textContent = 'Password must be at least 8 characters.'; return; }
+  if(p1 !== p2){ errEl.textContent = 'Passwords do not match.'; return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const { data, error } = await sb.auth.updateUser({ password: p1 });
+    if(error){ errEl.textContent = error.message || 'Failed to save password.'; return; }
+    // Success — we already have a live session from the recovery link, so boot.
+    if(data && data.user){ _currentUser = data.user; }
+    bootApp();
+  } catch(e){
+    errEl.textContent = e.message || 'Unexpected error.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save password & continue';
+  }
 }
 async function handleLogout(){
   try { await sb.auth.signOut(); } catch(e){ console.warn('signOut error', e); }
@@ -2566,9 +2668,15 @@ function bootApp(){
 }
 
 async function initAuth(){
+  // If the current URL is a password-recovery redirect, Supabase parses the
+  // hash tokens automatically and fires PASSWORD_RECOVERY via onAuthStateChange.
+  // That handler (below) routes to the Set-Password form. We still need to
+  // show the overlay immediately so the app UI doesn't flash before the event.
+  const isRecovery = typeof window !== 'undefined' && window.location.hash &&
+                     window.location.hash.includes('type=recovery');
   try {
     const { data: { session } } = await sb.auth.getSession();
-    if(session && session.user){
+    if(session && session.user && !isRecovery){
       _currentUser = session.user;
       bootApp();
     } else {
@@ -2578,9 +2686,19 @@ async function initAuth(){
     console.error('Auth init error', e);
     showLoginOverlay();
   }
-  // Keep state in sync — handles magic-link redirects and explicit logout
+  // Keep state in sync — handles login, logout, and password recovery links
   sb.auth.onAuthStateChange((event, session) => {
+    if(event === 'PASSWORD_RECOVERY'){
+      _currentUser = (session && session.user) || null;
+      showSetPasswordForm();
+      return;
+    }
     if((event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') && session && session.user){
+      // If we're still sitting on the Set-Password form (e.g. the user clicked a
+      // recovery link, then the TOKEN_REFRESHED event fires), don't silently
+      // auto-boot — wait until they actually save a new password.
+      const spVisible = document.getElementById('loginSetPassword')?.style.display === 'block';
+      if(spVisible) return;
       _currentUser = session.user;
       bootApp();
     } else if(event === 'SIGNED_OUT'){
@@ -9781,7 +9899,7 @@ function renderSettings(){
   h+=`</div>`;
   h+=`<div style="flex:1;min-width:240px;">`;
   h+=`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:4px;">Invite teammates</div>`;
-  h+=`<div style="font-size:12px;color:var(--text);">Invite people from the Supabase dashboard:<br><strong>Authentication → Users → Invite</strong>. They'll get a one-click link to sign in.</div>`;
+  h+=`<div style="font-size:12px;color:var(--text);">Invite people from the Supabase dashboard:<br><strong>Authentication → Users → Add user</strong>. Give them an email + temporary password, or have them use the <em>"First time, or forgot password?"</em> link on the login screen to set their own.</div>`;
   h+=`</div>`;
   h+=`</div>`;
   h+=`<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin:10px 0 6px;">Recent Activity</div>`;
