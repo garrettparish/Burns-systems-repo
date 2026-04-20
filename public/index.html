@@ -6003,6 +6003,41 @@ function renderForecast(){
   }
   h+='</div></div>';
 
+  // Diagnostic banner: when totAc===0 but actuals exist, surface the root cause so we can see WHY.
+  if(totAc===0 && job.actuals && job.actuals.length){
+    const nActuals=job.actuals.length;
+    const sumCost=job.actuals.reduce((s,a)=>s+(Number(a.actualCost)||0),0);
+    const sumBELMOS=job.actuals.reduce((s,a)=>s+(Number(a.actualLabor)||0)+(Number(a.actualEquip)||0)+(Number(a.actualMat)||0)+(Number(a.actualSub)||0),0);
+    const sumHours=job.actuals.reduce((s,a)=>s+(Number(a.actualHours)||0),0);
+    const actualCodes=new Set(job.actuals.map(a=>String(a.code||'').trim()).filter(Boolean));
+    const activityPhaseCodes=new Set((job.activities||[]).map(a=>String(a.phaseCode||a.code||'').trim()).filter(Boolean));
+    const matching=[...actualCodes].filter(c=>activityPhaseCodes.has(c)).length;
+    const orphanActuals=[...actualCodes].filter(c=>!activityPhaseCodes.has(c));
+    const orphanActivities=[...activityPhaseCodes].filter(c=>!actualCodes.has(c));
+    let cause='';
+    if(sumCost===0 && sumBELMOS===0 && sumHours>0)cause='Actuals rows exist and have <strong>hours</strong>, but <strong>no cost</strong> columns — your HJ Daily Detail sync brought hours only. Import the <strong>HJ Cost Code Summary</strong> report to populate cost.';
+    else if(sumCost===0 && sumBELMOS>0)cause='BELMOS columns are populated but <strong>actualCost is 0</strong> — rollup didn\'t total them. Click <strong>Re-import HJ Summary</strong> or re-run the detail rollup.';
+    else if(sumCost===0 && sumBELMOS===0)cause='Actuals rows exist but every cost field is <strong>$0</strong>. Re-import the <strong>HJ Cost Code Summary</strong> report from Project Set Up.';
+    else if(sumCost>0 && matching===0)cause=`Actuals have <strong>${fmtD(sumCost)}</strong> in cost, but <strong>none of the codes match your activities' phase codes</strong>. Fix the phase code mapping in Set Up.`;
+    else cause='Something unusual — actuals have cost but computeEVA aggregated to $0. Open browser console and run <code>Store.jobs["'+Store.activeJob+'"].actuals</code> to inspect.';
+    h+='<div class="card" style="margin-top:12px;border-left:4px solid var(--orange);background:#FFF8E6;"><div class="card-title" style="color:#92400e;">⚠ Actuals present but not showing in Forecast</div>';
+    h+='<div style="font-size:13px;line-height:1.55;">'+cause+'</div>';
+    h+='<div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;font-size:12px;">';
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Actuals rows</div><div style="font-family:Oswald;font-size:16px;">${nActuals}</div></div>`;
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Σ actualCost</div><div style="font-family:Oswald;font-size:16px;">${fmtD(sumCost)}</div></div>`;
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Σ BELMOS</div><div style="font-family:Oswald;font-size:16px;">${fmtD(sumBELMOS)}</div></div>`;
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Σ hours</div><div style="font-family:Oswald;font-size:16px;">${fmt(sumHours)}</div></div>`;
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Codes match</div><div style="font-family:Oswald;font-size:16px;">${matching} / ${actualCodes.size}</div></div>`;
+    h+='</div>';
+    if(orphanActuals.length){
+      h+='<details style="margin-top:10px;font-size:12px;"><summary style="cursor:pointer;color:var(--text-light);">Cost codes in actuals with no matching activity phaseCode ('+orphanActuals.length+')</summary><div style="margin-top:6px;background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);font-family:monospace;font-size:11px;max-height:120px;overflow:auto;">'+orphanActuals.map(esc).join(', ')+'</div></details>';
+    }
+    if(orphanActivities.length){
+      h+='<details style="margin-top:6px;font-size:12px;"><summary style="cursor:pointer;color:var(--text-light);">Activity phaseCodes with no matching actuals row ('+orphanActivities.length+')</summary><div style="margin-top:6px;background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);font-family:monospace;font-size:11px;max-height:120px;overflow:auto;">'+orphanActivities.map(esc).join(', ')+'</div></details>';
+    }
+    h+='</div>';
+  }
+
   // Per-phase table
   h+='<div class="card" style="margin-top:16px;"><div class="card-title" style="display:flex;justify-content:space-between;align-items:center;"><span>Per-Phase Forecast</span><span style="font-size:11px;font-weight:400;color:var(--text-light);">Override = lock the projected final cost; clear to revert to EAC</span></div>';
   h+='<div style="overflow-x:auto;"><table style="width:100%;font-size:13px;"><thead><tr style="background:var(--card);">';
