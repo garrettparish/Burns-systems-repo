@@ -2898,7 +2898,7 @@ function blendedActualsByCode(job, asOf){
     if(!map[k]) map[k] = {
       code:k,
       labor:0, equip:0, mat:0, sub:0, other:0, total:0, hours:0, qty:0,
-      spectrum:{labor:0, equip:0, mat:0, sub:0, other:0, total:0},
+      spectrum:{labor:0, equip:0, mat:0, sub:0, other:0, total:0, hours:0, qty:0},
       hj:      {labor:0, equip:0, mat:0, sub:0, total:0, hours:0, qty:0, estimated:false},
       cutoffDate: cutoffISO,
       hasSpectrum:false, hasHJ:false,
@@ -2906,6 +2906,9 @@ function blendedActualsByCode(job, asOf){
     return map[k];
   };
   // Spectrum side — trust JTD totals through cutoff (Spectrum lags ~30 days).
+  // Spectrum returns one row per (phase, cost_type); hours/qty are on every
+  // row but represent the same code-level totals. Take max across rows rather
+  // than summing so we don't multi-count.
   const specPhases = (job && job._spectrumPhases) || [];
   specPhases.forEach(p => {
     const b = touch(p.phase_code);
@@ -2914,6 +2917,12 @@ function blendedActualsByCode(job, asOf){
     const bucket = classifySpectrumCostType(p.cost_type);
     b.spectrum[bucket] += cost;
     b.spectrum.total += cost;
+    // Hours and qty are code-level (not per cost_type) — take max to avoid
+    // double-counting across L/E/M/S rows for the same phase.
+    const h = Number(p.jtd_hours)||0;
+    const q = Number(p.jtd_quantity)||0;
+    if(h > b.spectrum.hours) b.spectrum.hours = h;
+    if(q > b.spectrum.qty)   b.spectrum.qty   = q;
     b.hasSpectrum = true;
   });
   // HJ side — only rows on/after cutoffISO (i.e., the last ~30 days).
@@ -2962,8 +2971,10 @@ function blendedActualsByCode(job, asOf){
     b.sub   = b.spectrum.sub   + b.hj.sub;
     b.other = b.spectrum.other;
     b.total = b.spectrum.total + b.hj.total;
-    b.hours = b.hj.hours;  // Spectrum phases often lack hours; HJ drives hours.
-    b.qty   = b.hj.qty;    // Same for qty installed within the 30-day window.
+    // Hours/qty: Spectrum provides JTD through cutoff, HJ adds the last 30 days.
+    // Together they form true cumulative JTD.
+    b.hours = b.spectrum.hours + b.hj.hours;
+    b.qty   = b.spectrum.qty   + b.hj.qty;
   });
   return map;
 }
@@ -9813,8 +9824,10 @@ function renderProductionTracker(job){
     delete row._bid;
   });
 
-  // 6) BLENDED COST OVERRIDE — Spectrum (through today−30d) + HJ (since cutoff)
-  // becomes the authoritative cost. Hours/qty stay as-is (HJ drives those).
+  // 6) BLENDED ACTUAL OVERRIDE — Spectrum (through today−30d) + HJ (since cutoff)
+  // becomes the authoritative actual for cost, hours, AND qty. Spectrum's JTD
+  // totals give true cumulative values; summing actualsDetail alone only covers
+  // the current sync window (14–35 days) and undercounts older jobs.
   // Ensures Production Tracker matches Forecast/EVA/JCS everywhere.
   if(typeof blendedActualsByCode==='function' && job._spectrumPhases && job._spectrumPhases.length){
     const blend = blendedActualsByCode(job, new Date());
@@ -9826,6 +9839,12 @@ function renderProductionTracker(job){
       row.actualMat   = b.mat;
       row.actualSub   = b.sub;
       row.actualCost  = b.total;
+      // Prefer blended hours/qty over detail-only sums when blend has data.
+      // Skip if Summary xlsx already provided actualHrs (that's authoritative).
+      if(!row.src.summary){
+        if(b.hours > 0) row.actualHrs = b.hours;
+        if(b.qty   > 0) row.actualQty = b.qty;
+      }
       row._blend      = b; // stash for tooltip
     });
   }
