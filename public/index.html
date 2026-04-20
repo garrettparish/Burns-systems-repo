@@ -9897,10 +9897,19 @@ function renderProductionTracker(job){
   const totActualCost=rows.reduce((s,r)=>s+r.actualCost,0);
   const totCostVar=totBudgetCost-totActualCost;
 
-  // Qty-weighted % complete
+  // Cost-weighted % complete — per-phase qtyPct (or cost ratio when qty
+  // missing) weighted by budget dollars. Works across mixed units (hrs, CY,
+  // tons, LF) because dollars are the common denominator. A phase with a big
+  // budget moves the needle proportionally more than a small-budget phase.
   let overallPct=0;{
     let wSum=0,wDen=0;
-    rows.forEach(r=>{if(r.budgetQty>0){wSum+=r.qtyPct*r.budgetQty;wDen+=r.budgetQty;}});
+    rows.forEach(r=>{
+      if(r.budgetCost>0){
+        const pct = r.qtyPct>0 ? r.qtyPct : (r.actualCost/r.budgetCost*100);
+        wSum += pct * r.budgetCost;
+        wDen += r.budgetCost;
+      }
+    });
     overallPct=wDen>0?(wSum/wDen):0;
   }
   const overallProductivity=totActualHrs>0?(totEarnedHrs/totActualHrs*100):0;
@@ -9923,7 +9932,7 @@ function renderProductionTracker(job){
   const costVarCls=totCostVar>=0?'good':'warn';
 
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
-  h+=tile('% Complete',overallPct.toFixed(1)+'%','','qty-weighted');
+  h+=tile('% Complete',overallPct.toFixed(1)+'%','','cost-weighted');
   h+=tile('Hours Used',`${fmt(totActualHrs)} / ${fmt(totBudgetHrs)}`,hrsCls,hrsPctUsed>0?(hrsPctUsed.toFixed(0)+'% of budget'):'—');
   h+=tile('Productivity',overallProductivity>0?(overallProductivity.toFixed(0)+'%'):'—',prodCls,overallProductivity>=100?'Beating budget':(overallProductivity>=90?'On pace':(overallProductivity>0?'Behind pace':'No data')));
   h+=tile('Hours Variance',totActualHrs>0?((totHrsVar>=0?'+':'')+fmt(totHrsVar)+' hrs'):'—',totActualHrs>0?hrsVarCls:'',totActualHrs>0?(totHrsVar>=0?'Hours saved vs earned':'Hours lost vs earned'):'Needs actuals');
