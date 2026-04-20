@@ -932,6 +932,58 @@ let _editingEquipId=null;
 let _equipWeekPlannerDate=new Date(); // current week for weekly planner
 let _eqResViewWeekOffset=0; // resource view offset
 let _equipPopover=null;
+// Equipment Planner filter state. Reset to "All" on page load.
+// _equipFilterCats: empty Set = no filter (show all). Otherwise only rows whose category is in the set.
+let _equipFilterCats=new Set();
+let _equipFilterRentalsOnly=false;
+function _applyEquipFilter(list){
+  if(!_equipFilterCats.size&&!_equipFilterRentalsOnly)return list;
+  return list.filter(eq=>{
+    if(_equipFilterCats.size&&!_equipFilterCats.has(eq.category||'Other'))return false;
+    if(_equipFilterRentalsOnly&&!eq.isRental)return false;
+    return true;
+  });
+}
+function toggleEquipFilterCat(cat){
+  if(_equipFilterCats.has(cat))_equipFilterCats.delete(cat);
+  else _equipFilterCats.add(cat);
+  refreshEquipUI();
+}
+function toggleEquipFilterRentals(){
+  _equipFilterRentalsOnly=!_equipFilterRentalsOnly;
+  refreshEquipUI();
+}
+function clearEquipFilter(){
+  _equipFilterCats.clear();
+  _equipFilterRentalsOnly=false;
+  refreshEquipUI();
+}
+function _equipFilterChipsHtml(fullList){
+  // Derive categories present in the fleet, preserve roster category order
+  const cats=[];
+  const seen=new Set();
+  fullList.forEach(eq=>{
+    const c=eq.category||'Other';
+    if(!seen.has(c)){seen.add(c);cats.push(c)}
+  });
+  const hasRentals=fullList.some(eq=>eq.isRental);
+  const filtering=_equipFilterCats.size>0||_equipFilterRentalsOnly;
+  let h='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:8px 10px;background:var(--bg);border-radius:6px;border:1px solid var(--border);">';
+  h+='<span style="font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--green);font-weight:600;margin-right:4px;">FILTER:</span>';
+  const allOn=!filtering;
+  h+=`<span onclick="clearEquipFilter()" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;background:${allOn?'var(--green)':'var(--ash)'};color:${allOn?'var(--white)':'var(--midnight)'};border:1px solid ${allOn?'var(--green)':'var(--border)'};">All</span>`;
+  cats.forEach(cat=>{
+    const on=_equipFilterCats.has(cat);
+    const color=EQUIP_CAT_COLORS[cat]||'#999';
+    h+=`<span onclick="toggleEquipFilterCat('${esc(cat)}')" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;background:${on?color:'var(--ash)'};color:${on?'#fff':'var(--midnight)'};border:1px solid ${on?color:'var(--border)'};">${esc(cat)}</span>`;
+  });
+  if(hasRentals){
+    const on=_equipFilterRentalsOnly;
+    h+=`<span onclick="toggleEquipFilterRentals()" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;background:${on?'#4A90D9':'var(--ash)'};color:${on?'#fff':'var(--midnight)'};border:1px solid ${on?'#4A90D9':'var(--border)'};">Rentals only</span>`;
+  }
+  h+='</div>';
+  return h;
+}
 const _EQUIP_PALETTE=['#3E4D3E','#F26722','#4A90D9','#B9AB99','#7B68EE','#2E8B57','#CD853F','#708090','#16A085','#E67E22','#8B4513','#4682B4'];
 const _eqJobColors={};let _eqColorIdx=0;
 
@@ -1313,6 +1365,9 @@ function renderEquipmentPlanner(ctx){
     if(a.category!==b.category)return (a.category||'').localeCompare(b.category||'');
     return (a.code||'').localeCompare(b.code||'');
   });
+  // filteredList honors the category/rental chip filter. Chips themselves always render
+  // off the full equipList so users can re-enable a category they filtered out.
+  const filteredList=_applyEquipFilter(equipList);
 
   if(equipList.length===0){
     const prefix=isPlanning?_planningModeToggleHtml():'';
@@ -1345,6 +1400,9 @@ function renderEquipmentPlanner(ctx){
   h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:6px 14px;border-radius:4px;cursor:pointer;background:var(--bg);" onclick="_equipWeekPlannerDate=new Date();${rerender};">Today</button>`;
   h+=`</div>`;
 
+  // Category / rental filter chips (shared across Weekly Planner + 16-Week Outlook via filteredList)
+  h+=_equipFilterChipsHtml(equipList);
+
   h+=`<div style="overflow-x:auto;position:relative;"><table style="width:100%;border-collapse:collapse;" id="eqWeekPlannerTable">`;
   h+=`<tr><th style="background:var(--green);color:var(--white);padding:10px 12px;text-align:left;min-width:160px;">EQUIPMENT</th>`;
   const daysOfWeek=['MON','TUE','WED','THU','FRI'];
@@ -1357,7 +1415,7 @@ function renderEquipmentPlanner(ctx){
 
   // Rows grouped by category
   let lastCat='';
-  equipList.forEach(eq=>{
+  filteredList.forEach(eq=>{
     if(eq.category!==lastCat){
       lastCat=eq.category;
       const catColor=EQUIP_CAT_COLORS[eq.category]||'#999';
@@ -1407,6 +1465,9 @@ function renderEquipmentPlanner(ctx){
   h+=`<button class="btn-sm" style="border:1px solid var(--border);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="_eqResViewWeekOffset+=4;${rerender};">Later →</button>`;
   h+=`</div></div>`;
 
+  // Same filter chips for the outlook — toggling either row updates the shared filter state
+  h+=_equipFilterChipsHtml(equipList);
+
   h+=`<div style="overflow-x:auto;position:relative;"><table style="width:100%;border-collapse:collapse;" id="eqResViewTable">`;
   h+=`<tr><th style="background:var(--green);color:var(--white);padding:8px 12px;text-align:left;min-width:160px;">EQUIPMENT</th>`;
 
@@ -1422,7 +1483,7 @@ function renderEquipmentPlanner(ctx){
 
   // Equipment rows grouped by category
   lastCat='';
-  equipList.forEach(eq=>{
+  filteredList.forEach(eq=>{
     if(eq.category!==lastCat){
       lastCat=eq.category;
       const catColor=EQUIP_CAT_COLORS[eq.category]||'#999';
@@ -1460,17 +1521,17 @@ function renderEquipmentPlanner(ctx){
     h+=`</tr>`;
   });
 
-  // Available row
+  // Available row — reflects the currently filtered fleet so the count matches visible rows
   h+=`<tr style="background:var(--ash);font-weight:600;border-top:2px solid var(--border);">`;
   h+=`<td style="padding:6px 12px;font-size:12px;">Available</td>`;
   weeks.forEach(week=>{
     let assigned=0;
-    equipList.forEach(eq=>{
+    filteredList.forEach(eq=>{
       const midISO=new Date(week.getTime()+2*86400000).toISOString().split('T')[0];
       const cell=getEquipEffectiveCell(eq.id,midISO);
       if(cell)assigned++;
     });
-    const available=equipList.length-assigned;
+    const available=filteredList.length-assigned;
     h+=`<td style="padding:6px 8px;text-align:center;font-size:12px;color:${available>0?'var(--orange)':'var(--green)'};">${available}</td>`;
   });
   h+=`</tr></table></div></div>`;
