@@ -4719,11 +4719,16 @@ function renderMapping(){
   h+=sortHdrL('mapTbl','status','Status','renderMapping');
   h+='<th style="min-width:340px;">Mapping</th></tr>';
 
-  // Build set of ALL bid items already assigned to ANY task (as a bid-item entry) — used to
-  // hide them from OTHER tasks' bid-item dropdowns (one bid item can't live on two tasks as a 'bi').
-  const allMappedBIs=new Set();
+  // Reverse index: bid item → [taskId,...]. Multiple tasks CAN share the same bid
+  // item — they partition it by mapping different activities under it. We show
+  // a warning badge ("also on task N") so the user knows they're sharing.
+  const biTaskIdx={};
   Object.keys(job.taskMap).forEach(tid=>{
-    getTaskBidItems(job.taskMap,tid).forEach(b=>allMappedBIs.add(String(b)));
+    getTaskBidItems(job.taskMap,tid).forEach(b=>{
+      const key=String(b);
+      if(!biTaskIdx[key])biTaskIdx[key]=[];
+      biTaskIdx[key].push(String(tid));
+    });
   });
   // Reverse index: activity code → [taskId,...] from direct mappings. Lets us show
   // "already on task N" in other task dropdowns.
@@ -4772,17 +4777,22 @@ function renderMapping(){
 
     if(!isActMode){
       // ── BID-ITEM MODE ──
+      // Show ALL bid items. Multiple tasks can share one bid item (partitioned by
+      // activity-level mapping); a warning tag flags items already on other tasks.
       sortedGroups.forEach(g=>{
-        const availableItems=g.items.filter(b=>currentBIs.includes(String(b.biditem))||!allMappedBIs.has(String(b.biditem)));
-        if(availableItems.length===0)return;
-        ddHtml+=`<div class="map-dd-group" style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${esc(g.name)} <span style="font-weight:400;font-size:10px;">(${availableItems.length})</span></div>`;
-        availableItems.forEach(b=>{
-          const isChecked=currentBIs.includes(String(b.biditem));
-          if(isChecked)return; // shown as tag
-          const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
+        if(g.items.length===0)return;
+        ddHtml+=`<div class="map-dd-group" style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${esc(g.name)} <span style="font-weight:400;font-size:10px;">(${g.items.length})</span></div>`;
+        g.items.forEach(b=>{
+          const biKey=String(b.biditem);
+          const isChecked=currentBIs.includes(biKey);
+          if(isChecked)return; // shown as tag already
+          const sovItem=(job.sovItems||[]).find(si=>String(si.id)===biKey);
           const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
           const pcLabel=pcCount?` (${pcCount} phases)`:'';
-          ddHtml+=`<label class="map-dd-item" data-biditem="${esc(b.biditem)}" data-search="${esc(b.biditem)} ${esc((b.description||'').toLowerCase())}" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''"><input type="checkbox" onchange="updateTaskMapping(${t.id},'${esc(b.biditem)}',this.checked)" style="margin:0;"> <strong>${esc(b.biditem)}</strong> — ${esc(b.description||'')}${pcLabel}</label>`;
+          // "Also on task N" warning if this bid item is mapped to other tasks
+          const otherTasks=(biTaskIdx[biKey]||[]).filter(tid=>String(tid)!==String(t.id));
+          const otherLabel=otherTasks.length?` <span style="font-size:10px;color:var(--orange);" title="Also mapped to task ${otherTasks.join(', ')} — partition with activity-level mapping">⚠ on ${otherTasks.length} other task${otherTasks.length===1?'':'s'}</span>`:'';
+          ddHtml+=`<label class="map-dd-item" data-biditem="${esc(b.biditem)}" data-search="${esc(b.biditem)} ${esc((b.description||'').toLowerCase())}" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''"><input type="checkbox" onchange="updateTaskMapping(${t.id},'${esc(b.biditem)}',this.checked)" style="margin:0;"> <strong>${esc(b.biditem)}</strong> — ${esc(b.description||'')}${pcLabel}${otherLabel}</label>`;
         });
       });
     } else {
