@@ -2824,6 +2824,44 @@ function classifySpectrumCostType(ct){
   if(c==='S'||c==='SUB'||c==='SUBCONTRACT') return 'sub';
   return 'other';
 }
+// Build per-phase-code budget rate map for HJ cost derivation.
+// HCSS daily-detail sync reliably returns hours but cost columns are usually $0
+// (HCSS API doesn't expose cost endpoints to our account). When the cost is
+// missing, we back into it from budget rates: laborCost ≈ laborHours × (labor+burden)/manHours,
+// and equipment/material/sub scale proportionally to labor. Keyed by phaseCode
+// (falls back to activity.code if phaseCode missing).
+function buildActivityRateMap(job){
+  const map = {};
+  const acts = (job && job.activities) || [];
+  acts.forEach(a => {
+    const code = String(a.phaseCode||a.code||'').trim();
+    if(!code) return;
+    const mh    = Number(a.manHours)||0;
+    const labor = (Number(a.labor)||0)+(Number(a.burden)||0);
+    const equip = Number(a.totalEquipment)||0;
+    const mat   = Number(a.totalMaterial)||0;
+    const sub   = Number(a.subs)||0;
+    const direct= Number(a.directTotal)||(labor+equip+mat+sub);
+    if(!map[code]){
+      map[code] = {code, mh:0, labor:0, equip:0, mat:0, sub:0, direct:0};
+    }
+    map[code].mh     += mh;
+    map[code].labor  += labor;
+    map[code].equip  += equip;
+    map[code].mat    += mat;
+    map[code].sub    += sub;
+    map[code].direct += direct;
+  });
+  // Derive per-labor-hour rates (labor$ per MH, equip$ per MH, etc.)
+  Object.values(map).forEach(r => {
+    r.laborPerMH = r.mh>0 ? r.labor/r.mh : 0;
+    r.equipPerMH = r.mh>0 ? r.equip/r.mh : 0;
+    r.matPerMH   = r.mh>0 ? r.mat  /r.mh : 0;
+    r.subPerMH   = r.mh>0 ? r.sub  /r.mh : 0;
+    r.directPerMH= r.mh>0 ? r.direct/r.mh: 0;
+  });
+  return map;
+}
 // Ensure Spectrum phases are loaded onto the job object for synchronous use.
 // Called at job-switch and at the top of each render that needs blended cost.
 // Fire-and-forget semantics with a re-render callback when the fetch completes.
@@ -2852,6 +2890,7 @@ async function ensureSpectrumForJob(job, onLoaded){
 //                     cutoffDate, hasSpectrum, hasHJ } }
 function blendedActualsByCode(job, asOf){
   const cutoffISO = getBlendCutoffISO(asOf||new Date());
+  const rateMap = buildActivityRateMap(job);
   const map = {};
   const touch = (code) => {
     const k = String(code||'').trim();
@@ -2860,7 +2899,7 @@ function blendedActualsByCode(job, asOf){
       code:k,
       labor:0, equip:0, mat:0, sub:0, other:0, total:0, hours:0, qty:0,
       spectrum:{labor:0, equip:0, mat:0, sub:0, other:0, total:0},
-      hj:      {labor:0, equip:0, mat:0, sub:0, total:0, hours:0, qty:0},
+      hj:      {labor:0, equip:0, mat:0, sub:0, total:0, hours:0, qty:0, estimated:false},
       cutoffDate: cutoffISO,
       hasSpectrum:false, hasHJ:false,
     };
@@ -2878,6 +2917,8 @@ function blendedActualsByCode(job, asOf){
     b.hasSpectrum = true;
   });
   // HJ side — only rows on/after cutoffISO (i.e., the last ~30 days).
+  // Two-pass: first aggregate raw sync values + hours, then fill in any code
+  // whose cost columns came back $0 using activity budget rates × hours.
   const detail = (job && job.actualsDetail) || [];
   detail.forEach(r => {
     if(!r || !r.date) return;
@@ -2892,6 +2933,26 @@ function blendedActualsByCode(job, asOf){
     b.hj.hours += Number(r.actualLaborHours)||0;
     b.hj.qty   += Number(r.actualQty)       ||0;
     b.hasHJ = true;
+  });
+  // Rate-derived fallback for the HJ $0-cost bug.
+  // HCSS daily-detail API returns hours but not $ for Burns's account (all
+  // /cost* endpoints 404'd in scan 2026-04-16). If a code has hours but $0,
+  // derive cost from activity budget rates: laborCost = hours × (labor+burden)/mh,
+  // then scale equip/mat/sub by their budget ratios to labor. This is a proxy,
+  // not true actuals — the tooltip flags it as "est. from hours".
+  Object.values(map).forEach(b=>{
+    const zeroCost = b.hj.labor===0 && b.hj.equip===0 && b.hj.mat===0 && b.hj.sub===0;
+    if(b.hasHJ && zeroCost && b.hj.hours>0){
+      const rate = rateMap[b.code];
+      if(rate && rate.mh>0){
+        b.hj.labor = b.hj.hours * rate.laborPerMH;
+        b.hj.equip = b.hj.hours * rate.equipPerMH;
+        b.hj.mat   = b.hj.hours * rate.matPerMH;
+        b.hj.sub   = b.hj.hours * rate.subPerMH;
+        b.hj.total = b.hj.labor + b.hj.equip + b.hj.mat + b.hj.sub;
+        b.hj.estimated = true;
+      }
+    }
   });
   // Combine
   Object.values(map).forEach(b=>{
@@ -2913,7 +2974,8 @@ function formatBlendTooltip(b){
   const f = n => '$'+Math.round(Number(n)||0).toLocaleString();
   const cut = b.cutoffDate || getBlendCutoffISO(new Date());
   const cutFmt = (()=>{ const d=new Date(cut); return (d.getUTCMonth()+1)+'/'+d.getUTCDate()+'/'+String(d.getUTCFullYear()).slice(2); })();
-  return `Spectrum ${f(b.spectrum.total)} (through ${cutFmt}) + HJ ${f(b.hj.total)} (since ${cutFmt}) = ${f(b.total)}`;
+  const estTag = b.hj && b.hj.estimated ? ' (est. from hours × budget rate)' : '';
+  return `Spectrum ${f(b.spectrum.total)} (through ${cutFmt}) + HJ ${f(b.hj.total)}${estTag} (since ${cutFmt}) = ${f(b.total)}`;
 }
 
 // Save a single job to Supabase
@@ -3123,7 +3185,10 @@ async function hcssSyncNow(){
   const el=document.getElementById('hcssSyncStatus');
   if(el)el.textContent='Syncing…';
   try{
-    const j=await hcssCallFn({trigger:'manual'});
+    // Explicitly request 35-day lookback so the blended-actuals 30-day window
+    // has full HJ coverage even before the edge function is redeployed with
+    // the new default. Edge fn accepts lookbackDays in the request body.
+    const j=await hcssCallFn({trigger:'manual',lookbackDays:35});
     const eqMsg=typeof j.equipmentUpserted==='number'?` · ${j.equipmentUpserted} equipment`:'';
     log(`HCSS sync: ${j.status} · ${j.jobsSynced} jobs (${j.totalJobsFound||'?'} total) · ${j.rowsUpserted} rows${eqMsg} · ${Math.round(j.durationMs/1000)}s`);
     if(j.errors&&j.errors.length)log('HCSS sync had '+j.errors.length+' per-job errors (see sync_log)');
@@ -3160,7 +3225,7 @@ async function hcssBackfill(){
     await loadHcssEquipmentHistory();
     if(nEq>0)refreshEquipUI();
     else refreshEquipUI(); // history may have updated even if roster didn't
-    alert(`Backfill complete.\n${j.jobsSynced} jobs · ${j.rowsUpserted} rows${j.equipmentDiscovered?` · ${j.equipmentDiscovered} equipment`:''} · ${Math.round(j.durationMs/1000)}s\n\nFrom now on the daily 5am cron will only pull the last 14 days.`);
+    alert(`Backfill complete.\n${j.jobsSynced} jobs · ${j.rowsUpserted} rows${j.equipmentDiscovered?` · ${j.equipmentDiscovered} equipment`:''} · ${Math.round(j.durationMs/1000)}s\n\nFrom now on the daily 5am cron will pull the last 35 days (covers the 30-day blend window with a 5-day buffer).`);
   }catch(e){
     log('HCSS backfill failed: '+e.message);
     if(el)el.textContent='Backfill error: '+e.message;
@@ -6192,6 +6257,7 @@ function renderForecast(){
     else if(!specLoaded && hjInWindow) cause='Spectrum data not yet loaded for this job — the last 30 days of HJ are in <em>actualsDetail</em>, but Spectrum\'s ≥30d history is the bulk of costs. Check that the job number matches Spectrum.';
     else if(specLoaded && specCodes.size>0 && specMatch===0) cause='Spectrum loaded <strong>'+specCodes.size+'</strong> phases but <strong>none of the phase_codes match your activity phaseCodes</strong>. Fix the activity → phase code mapping in Set Up.';
     else if(specLoaded && specCodes.size===0) cause='Spectrum connection is live but returned <strong>0 phases</strong>. Confirm the Spectrum job number is correct.';
+    else if(hjInWindow>0 && !(job.activities||[]).length) cause='HJ has <strong>'+hjInWindow+'</strong> rows in the 30-day window but <strong>no HeavyBid activities imported</strong> — we can\'t derive cost from hours without budget rates. Import HeavyBid Activities in Set Up.';
     else cause='Blended actuals computed to $0. Open the console and inspect <code>blendedActualsByCode(Store.jobs["'+Store.activeJob+'"])</code> to drill in.';
     h+='<div class="card" style="margin-top:12px;border-left:4px solid var(--orange);background:#FFF8E6;"><div class="card-title" style="color:#92400e;">⚠ Blended AC is $0 — diagnostic</div>';
     h+='<div style="font-size:13px;line-height:1.55;">'+cause+'</div>';

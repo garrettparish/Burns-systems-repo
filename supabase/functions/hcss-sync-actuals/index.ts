@@ -47,7 +47,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const HCSS_API_BASE    = Deno.env.get('HCSS_API_BASE')    || 'https://api.hcssapps.com';
 const HCSS_TOKEN_URL   = Deno.env.get('HCSS_TOKEN_URL')   || `${HCSS_API_BASE}/identity/connect/token`;
 const HCSS_SCOPES      = Deno.env.get('HCSS_SCOPES')      || 'heavyjob:read e360:read e360:timecards:read setups:read setups:write timecards:read';
-const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '14', 10);
+// Default lookback is 35 days so the front-end 30-day blend window has
+// coverage on both ends — Spectrum covers ≥30d, HJ covers <30d, no gap.
+const LOOKBACK_DAYS    = parseInt(Deno.env.get('HCSS_LOOKBACK_DAYS') || '35', 10);
 
 // Endpoint paths — ALL under heavyjob product (confirmed via endpoint scan 2026-04-14).
 // businessUnits returned 200 from heavyjob; setups returned 403, e360 returned 404.
