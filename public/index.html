@@ -2798,6 +2798,124 @@ async function spectrumLoadJob(jobNumber) {
   return jobs.find(j => j.job_number === String(jobNumber)) || null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BLENDED ACTUAL COST — Spectrum (through today−30d) + HJ (since today−30d)
+// Garrett's rule: "Spectrum is gospel up to 30 days old; the last 30 days
+// haven't settled in Spectrum yet so use HJ daily detail for that window."
+// All consumers (EVA, Forecast, Production Tracker, Overview, JCS) pull their
+// 'actual cost' from here so the number matches everywhere.
+// ─────────────────────────────────────────────────────────────────────────────
+const BLEND_CUTOFF_DAYS = 30;
+// YYYY-MM-DD for (asOf − 30 days). Used as the HJ inclusion floor and the
+// Spectrum "through" label in tooltips.
+function getBlendCutoffISO(asOf){
+  const d = asOf instanceof Date ? new Date(asOf.getTime()) : new Date();
+  d.setDate(d.getDate() - BLEND_CUTOFF_DAYS);
+  return d.toISOString().slice(0,10);
+}
+// Map Spectrum cost_type codes to BELMOS buckets. Spectrum uses single-letter
+// codes (L/E/M/S plus B=burden). Burden rolls into labor per construction
+// accounting convention. Unknown types fall into 'other'.
+function classifySpectrumCostType(ct){
+  const c = String(ct||'').trim().toUpperCase();
+  if(c==='L'||c==='LAB'||c==='LABOR'||c==='B'||c==='BUR'||c==='BURDEN') return 'labor';
+  if(c==='E'||c==='EQ'||c==='EQUIP'||c==='EQUIPMENT') return 'equip';
+  if(c==='M'||c==='MAT'||c==='MATERIAL') return 'mat';
+  if(c==='S'||c==='SUB'||c==='SUBCONTRACT') return 'sub';
+  return 'other';
+}
+// Ensure Spectrum phases are loaded onto the job object for synchronous use.
+// Called at job-switch and at the top of each render that needs blended cost.
+// Fire-and-forget semantics with a re-render callback when the fetch completes.
+async function ensureSpectrumForJob(job, onLoaded){
+  if(!job) return;
+  const jobNum = String((job.meta&&(job.meta.jobNumber||job.meta.number))||'');
+  if(!jobNum) return;
+  // Already have fresh data on this job (≤5 min)
+  if(job._spectrumPhases && job._spectrumLoadedAt && (Date.now()-job._spectrumLoadedAt < 300000)) return;
+  if(job._spectrumLoading) return; // a fetch is already in flight
+  job._spectrumLoading = true;
+  try{
+    const phases = await spectrumLoadPhases(jobNum);
+    job._spectrumPhases = phases || [];
+    job._spectrumLoadedAt = Date.now();
+  }catch(e){ console.warn('ensureSpectrumForJob:',e); job._spectrumPhases = job._spectrumPhases||[]; }
+  finally{ job._spectrumLoading = false; }
+  if(typeof onLoaded==='function') onLoaded();
+}
+// Build per-phase-code blended map. SYNCHRONOUS — relies on job._spectrumPhases
+// being pre-populated (via ensureSpectrumForJob). If Spectrum data isn't
+// loaded yet, Spectrum side is treated as zero and we fall through to HJ-only
+// (which matches the legacy behavior — the UI self-heals on re-render).
+// Returns { [code]: { labor, equip, mat, sub, other, total, hours, qty,
+//                     spectrum:{labor,equip,mat,sub,total}, hj:{labor,equip,mat,sub,total},
+//                     cutoffDate, hasSpectrum, hasHJ } }
+function blendedActualsByCode(job, asOf){
+  const cutoffISO = getBlendCutoffISO(asOf||new Date());
+  const map = {};
+  const touch = (code) => {
+    const k = String(code||'').trim();
+    if(!k) return null;
+    if(!map[k]) map[k] = {
+      code:k,
+      labor:0, equip:0, mat:0, sub:0, other:0, total:0, hours:0, qty:0,
+      spectrum:{labor:0, equip:0, mat:0, sub:0, other:0, total:0},
+      hj:      {labor:0, equip:0, mat:0, sub:0, total:0, hours:0, qty:0},
+      cutoffDate: cutoffISO,
+      hasSpectrum:false, hasHJ:false,
+    };
+    return map[k];
+  };
+  // Spectrum side — trust JTD totals through cutoff (Spectrum lags ~30 days).
+  const specPhases = (job && job._spectrumPhases) || [];
+  specPhases.forEach(p => {
+    const b = touch(p.phase_code);
+    if(!b) return;
+    const cost = Number(p.jtd_actual_dollars)||0;
+    const bucket = classifySpectrumCostType(p.cost_type);
+    b.spectrum[bucket] += cost;
+    b.spectrum.total += cost;
+    b.hasSpectrum = true;
+  });
+  // HJ side — only rows on/after cutoffISO (i.e., the last ~30 days).
+  const detail = (job && job.actualsDetail) || [];
+  detail.forEach(r => {
+    if(!r || !r.date) return;
+    if(r.date < cutoffISO) return; // older rows are already in Spectrum
+    const b = touch(r.costCode);
+    if(!b) return;
+    b.hj.labor += Number(r.actualLaborCost)||0;
+    b.hj.equip += Number(r.actualEquipCost)||0;
+    b.hj.mat   += Number(r.actualMatCost)  ||0;
+    b.hj.sub   += Number(r.actualSubCost)  ||0;
+    b.hj.total += (Number(r.actualLaborCost)||0)+(Number(r.actualEquipCost)||0)+(Number(r.actualMatCost)||0)+(Number(r.actualSubCost)||0);
+    b.hj.hours += Number(r.actualLaborHours)||0;
+    b.hj.qty   += Number(r.actualQty)       ||0;
+    b.hasHJ = true;
+  });
+  // Combine
+  Object.values(map).forEach(b=>{
+    b.labor = b.spectrum.labor + b.hj.labor;
+    b.equip = b.spectrum.equip + b.hj.equip;
+    b.mat   = b.spectrum.mat   + b.hj.mat;
+    b.sub   = b.spectrum.sub   + b.hj.sub;
+    b.other = b.spectrum.other;
+    b.total = b.spectrum.total + b.hj.total;
+    b.hours = b.hj.hours;  // Spectrum phases often lack hours; HJ drives hours.
+    b.qty   = b.hj.qty;    // Same for qty installed within the 30-day window.
+  });
+  return map;
+}
+// Format Spectrum+HJ breakdown as a tooltip string — used anywhere a single
+// "Actual Cost" number is displayed.
+function formatBlendTooltip(b){
+  if(!b) return '';
+  const f = n => '$'+Math.round(Number(n)||0).toLocaleString();
+  const cut = b.cutoffDate || getBlendCutoffISO(new Date());
+  const cutFmt = (()=>{ const d=new Date(cut); return (d.getUTCMonth()+1)+'/'+d.getUTCDate()+'/'+String(d.getUTCFullYear()).slice(2); })();
+  return `Spectrum ${f(b.spectrum.total)} (through ${cutFmt}) + HJ ${f(b.hj.total)} (since ${cutFmt}) = ${f(b.total)}`;
+}
+
 // Save a single job to Supabase
 function serializeForStorage(obj){
   if(obj instanceof Date) return { __date: obj.toISOString() };
@@ -3797,9 +3915,12 @@ async function renderJobCost(){
     specByCode[key] = p;
   });
 
-  // Group HJ actuals by cost_code (aggregate across dates)
+  // Group HJ actuals by cost_code — ONLY rows on/after the blend cutoff (last ~30 days).
+  // Older HJ rows are already baked into Spectrum's JTD, so including them would double-count.
+  const jcsCutoffISO = getBlendCutoffISO(new Date());
   const hjByCode = {};
   hjActuals.forEach(r => {
+    if(!r || !r.date || r.date < jcsCutoffISO) return;
     const key = (r.cost_code||'');
     if(!hjByCode[key]) hjByCode[key] = { cost_code: r.cost_code, cost_code_desc: r.cost_code_desc, actual_labor_cost:0, actual_equip_cost:0, actual_mat_cost:0, actual_sub_cost:0, actual_labor_hours:0, actual_qty:0, latest_date: r.date };
     const agg = hjByCode[key];
@@ -3852,6 +3973,9 @@ async function renderJobCost(){
       description: p.description||'',
       jtd, projected, estimate, hrs, qty, estQty, estHrs,
       hjTotal, variance,
+      // Blended Actual (Garrett's rule): Spectrum JTD (gospel through cutoff) + HJ since cutoff
+      blendedActual: jtd + hjTotal,
+      blendTooltip: formatBlendTooltip({spectrum:{total:jtd},hj:{total:hjTotal},total:jtd+hjTotal,cutoffDate:jcsCutoffISO}),
       hasHJ: !!hjMatch,
       status: p.status_code||''
     });
@@ -3877,9 +4001,12 @@ async function renderJobCost(){
     ${specJob.job_description||''} &middot; PM: ${specJob.project_manager||'—'} &middot; Status: ${specJob.status_code||'—'}
   </span>` : '';
 
-  // Remaining budget
-  const remaining = specTotals.estimate - specTotals.jtd;
-  const pctComplete = specTotals.estimate > 0 ? ((specTotals.jtd / specTotals.estimate) * 100).toFixed(1) : '0.0';
+  // Remaining budget — uses blended actual so Spectrum + last 30 days of HJ are both accounted for.
+  const totalHJ30 = Object.values(hjByCode).reduce((s,h)=>s+h.actual_labor_cost+h.actual_equip_cost+h.actual_mat_cost+h.actual_sub_cost,0);
+  const totalBlendedActual = specTotals.jtd + totalHJ30;
+  const totalBlendTooltip = formatBlendTooltip({spectrum:{total:specTotals.jtd},hj:{total:totalHJ30},total:totalBlendedActual,cutoffDate:jcsCutoffISO});
+  const remaining = specTotals.estimate - totalBlendedActual;
+  const pctComplete = specTotals.estimate > 0 ? ((totalBlendedActual / specTotals.estimate) * 100).toFixed(1) : '0.0';
 
   let html = `
   <div class="card" style="padding:12px 20px;margin-bottom:8px;">
@@ -3899,9 +4026,9 @@ async function renderJobCost(){
 
   <div class="kpi-row">
     <div class="kpi"><div class="kpi-value">${fmtD(specTotals.estimate)}</div><div class="kpi-label">Current Estimate</div></div>
-    <div class="kpi${specTotals.jtd > specTotals.estimate ? ' danger' : ''}"><div class="kpi-value">${fmtD(specTotals.jtd)}</div><div class="kpi-label">JTD Actual (Spectrum)</div></div>
+    <div class="kpi${totalBlendedActual > specTotals.estimate ? ' danger' : ''}" title="${esc(totalBlendTooltip)}"><div class="kpi-value">${fmtD(totalBlendedActual)}</div><div class="kpi-label">Actual to Date (blended)</div></div>
     <div class="kpi"><div class="kpi-value">${fmtD(specTotals.projected)}</div><div class="kpi-label">Projected</div></div>
-    <div class="kpi${remaining < 0 ? ' danger' : ' good'}"><div class="kpi-value">${fmtD(remaining)}</div><div class="kpi-label">Remaining (Est - JTD)</div></div>
+    <div class="kpi${remaining < 0 ? ' danger' : ' good'}"><div class="kpi-value">${fmtD(remaining)}</div><div class="kpi-label">Remaining (Est − Actual)</div></div>
     <div class="kpi"><div class="kpi-value">${pctComplete}%</div><div class="kpi-label">Cost Complete</div></div>
   </div>`;
 
@@ -3919,6 +4046,7 @@ async function renderJobCost(){
     if(!phaseGroupsMap[k]) phaseGroupsMap[k] = {
       phaseCode:k, description:r.description||'',
       jtd:0, projected:0, estimate:0,
+      hj30:0,
       types:[],
     };
     const g = phaseGroupsMap[k];
@@ -3928,6 +4056,14 @@ async function renderJobCost(){
     if(!g.description && r.description) g.description = r.description;
     g.types.push(r);
   });
+  // Attach the 30-day HJ top-up once per phase_code (not per cost_type, to avoid double-count)
+  Object.values(phaseGroupsMap).forEach(g => {
+    const hj = hjByCode[g.phaseCode];
+    g.hj30 = hj ? (hj.actual_labor_cost + hj.actual_equip_cost + hj.actual_mat_cost + hj.actual_sub_cost) : 0;
+    g.blendedActual = g.jtd + g.hj30;
+    g.blendTooltip = formatBlendTooltip({spectrum:{total:g.jtd},hj:{total:g.hj30},total:g.blendedActual,cutoffDate:jcsCutoffISO});
+  });
+  // (totalBlendedActual + totalBlendTooltip already computed above for the KPI strip.)
   const phaseGroups = Object.values(phaseGroupsMap).sort((a,b) =>
     (a.phaseCode||'').localeCompare(b.phaseCode||'', undefined, {numeric:true})
   );
@@ -3957,7 +4093,7 @@ async function renderJobCost(){
       <thead><tr>
         <th style="width:24px;"></th>
         <th>Phase</th><th>Type</th><th>Description</th>
-        <th style="text-align:right;">JTD Actual</th>
+        <th style="text-align:right;" title="Blended: Spectrum JTD through 30 days ago + HJ daily detail since then">Actual (blended)</th>
         <th style="text-align:right;">Projected</th>
         <th style="text-align:right;">Estimate</th>
         <th style="text-align:right;" title="Estimate − JTD (budget left to spend)">Remaining</th>
@@ -3972,7 +4108,7 @@ async function renderJobCost(){
 
   if(_grouped){
     phaseGroups.forEach(g => {
-      const rem = g.estimate - g.jtd;
+      const rem = g.estimate - g.blendedActual;
       const fv = fcstVar(g.projected, g.estimate);
       const fvPct = g.estimate > 0 ? (fv / g.estimate * 100) : 0;
       const isOpen = (typeof _jcExpandedPhases !== 'undefined') && _jcExpandedPhases.has(g.phaseCode);
@@ -3983,7 +4119,7 @@ async function renderJobCost(){
         <td style="font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;">${g.phaseCode}</td>
         <td style="color:var(--text-light);font-weight:400;font-size:11px;">${typeCount} type${typeCount===1?'':'s'}</td>
         <td>${g.description||''}</td>
-        <td class="num">${fmtD(g.jtd)}</td>
+        <td class="num" title="${esc(g.blendTooltip)}">${fmtD(g.blendedActual)}</td>
         <td class="num">${fmtD(g.projected)}</td>
         <td class="num">${fmtD(g.estimate)}</td>
         <td class="num ${rem < 0 ? 'negative' : ''}">${fmtD(rem)}</td>
@@ -4031,14 +4167,14 @@ async function renderJobCost(){
     });
   }
 
-  // Totals row
-  const totalRem = specTotals.estimate - specTotals.jtd;
+  // Totals row — use blended actual so it matches per-phase blended totals above
+  const totalRem = specTotals.estimate - totalBlendedActual;
   const totalFv = fcstVar(specTotals.projected, specTotals.estimate);
   const totalFvPct = specTotals.estimate > 0 ? (totalFv / specTotals.estimate * 100) : 0;
   html += `<tr style="font-weight:700;background:var(--ash);">
     <td></td>
     <td colspan="3" style="font-family:Oswald,sans-serif;">TOTAL</td>
-    <td class="num">${fmtD(specTotals.jtd)}</td>
+    <td class="num" title="${esc(totalBlendTooltip)}">${fmtD(totalBlendedActual)}</td>
     <td class="num">${fmtD(specTotals.projected)}</td>
     <td class="num">${fmtD(specTotals.estimate)}</td>
     <td class="num ${totalRem < 0 ? 'negative' : ''}">${fmtD(totalRem)}</td>
@@ -4169,6 +4305,14 @@ function switchJob(){
   else{document.querySelectorAll('.sub-panel').forEach(p=>p.classList.remove('active'));document.getElementById('sub-'+_activeSubTab)?.classList.add('active')}
   renderActiveSubTab();
   updateNavBadges();
+  // Warm the blended-actuals cache for this job so EVA/Forecast/Production/
+  // JCS/Overview all see Spectrum data synchronously on their next render.
+  if(has){
+    const j=Store.jobs[Store.activeJob];
+    if(j && typeof ensureSpectrumForJob==='function'){
+      ensureSpectrumForJob(j, ()=>{ if(typeof renderActiveSubTab==='function') renderActiveSubTab(); });
+    }
+  }
 }
 function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
 function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog();renderHcssCostCodeBanner()}
@@ -5651,6 +5795,10 @@ function computeEVA(job,asOf){
   // Build BAC map from HeavyBid activities (authoritative source)
   const bacMap=evaBuildBACMap(job);
   const haveActivities=Object.keys(bacMap.bac).length>0;
+  // Blended actuals (Spectrum through today−30d + HJ since cutoff). If
+  // Spectrum hasn't loaded yet, Spectrum side is zero and we still have HJ.
+  const blendMap = (typeof blendedActualsByCode==='function') ? blendedActualsByCode(job, asOf) : {};
+  const haveBlend = Object.keys(blendMap).length>0;
   // Build a lookup of actuals by cost code for easy join.
   // DEFENSIVE: if multiple rows share the same code (e.g. legacy parser was
   // run on a daily-detail file), aggregate instead of overwriting — otherwise
@@ -5672,18 +5820,22 @@ function computeEVA(job,asOf){
       if(!ex.budgetQty&&a.budgetQty)ex.budgetQty=a.budgetQty;
     }
   });
-  // Phase universe = union of activities cost codes AND actuals cost codes
-  // (so phases that haven't started yet still count toward BAC, and orphan actuals
-  // codes still appear so the user can see them)
-  const allCodes=new Set([...Object.keys(bacMap.bac),...Object.keys(actualsByCode)]);
+  // Phase universe = activities ∪ legacy actuals ∪ blended actuals
+  const allCodes=new Set([...Object.keys(bacMap.bac),...Object.keys(actualsByCode),...Object.keys(blendMap)]);
   const phases=Array.from(allCodes).sort().map(code=>{
     const a=actualsByCode[code]||{code,description:bacMap.desc[code]||'',budgetCost:0,actualCost:0,budgetQty:bacMap.qty[code]||0,qtyInstalled:0};
+    const blend = blendMap[code] || null;
     // Authoritative BAC: HeavyBid activities total. Fallback: actuals[].budgetCost.
     const bac=haveActivities?(bacMap.bac[code]||a.budgetCost||0):(a.budgetCost||0);
-    const ac=a.actualCost||0;
+    // AC: blended total wins. Fallback to legacy actuals[].actualCost only
+    // when no blend row exists (pre-Spectrum-load or a code Spectrum doesn't know).
+    const ac = blend ? blend.total : (a.actualCost||0);
     // % complete: override > qty-based (using activities qty if actuals qty=0) > cost-based
     let pctSrc={...a};
     if(haveActivities&&!pctSrc.budgetQty&&bacMap.qty[code]){pctSrc.budgetQty=bacMap.qty[code]}
+    // If HJ window has qty installed but legacy actuals don't, bring it in so
+    // cost-code-only pct-complete can still estimate earned value.
+    if(blend && blend.qty && !pctSrc.qtyInstalled) pctSrc.qtyInstalled = blend.qty;
     const pct=evaPctComplete(pctSrc,job);
     const ev=bac*pct;
     const pv=bac*plannedPct;
@@ -5694,7 +5846,8 @@ function computeEVA(job,asOf){
     const eac_simple=ac+(bac-ev);
     const denom=cpi*spi;
     const eac_composite=denom>0&&isFinite(denom)?ac+(bac-ev)/denom:eac_simple;
-    return{code,description:a.description||bacMap.desc[code]||'',bac,ac,ev,pv,pct,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite};
+    return{code,description:a.description||bacMap.desc[code]||'',bac,ac,ev,pv,pct,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite,
+      blend: blend ? {spectrum:blend.spectrum.total, hj:blend.hj.total, total:blend.total, cutoffDate:blend.cutoffDate, tooltip:formatBlendTooltip(blend)} : null};
   });
   const sum=phases.reduce((s,p)=>({bac:s.bac+p.bac,ev:s.ev+p.ev,ac:s.ac+p.ac,pv:s.pv+p.pv}),{bac:0,ev:0,ac:0,pv:0});
   const cpi=sum.ac>0?sum.ev/sum.ac:0;
@@ -5705,7 +5858,16 @@ function computeEVA(job,asOf){
   const denom2=cpi*spi;
   const eac_composite=denom2>0?sum.ac+(sum.bac-sum.ev)/denom2:eac_simple;
   const tcpi=(sum.bac-sum.ac)>0?(sum.bac-sum.ev)/(sum.bac-sum.ac):0;
-  return{phases,bac:sum.bac,ev:sum.ev,ac:sum.ac,pv:sum.pv,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite,etc_cpi:eac_cpi-sum.ac,vac_cpi:sum.bac-eac_cpi,tcpi,plannedPct};
+  // Job-level blend roll-up (for tooltips on total-AC displays)
+  const blendTotals = Object.values(blendMap).reduce((s,b)=>({
+    spectrum:s.spectrum+b.spectrum.total,
+    hj:s.hj+b.hj.total,
+    total:s.total+b.total,
+  }),{spectrum:0,hj:0,total:0});
+  const cutoffISO = getBlendCutoffISO(asOf||new Date());
+  const blendTooltip = haveBlend ? formatBlendTooltip({spectrum:{total:blendTotals.spectrum},hj:{total:blendTotals.hj},total:blendTotals.total,cutoffDate:cutoffISO}) : '';
+  return{phases,bac:sum.bac,ev:sum.ev,ac:sum.ac,pv:sum.pv,cpi,spi,cv,sv,eac_cpi,eac_simple,eac_composite,etc_cpi:eac_cpi-sum.ac,vac_cpi:sum.bac-eac_cpi,tcpi,plannedPct,
+    blend:{spectrum:blendTotals.spectrum, hj:blendTotals.hj, total:blendTotals.total, cutoffDate:cutoffISO, tooltip:blendTooltip, active:haveBlend}};
 }
 // ISO Monday of the week containing date d, as YYYY-MM-DD (UTC-based to avoid TZ drift)
 function evaWeekKey(d){
@@ -5753,8 +5915,10 @@ function renderEVA(){
   if(!el)return;
   if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
   const job=Store.jobs[Store.activeJob];
-  if(!job.actuals||!job.actuals.length){
-    el.innerHTML='<div class="empty-state"><h2>No Actuals Yet</h2><p>Import HeavyJob actuals (summary or daily detail) from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> to enable Earned Value Analysis.</p></div>';
+  if(typeof ensureSpectrumForJob==='function') ensureSpectrumForJob(job, ()=>renderEVA());
+  const hasAnyActuals = (job.actuals&&job.actuals.length) || (job._spectrumPhases&&job._spectrumPhases.length) || (job.actualsDetail&&job.actualsDetail.length);
+  if(!hasAnyActuals){
+    el.innerHTML='<div class="empty-state"><h2>No Actuals Yet</h2><p>Import HeavyJob actuals (summary or daily detail) from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a>, or verify the Spectrum job number is correct.</p></div>';
     return;
   }
   // Auto-snapshot weekly
@@ -5960,7 +6124,11 @@ function renderForecast(){
   if(!el)return;
   if(!Store.activeJob||!Store.jobs[Store.activeJob]){el.innerHTML='<div class="empty-state"><h2>No Job Selected</h2></div>';return}
   const job=Store.jobs[Store.activeJob];
-  if(!job.actuals||!job.actuals.length){el.innerHTML='<div class="empty-state"><h2>No Actuals Yet</h2><p>Import HeavyJob actuals from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> to enable forecasting.</p></div>';return}
+  // Kick Spectrum load (blend helper reads from job._spectrumPhases); re-render on arrival.
+  if(typeof ensureSpectrumForJob==='function') ensureSpectrumForJob(job, ()=>renderForecast());
+  // Empty state: need EITHER legacy actuals OR Spectrum-loaded phases OR HJ daily detail.
+  const hasAnyActuals = (job.actuals&&job.actuals.length) || (job._spectrumPhases&&job._spectrumPhases.length) || (job.actualsDetail&&job.actualsDetail.length);
+  if(!hasAnyActuals){el.innerHTML='<div class="empty-state"><h2>No Actuals Yet</h2><p>Import HeavyJob actuals from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> or check that Spectrum has this job number.</p></div>';return}
   if(!job.forecast)job.forecast={};
   const src=job.forecast.source||'eac_cpi';
   const e=computeEVA(job,new Date());
@@ -5994,7 +6162,13 @@ function renderForecast(){
   const tile=(label,val,cls,sub)=>`<div style="padding:12px;background:var(--card);border:1px solid var(--sand);border-radius:8px;text-align:center;"><div style="font-family:Oswald;font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.6px;">${label}</div><div class="${cls||''}" style="font-family:Oswald;font-size:22px;font-weight:600;margin-top:4px;">${val}</div>${sub?'<div style="font-size:11px;color:var(--text-light);margin-top:2px;">'+sub+'</div>':''}</div>`;
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px;">';
   h+=tile('Total Budget (BAC)',fmtD(totBac));
-  h+=tile('Cost to Date',fmtD(totAc),'',totBac>0?fmtPct(totAc/totBac)+' of BAC':'');
+  // Cost-to-Date: hover reveals Spectrum + HJ split when blended data is live.
+  const blendSummary = e.blend && e.blend.active ? e.blend : null;
+  const acSub = blendSummary
+    ? `Spectrum ${fmtD(blendSummary.spectrum)} + HJ ${fmtD(blendSummary.hj)}`
+    : (totBac>0 ? fmtPct(totAc/totBac)+' of BAC' : '');
+  const acTitle = blendSummary ? blendSummary.tooltip : '';
+  h+=`<div style="padding:12px;background:var(--card);border:1px solid var(--sand);border-radius:8px;text-align:center;" title="${esc(acTitle)}"><div style="font-family:Oswald;font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.6px;">Cost to Date${blendSummary?' <span style="font-size:9px;">(blended)</span>':''}</div><div style="font-family:Oswald;font-size:22px;font-weight:600;margin-top:4px;">${fmtD(totAc)}</div><div style="font-size:11px;color:var(--text-light);margin-top:2px;">${acSub}</div></div>`;
   h+=tile('Projected Final',fmtD(totForecast),'',overrideCount?overrideCount+' line override'+(overrideCount===1?'':'s'):'all from EAC');
   h+=tile('Forecast Variance',fmtD(totVar),varCls,totVar>=0?'under budget':'over budget');
   if(contract>0){
@@ -6003,39 +6177,30 @@ function renderForecast(){
   }
   h+='</div></div>';
 
-  // Diagnostic banner: when totAc===0 but actuals exist, surface the root cause so we can see WHY.
-  if(totAc===0 && job.actuals && job.actuals.length){
-    const nActuals=job.actuals.length;
-    const sumCost=job.actuals.reduce((s,a)=>s+(Number(a.actualCost)||0),0);
-    const sumBELMOS=job.actuals.reduce((s,a)=>s+(Number(a.actualLabor)||0)+(Number(a.actualEquip)||0)+(Number(a.actualMat)||0)+(Number(a.actualSub)||0),0);
-    const sumHours=job.actuals.reduce((s,a)=>s+(Number(a.actualHours)||0),0);
-    const actualCodes=new Set(job.actuals.map(a=>String(a.code||'').trim()).filter(Boolean));
-    const activityPhaseCodes=new Set((job.activities||[]).map(a=>String(a.phaseCode||a.code||'').trim()).filter(Boolean));
-    const matching=[...actualCodes].filter(c=>activityPhaseCodes.has(c)).length;
-    const orphanActuals=[...actualCodes].filter(c=>!activityPhaseCodes.has(c));
-    const orphanActivities=[...activityPhaseCodes].filter(c=>!actualCodes.has(c));
+  // Diagnostic banner: only fires when BOTH blended sources are empty AND nothing is feeding AC.
+  // Tells Garrett which of: Spectrum not loaded / HJ missing / phase-code mismatch is the culprit.
+  const specLoaded = !!(job._spectrumPhases && job._spectrumPhases.length);
+  const hjInWindow = (job.actualsDetail||[]).filter(r=>r && r.date && r.date >= getBlendCutoffISO(new Date())).length;
+  if(totAc===0){
+    const activityPhaseCodes = new Set((job.activities||[]).map(a=>String(a.phaseCode||a.code||'').trim()).filter(Boolean));
+    const specCodes = new Set((job._spectrumPhases||[]).map(p=>String(p.phase_code||'').trim()).filter(Boolean));
+    const hjCodes  = new Set((job.actualsDetail||[]).map(r=>String(r.costCode||'').trim()).filter(Boolean));
+    const specMatch = [...specCodes].filter(c=>activityPhaseCodes.has(c)).length;
+    const cutoffISO = getBlendCutoffISO(new Date());
     let cause='';
-    if(sumCost===0 && sumBELMOS===0 && sumHours>0)cause='Actuals rows exist and have <strong>hours</strong>, but <strong>no cost</strong> columns — your HJ Daily Detail sync brought hours only. Import the <strong>HJ Cost Code Summary</strong> report to populate cost.';
-    else if(sumCost===0 && sumBELMOS>0)cause='BELMOS columns are populated but <strong>actualCost is 0</strong> — rollup didn\'t total them. Click <strong>Re-import HJ Summary</strong> or re-run the detail rollup.';
-    else if(sumCost===0 && sumBELMOS===0)cause='Actuals rows exist but every cost field is <strong>$0</strong>. Re-import the <strong>HJ Cost Code Summary</strong> report from Project Set Up.';
-    else if(sumCost>0 && matching===0)cause=`Actuals have <strong>${fmtD(sumCost)}</strong> in cost, but <strong>none of the codes match your activities' phase codes</strong>. Fix the phase code mapping in Set Up.`;
-    else cause='Something unusual — actuals have cost but computeEVA aggregated to $0. Open browser console and run <code>Store.jobs["'+Store.activeJob+'"].actuals</code> to inspect.';
-    h+='<div class="card" style="margin-top:12px;border-left:4px solid var(--orange);background:#FFF8E6;"><div class="card-title" style="color:#92400e;">⚠ Actuals present but not showing in Forecast</div>';
+    if(!specLoaded && !hjInWindow) cause='No Spectrum phases loaded and no HJ daily rows in the last 30 days. Verify the <strong>Spectrum job number</strong> on Edit Job, and run <strong>Sync HCSS Actuals</strong> from Set Up.';
+    else if(!specLoaded && hjInWindow) cause='Spectrum data not yet loaded for this job — the last 30 days of HJ are in <em>actualsDetail</em>, but Spectrum\'s ≥30d history is the bulk of costs. Check that the job number matches Spectrum.';
+    else if(specLoaded && specCodes.size>0 && specMatch===0) cause='Spectrum loaded <strong>'+specCodes.size+'</strong> phases but <strong>none of the phase_codes match your activity phaseCodes</strong>. Fix the activity → phase code mapping in Set Up.';
+    else if(specLoaded && specCodes.size===0) cause='Spectrum connection is live but returned <strong>0 phases</strong>. Confirm the Spectrum job number is correct.';
+    else cause='Blended actuals computed to $0. Open the console and inspect <code>blendedActualsByCode(Store.jobs["'+Store.activeJob+'"])</code> to drill in.';
+    h+='<div class="card" style="margin-top:12px;border-left:4px solid var(--orange);background:#FFF8E6;"><div class="card-title" style="color:#92400e;">⚠ Blended AC is $0 — diagnostic</div>';
     h+='<div style="font-size:13px;line-height:1.55;">'+cause+'</div>';
-    h+='<div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;font-size:12px;">';
-    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Actuals rows</div><div style="font-family:Oswald;font-size:16px;">${nActuals}</div></div>`;
-    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Σ actualCost</div><div style="font-family:Oswald;font-size:16px;">${fmtD(sumCost)}</div></div>`;
-    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Σ BELMOS</div><div style="font-family:Oswald;font-size:16px;">${fmtD(sumBELMOS)}</div></div>`;
-    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Σ hours</div><div style="font-family:Oswald;font-size:16px;">${fmt(sumHours)}</div></div>`;
-    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Codes match</div><div style="font-family:Oswald;font-size:16px;">${matching} / ${actualCodes.size}</div></div>`;
-    h+='</div>';
-    if(orphanActuals.length){
-      h+='<details style="margin-top:10px;font-size:12px;"><summary style="cursor:pointer;color:var(--text-light);">Cost codes in actuals with no matching activity phaseCode ('+orphanActuals.length+')</summary><div style="margin-top:6px;background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);font-family:monospace;font-size:11px;max-height:120px;overflow:auto;">'+orphanActuals.map(esc).join(', ')+'</div></details>';
-    }
-    if(orphanActivities.length){
-      h+='<details style="margin-top:6px;font-size:12px;"><summary style="cursor:pointer;color:var(--text-light);">Activity phaseCodes with no matching actuals row ('+orphanActivities.length+')</summary><div style="margin-top:6px;background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);font-family:monospace;font-size:11px;max-height:120px;overflow:auto;">'+orphanActivities.map(esc).join(', ')+'</div></details>';
-    }
-    h+='</div>';
+    h+='<div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;font-size:12px;">';
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Spectrum phases</div><div style="font-family:Oswald;font-size:16px;">${specCodes.size}</div></div>`;
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">HJ rows ≥ ${cutoffISO}</div><div style="font-family:Oswald;font-size:16px;">${hjInWindow}</div></div>`;
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Spectrum matches activities</div><div style="font-family:Oswald;font-size:16px;">${specMatch} / ${specCodes.size}</div></div>`;
+    h+=`<div style="background:white;padding:8px;border-radius:6px;border:1px solid var(--sand);"><div style="color:var(--text-light);font-size:10px;text-transform:uppercase;letter-spacing:.5px;">Activity phaseCodes</div><div style="font-family:Oswald;font-size:16px;">${activityPhaseCodes.size}</div></div>`;
+    h+='</div></div>';
   }
 
   // Per-phase table
@@ -6050,8 +6215,9 @@ function renderForecast(){
     const vCls=r.variance>=0?'good':'warn';
     const ovStyle=r.override?'background:#FFF3CD;border-color:var(--orange);':'';
     const ovVal=r.override?Math.round(job.forecast.overrides[r.code]):'';
+    const acTip = r.blend ? r.blend.tooltip : '';
     h+=`<tr><td style="padding:6px;">${esc(r.code)}</td><td style="padding:6px;">${esc(r.description||'')}</td>`;
-    h+=`<td class="num">${fmtD(r.bac)}</td><td class="num">${fmtD(r.ac)}</td><td class="num">${fmtD(eacShown)}</td>`;
+    h+=`<td class="num">${fmtD(r.bac)}</td><td class="num" title="${esc(acTip)}">${fmtD(r.ac)}</td><td class="num">${fmtD(eacShown)}</td>`;
     h+=`<td class="num"><strong>${fmtD(r.forecast)}</strong></td>`;
     h+=`<td class="num ${vCls}">${fmtD(r.variance)}</td>`;
     h+=`<td style="text-align:center;padding:6px;"><input type="number" step="100" placeholder="auto" value="${ovVal}" onchange="setForecastOverride('${r.code.replace(/'/g,"\\'")}',this.value)" style="width:100px;font-family:Oswald;font-size:12px;text-align:right;padding:3px 6px;border:1px solid var(--sand);border-radius:4px;${ovStyle}"></td>`;
@@ -9412,7 +9578,9 @@ function renderProduction(){
     return;
   }
   const job=Store.jobs[Store.activeJob];
-  if(!job.actuals||!job.actuals.length){
+  if(typeof ensureSpectrumForJob==='function') ensureSpectrumForJob(job, ()=>renderProduction());
+  const hasAnyActuals = (job.actuals&&job.actuals.length) || (job._spectrumPhases&&job._spectrumPhases.length) || (job.actualsDetail&&job.actualsDetail.length);
+  if(!hasAnyActuals){
     el.innerHTML='<div class="empty-state"><h2>No Production Data Yet</h2><p>Import HeavyJob actuals from <a href="#" onclick="switchSubTab(\'setup\');return false;" style="color:var(--orange);">Project Set Up</a> to see production tracking.</p></div>';
     return;
   }
@@ -9579,6 +9747,23 @@ function renderProductionTracker(job){
     delete row._bid;
   });
 
+  // 6) BLENDED COST OVERRIDE — Spectrum (through today−30d) + HJ (since cutoff)
+  // becomes the authoritative cost. Hours/qty stay as-is (HJ drives those).
+  // Ensures Production Tracker matches Forecast/EVA/JCS everywhere.
+  if(typeof blendedActualsByCode==='function' && job._spectrumPhases && job._spectrumPhases.length){
+    const blend = blendedActualsByCode(job, new Date());
+    Object.values(byPhase).forEach(row=>{
+      const b = blend[row.code];
+      if(!b) return;
+      row.actualLabor = b.labor;
+      row.actualEquip = b.equip;
+      row.actualMat   = b.mat;
+      row.actualSub   = b.sub;
+      row.actualCost  = b.total;
+      row._blend      = b; // stash for tooltip
+    });
+  }
+
   // Unique production days + remaining work days
   const uniqueDates=new Set();
   (job.actualsDetail||[]).forEach(d=>{if(d.date)uniqueDates.add(d.date);});
@@ -9619,6 +9804,7 @@ function renderProductionTracker(job){
       budgetSub:r.budgetSub,actualSub:r.actualSub,subVar,
       budgetCost,actualCost,costVar,costPctUsed,
       src:r.src,
+      blend:r._blend||null,
       hasAny:r.budgetQty>0||r.budgetHrs>0||r.actualQty>0||r.actualHrs>0||budgetCost>0||actualCost>0};
   }).filter(r=>r.hasAny);
 
@@ -9829,8 +10015,9 @@ function renderProductionTracker(job){
     h+=`<td class="num ${prodBadge}" style="${_hrsTint}">${r.productivityPct>0?r.productivityPct.toFixed(0)+'%':'—'}</td>`;
     h+=`<td class="num ${(r.actualHrs>0&&r.budgetRate>0)?hrsVarBadge:''}" style="${_hrsTint}">${(r.actualHrs>0&&r.budgetRate>0)?((r.hrsVar>=0?'+':'')+fmt(r.hrsVar)):'—'}</td>`;
     // Cost group
+    const _acTip = r.blend ? formatBlendTooltip(r.blend) : '';
     h+=`<td class="num" style="${_costTint}">${r.budgetCost>0?fmtD(r.budgetCost):'—'}</td>`;
-    h+=`<td class="num" style="${_costTint}">${r.actualCost>0?fmtD(r.actualCost):'—'}</td>`;
+    h+=`<td class="num" style="${_costTint}" title="${_acTip?esc(_acTip):''}">${r.actualCost>0?fmtD(r.actualCost):'—'}</td>`;
     h+=`<td class="num ${(r.budgetCost>0||r.actualCost>0)?costVarBadge:''}" style="${_costTint}">${(r.budgetCost>0||r.actualCost>0)?((r.costVar>=0?'+':'')+fmtD(r.costVar)):'—'}</td>`;
     h+=`</tr>`;
 
