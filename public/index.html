@@ -9860,6 +9860,11 @@ function renderProductionTracker(job){
   const prodRates=computeProductionRates(job);
 
   // Compute derived row fields
+  // Outlier guard: rows with qtyPct > 500% are almost always bad data
+  // (wrong UOM, unmapped code, or HJ qty entry error). We flag them and
+  // cap their earnedHrs contribution so they don't blow up KPI rollups.
+  const OUTLIER_QTY_PCT = 500;
+  const EARNED_HRS_CAP_MULT = 1.5;
   const rows=Object.values(byPhase).map(r=>{
     const remainingQty=Math.max(0,r.budgetQty-r.actualQty);
     const qtyPct=r.budgetQty>0?(r.actualQty/r.budgetQty*100):0;
@@ -9869,6 +9874,10 @@ function renderProductionTracker(job){
     const dailyGoal=(remWorkDays!=null&&remWorkDays>0&&remainingQty>0)?(remainingQty/remWorkDays):null;
     const earnedHrs=budgetRate>0?(r.actualQty/budgetRate):0;
     const hrsVar=earnedHrs-r.actualHrs; // + = hours saved, - = hours lost
+    // Outlier detection + capped earnedHrs for rollup
+    const isOutlier = qtyPct > OUTLIER_QTY_PCT;
+    const earnedHrsCap = r.budgetHrs>0 ? r.budgetHrs*EARNED_HRS_CAP_MULT : earnedHrs;
+    const earnedHrsForRollup = isOutlier ? Math.min(earnedHrs, earnedHrsCap) : earnedHrs;
     // Cost totals — if composite (budgetCost) is missing, sum BELMOS
     const budgetCost=r.budgetCost>0?r.budgetCost:(r.budgetLabor+r.budgetEquip+r.budgetMat+r.budgetSub);
     const actualCost=r.actualCost>0?r.actualCost:(r.actualLabor+r.actualEquip+r.actualMat+r.actualSub);
@@ -9883,6 +9892,7 @@ function renderProductionTracker(job){
       budgetQty:r.budgetQty,actualQty:r.actualQty,remainingQty,qtyPct,
       budgetHrs:r.budgetHrs,actualHrs:r.actualHrs,budgetRate,actualRate,productivityPct,
       dailyGoal,earnedHrs,hrsVar,
+      isOutlier,earnedHrsForRollup,
       budgetLabor:r.budgetLabor,actualLabor:r.actualLabor,laborVar,
       budgetEquip:r.budgetEquip,actualEquip:r.actualEquip,equipVar,
       budgetMat:r.budgetMat,actualMat:r.actualMat,matVar,
@@ -9898,12 +9908,16 @@ function renderProductionTracker(job){
   }
 
   // Rollups
+  // NOTE: totEarnedHrs uses earnedHrsForRollup (capped for outlier rows) so a
+  // single bad-data row can't dominate the totals. Individual rows still
+  // display their raw earnedHrs/hrsVar; the cap is only for rollup math.
   const totBudgetQty=rows.reduce((s,r)=>s+r.budgetQty,0);
   const totActualQty=rows.reduce((s,r)=>s+r.actualQty,0);
   const totBudgetHrs=rows.reduce((s,r)=>s+r.budgetHrs,0);
   const totActualHrs=rows.reduce((s,r)=>s+r.actualHrs,0);
-  const totEarnedHrs=rows.reduce((s,r)=>s+r.earnedHrs,0);
+  const totEarnedHrs=rows.reduce((s,r)=>s+r.earnedHrsForRollup,0);
   const totHrsVar=totEarnedHrs-totActualHrs;
+  const outlierCount=rows.filter(r=>r.isOutlier).length;
   const totBudgetLabor=rows.reduce((s,r)=>s+r.budgetLabor,0);
   const totActualLabor=rows.reduce((s,r)=>s+r.actualLabor,0);
   const totBudgetEquip=rows.reduce((s,r)=>s+r.budgetEquip,0);
@@ -9920,11 +9934,18 @@ function renderProductionTracker(job){
   // missing) weighted by budget dollars. Works across mixed units (hrs, CY,
   // tons, LF) because dollars are the common denominator. A phase with a big
   // budget moves the needle proportionally more than a small-budget phase.
+  // Outlier rows (qtyPct > 500%) fall back to cost-ratio so they don't skew.
   let overallPct=0;{
     let wSum=0,wDen=0;
     rows.forEach(r=>{
       if(r.budgetCost>0){
-        const pct = r.qtyPct>0 ? r.qtyPct : (r.actualCost/r.budgetCost*100);
+        let pct;
+        if(r.isOutlier){
+          // Bad qty data — use cost ratio (capped at 100% for rollup)
+          pct = Math.min(100, r.actualCost/r.budgetCost*100);
+        } else {
+          pct = r.qtyPct>0 ? r.qtyPct : (r.actualCost/r.budgetCost*100);
+        }
         wSum += pct * r.budgetCost;
         wDen += r.budgetCost;
       }
@@ -9960,6 +9981,14 @@ function renderProductionTracker(job){
   h+=tile('Production Days',String(prodDays),'',prodDays>0?'unique work dates':'');
   h+=tile('Top Avg/Day',topProd&&topProd.ratePerDay?fmt(topProd.ratePerDay):'—','',topProd?topProd.code:'');
   h+='</div>';
+
+  // Outlier banner — surface data-quality issues driving bad rollups
+  if(outlierCount>0){
+    h+=`<div style="background:rgba(220,38,38,0.08);border-left:3px solid #dc2626;padding:8px 12px;margin-bottom:12px;border-radius:4px;font-size:12px;">`+
+       `<strong style="color:#dc2626;">${outlierCount} row${outlierCount>1?'s':''} flagged as bad qty data</strong> `+
+       `<span style="color:var(--text-light);">— actual qty is more than 5× budget qty (likely wrong UOM or HJ entry error). These rows are excluded from rollup math but still shown in the table with a <span style="font-size:9px;background:#dc2626;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;">BAD QTY</span> badge. Fix in HCSS or map to the correct phase code.</span>`+
+       `</div>`;
+  }
 
   // Apply filter
   const filterMode=getProdFilterMode();
@@ -10085,14 +10114,21 @@ function renderProductionTracker(job){
     // Off-budget = crew coded hours/qty to a phase that isn't in the estimate at all
     const flagOffBudget=r.budgetHrs===0&&r.budgetQty===0&&r.budgetCost===0&&(r.actualHrs>0||r.actualQty>0||r.actualCost>0);
     let rowStyle='';
-    if(flagOffBudget){
+    if(r.isOutlier){
+      // Data quality flag: actualQty >> budgetQty — excluded from rollup math
+      rowStyle='background:rgba(220,38,38,0.06);border-left:3px solid #dc2626;';
+    }else if(flagOffBudget){
       rowStyle='background:rgba(29,78,216,0.06);border-left:3px solid #1d4ed8;';
     }else if(flagBehind||flagOverHrs||flagOverCost){
       rowStyle='background:rgba(242,103,34,0.06);border-left:3px solid var(--orange);';
     }
 
-    h+=`<tr style="cursor:${hasDetail?'pointer':'default'};${rowStyle}" ${hasDetail?`onclick="var el=document.getElementById('${rowId}');el.style.display=el.style.display==='none'?'':'none';var a=this.querySelector('.pt-arrow');if(a)a.textContent=el.style.display==='none'?'▸':'▾';"`:''} ${flagOffBudget?'title="Off-budget: no HeavyBid estimate for this phase code — may need activity→phase mapping in Setup"':''}>`;
-    h+=`<td>${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(r.code)}${flagOffBudget?' <span style="font-size:9px;background:#1d4ed8;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">OFF-BUDGET</span>':''}</td>`;
+    const rowTitle = r.isOutlier
+      ? `Data quality flag: actual qty (${fmt(r.actualQty)} ${r.unit||''}) is ${r.qtyPct.toFixed(0)}% of budget (${fmt(r.budgetQty)} ${r.unit||''}). Likely bad UOM or HJ entry error — excluded from rollup math.`
+      : (flagOffBudget ? 'Off-budget: no HeavyBid estimate for this phase code — may need activity→phase mapping in Setup' : '');
+    h+=`<tr style="cursor:${hasDetail?'pointer':'default'};${rowStyle}" ${hasDetail?`onclick="var el=document.getElementById('${rowId}');el.style.display=el.style.display==='none'?'':'none';var a=this.querySelector('.pt-arrow');if(a)a.textContent=el.style.display==='none'?'▸':'▾';"`:''} ${rowTitle?`title="${esc(rowTitle)}"`:''}>`;
+    const outlierBadge = r.isOutlier ? ' <span style="font-size:9px;background:#dc2626;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">BAD QTY</span>' : '';
+    h+=`<td>${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(r.code)}${flagOffBudget?' <span style="font-size:9px;background:#1d4ed8;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">OFF-BUDGET</span>':''}${outlierBadge}</td>`;
     h+=`<td>${esc(r.description)}</td>`;
     h+=`<td>${esc(r.unit)}</td>`;
     // Production group
