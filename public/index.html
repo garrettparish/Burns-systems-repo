@@ -312,6 +312,10 @@ tr:hover{background:#FAF8F5}
 <div class="topbar">
   <div class="topbar-brand">Burns Dirt <span>Project Controls</span></div>
   <div style="display:flex;align-items:center;gap:12px;">
+    <div id="topbarSyncPill" onclick="switchToSubTab('setup')" title="Open Set Up to see full sync details" style="display:none;align-items:center;gap:6px;padding:4px 10px;border-radius:12px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);font-family:'Source Serif 4',serif;font-size:11px;color:var(--sand);cursor:pointer;transition:background .2s;" onmouseover="this.style.background='rgba(255,255,255,.15)'" onmouseout="this.style.background='rgba(255,255,255,.08)'">
+      <span id="topbarSyncDot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#777;"></span>
+      <span id="topbarSyncLabel">Sync…</span>
+    </div>
     <div class="topbar-phase">Phase 1A</div>
     <button onclick="switchToSubTab('setup')" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:18px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Project Set Up" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#9881;</button>
     <button onclick="showAdminPinModal()" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:15px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Admin Password" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#x1f511;</button>
@@ -2863,20 +2867,89 @@ async function loadJobs(){
 // If you later want to lock the function down, swap this for a signed user JWT.
 const HCSS_FN_URL = SUPABASE_URL.replace('.supabase.co','.functions.supabase.co') + '/hcss-sync-actuals';
 
+// Format an ISO timestamp as a short "2h ago" / "3d ago" relative string.
+function _syncRelTime(iso){
+  if(!iso) return '—';
+  const now = Date.now();
+  const t = new Date(iso).getTime();
+  const diffMs = now - t;
+  if(diffMs < 0) return 'just now';
+  const mins = Math.floor(diffMs / 60000);
+  if(mins < 1) return 'just now';
+  if(mins < 60) return mins + 'm ago';
+  const hrs = Math.floor(mins / 60);
+  if(hrs < 48) return hrs + 'h ago';
+  const days = Math.floor(hrs / 24);
+  return days + 'd ago';
+}
+
+function _updateTopbarSyncPill(data){
+  const pill = document.getElementById('topbarSyncPill');
+  const dot  = document.getElementById('topbarSyncDot');
+  const lbl  = document.getElementById('topbarSyncLabel');
+  if(!pill || !dot || !lbl) return;
+  if(!data || !data.last_run_at){
+    pill.style.display = 'inline-flex';
+    dot.style.background = '#888';
+    lbl.textContent = 'HCSS · not configured';
+    pill.title = 'HCSS sync has never run. Open Set Up to configure.';
+    return;
+  }
+  const ageH = (Date.now() - new Date(data.last_run_at).getTime()) / 3600000;
+  const stale = ageH > 30; // 5am daily cron should never be older than ~25h
+  const failed = data.last_run_status !== 'success' && data.last_run_status !== 'partial';
+  let color = '#4ade80'; // green
+  if(data.last_run_status === 'partial') color = '#facc15'; // yellow
+  if(failed) color = '#f87171'; // red
+  else if(stale) color = '#facc15'; // stale = yellow
+  const rel = _syncRelTime(data.last_run_at);
+  const when = new Date(data.last_run_at).toLocaleString();
+  pill.style.display = 'inline-flex';
+  dot.style.background = color;
+  lbl.textContent = `HCSS · ${rel}`;
+  pill.title = `Last sync: ${when}\nStatus: ${data.last_run_status || 'unknown'}\n${data.total_rows||0} rows · ${data.jobs_covered||0} jobs${data.last_error?'\nError: '+String(data.last_error).slice(0,160):''}\n\nClick to open Set Up.`;
+}
+
 async function hcssLoadSyncStatus(){
   const el=document.getElementById('hcssSyncStatus');
-  if(!el)return;
   try{
     const {data,error}=await sb.from('sync_status').select('*').single();
     if(error)throw error;
-    if(!data||!data.last_run_at){el.textContent='Not configured yet — run Discover BU, then Sync Now.';return}
+    if(!data||!data.last_run_at){
+      if(el) el.textContent='Not configured yet — run Discover BU, then Sync Now.';
+      _updateTopbarSyncPill(null);
+      return;
+    }
     const when=new Date(data.last_run_at).toLocaleString();
+    const rel=_syncRelTime(data.last_run_at);
     const st=data.last_run_status==='success'?'✓':data.last_run_status==='partial'?'⚠':'✗';
-    el.innerHTML=`${st} Last sync: <strong>${when}</strong> · ${data.total_rows||0} rows across ${data.jobs_covered||0} job(s)`+
-      (data.last_error?` · <span style="color:var(--red);">${esc(String(data.last_error).slice(0,120))}</span>`:'');
+    const ageH=(Date.now()-new Date(data.last_run_at).getTime())/3600000;
+    const staleNote=ageH>30?' <span style="color:var(--red);font-weight:600;">(stale — daily cron may not have run)</span>':'';
+    if(el){
+      el.innerHTML=`${st} Last sync: <strong>${when}</strong> <span style="color:var(--text-light);">(${rel})</span> · ${data.total_rows||0} rows across ${data.jobs_covered||0} job(s)${staleNote}`+
+        (data.last_error?` · <span style="color:var(--red);">${esc(String(data.last_error).slice(0,120))}</span>`:'');
+    }
+    _updateTopbarSyncPill(data);
   }catch(e){
-    el.textContent='Sync table not found — run the SQL migration first.';
+    if(el) el.textContent='Sync table not found — run the SQL migration first.';
+    _updateTopbarSyncPill(null);
   }
+}
+
+// Auto-refresh: the daily 5am cron doesn't trigger any client event, so we
+// poll every 60s and on window focus to keep the indicators accurate without
+// requiring a page reload.
+let _syncStatusTimer = null;
+function startSyncStatusAutoRefresh(){
+  if(_syncStatusTimer) return;
+  _syncStatusTimer = setInterval(() => {
+    // Only poll when tab is visible — saves requests when laptop is asleep / tab backgrounded
+    if(document.visibilityState === 'visible') hcssLoadSyncStatus();
+  }, 60000);
+  window.addEventListener('focus', hcssLoadSyncStatus);
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'visible') hcssLoadSyncStatus();
+  });
 }
 async function hcssCallFn(body){
   const res=await fetch(HCSS_FN_URL,{
@@ -3633,8 +3706,9 @@ loadHcssEquipmentHistory().then(n=>{
 updateUserLabel(localStorage.getItem('bdc_user_name')||'');
 // Initialize nav to default: Schedule & Financials > Overview
 navSwitch('financials');
-// Poll HCSS sync status once on startup (non-blocking)
-setTimeout(()=>{try{hcssLoadSyncStatus()}catch(e){}},500);
+// Poll HCSS sync status once on startup, then keep it fresh on a 60s loop so
+// the topbar pill + Set Up banner reflect the daily 5am cron without a reload.
+setTimeout(()=>{try{hcssLoadSyncStatus();startSyncStatusAutoRefresh();}catch(e){}},500);
 
 // ═══════════════════════════════════════════
 // JOB MANAGEMENT
