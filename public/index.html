@@ -1095,15 +1095,38 @@ function getEquipLastKnownLocation(equipId){
   return null;
 }
 
-// Get the effective cell for an equipment piece on a date
-// Priority: 1) Confirmed plan → 2) null (no auto-suggestion yet)
+// Most recent historical job for a machine (used to suggest today/future cells)
+function getEquipLastKnownFromHistory(equipId){
+  if(!_equipHistIndex)_buildEquipHistIndex();
+  const prefix=equipId+'|';
+  let bestDate='',bestJob=null;
+  Object.keys(_equipHistIndex).forEach(k=>{
+    if(!k.startsWith(prefix))return;
+    const d=k.split('|')[1];
+    if(d>bestDate){bestDate=d;bestJob=_equipHistIndex[k].jobCode}
+  });
+  if(bestJob)return {jobCode:bestJob,date:bestDate};
+  // Fall back to roster's hcssLastSeenJob field
+  const eq=Store.equipment[equipId];
+  if(eq&&eq.hcssLastSeenJob)return {jobCode:eq.hcssLastSeenJob,date:eq.hcssLastSeenDate||''};
+  return null;
+}
+
+// Get the effective cell for an equipment piece on a date.
+// Priority: 1) Confirmed plan → 2) HCSS history for this date → 3) Suggestion
+// from most-recent history for today/future (mirrors crew planner behavior).
 function getEquipEffectiveCell(equipId,dateISO){
-  // 1. User-entered plan always wins (lets user override historical data).
   const planned=getEquipPlanCell(equipId,dateISO);
   if(planned&&planned.confirmed)return {jobCode:planned.jobCode,note:planned.note||'',source:'plan'};
-  // 2. Fall back to HCSS timecard history (mirrors how crew planner uses crewHistory).
   const hist=getEquipHistCell(equipId,dateISO);
   if(hist)return {jobCode:hist.jobCode,note:'',source:'history'};
+  // Today + future with no plan: suggest most-recent historical job so the
+  // user sees where each machine was running rather than a blank grid.
+  const today=new Date().toISOString().split('T')[0];
+  if(dateISO>=today){
+    const sugg=getEquipLastKnownFromHistory(equipId);
+    if(sugg)return {jobCode:sugg.jobCode,note:'',source:'suggested'};
+  }
   return null;
 }
 
