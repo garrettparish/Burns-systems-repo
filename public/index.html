@@ -360,6 +360,44 @@ tr:hover{background:#FAF8F5}
   <button class="sub-tab" data-sub="settings" onclick="navSub('production','settings')">Settings</button>
 </div>
 
+<!-- Tab Help Bar — Quick Guide + SOP, visible on every tab. Auto-updates with active tab. -->
+<div id="tabHelpBar" style="max-width:1400px;margin:12px auto 0;padding:0 24px;display:none;">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;box-shadow:0 1px 2px rgba(0,0,0,.03);">
+    <div style="display:flex;align-items:center;gap:8px;font-family:Oswald,sans-serif;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light);">
+      <span style="color:var(--orange);">📘</span>
+      <span id="tabHelpBarLabel">—</span>
+    </div>
+    <div style="display:flex;gap:6px;">
+      <button id="tabHelpQuickBtn" class="edit-btn" style="padding:4px 12px;font-size:11px;" onclick="toggleTabQuickGuide()">? Quick Guide</button>
+      <button id="tabHelpSopBtn" class="edit-btn" style="padding:4px 12px;font-size:11px;" onclick="openSopModal()">SOP</button>
+    </div>
+  </div>
+  <div id="tabQuickGuidePanel" style="display:none;margin-top:8px;"></div>
+</div>
+
+<!-- SOP Modal — full SOP content with inline edit. -->
+<div id="sopModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:500;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 20px;" onclick="if(event.target===this)closeSopModal()">
+  <div style="background:var(--card);border-radius:10px;max-width:900px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.3);">
+    <div style="background:var(--green);color:var(--white);padding:14px 22px;display:flex;justify-content:space-between;align-items:center;border-radius:10px 10px 0 0;">
+      <div>
+        <div style="font-family:Oswald,sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;opacity:.7;">Standard Operating Procedure</div>
+        <div id="sopModalTitle" style="font-family:Oswald,sans-serif;font-size:20px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">—</div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button id="sopEditBtn" class="edit-btn" style="padding:5px 14px;font-size:11px;background:var(--orange);color:#fff;border:none;" onclick="editSopContent()">Edit</button>
+        <button id="sopSaveBtn" class="edit-btn" style="padding:5px 14px;font-size:11px;background:var(--orange);color:#fff;border:none;display:none;" onclick="saveSopContent()">Save</button>
+        <button id="sopCancelBtn" class="edit-btn" style="padding:5px 14px;font-size:11px;display:none;" onclick="cancelSopEdit()">Cancel</button>
+        <button class="edit-btn" style="padding:5px 14px;font-size:11px;" onclick="closeSopModal()">Close</button>
+      </div>
+    </div>
+    <div id="sopModalBody" style="padding:24px;max-height:70vh;overflow-y:auto;font-size:14px;line-height:1.6;"></div>
+    <div id="sopModalFooter" style="padding:10px 22px;border-top:1px solid var(--border);font-size:11px;color:var(--text-light);display:flex;justify-content:space-between;font-family:Oswald,sans-serif;letter-spacing:.5px;">
+      <span id="sopModalMeta">—</span>
+      <span>Markdown formatting supported: # ## ### **bold** *italic* - list 1. numbered `code` [link](url)</span>
+    </div>
+  </div>
+</div>
+
 <!-- GLOBAL VIEW -->
 <div id="panel-global" class="panel"><div id="globalContent"></div></div>
 
@@ -2669,6 +2707,8 @@ function bootApp(){
   // it explicitly here. loadJobs is safe to call multiple times — later
   // calls just overwrite Store.jobs with the fresh server state.
   if(typeof loadJobs === 'function') loadJobs();
+  if(typeof loadTabGuides === 'function') loadTabGuides();
+  if(typeof updateTabHelpBar === 'function') updateTabHelpBar();
 }
 
 async function initAuth(){
@@ -3156,6 +3196,317 @@ async function hcssLoadIntoActiveJob(){
   log(`HCSS → ${job.meta.name}: ${detail.length} synced rows merged into actuals.`);
 }
 
+// ═══════════════════════════════════════════
+// TAB GUIDES — Quick Guide (inline) + SOP (modal), editable, persisted to Supabase
+// ═══════════════════════════════════════════
+// Tab metadata. Keyed by sub-tab id (matches _activeSubTab values + the two
+// top-level tabs that have no sub-nav: 'global' and 'setup').
+const TAB_META = {
+  global:      { name:'Global View',            group:'global' },
+  overview:    { name:'Overview',               group:'financials' },
+  biditems:    { name:'Pay Items',              group:'financials' },
+  eva:         { name:'Earned Value Analysis',  group:'financials' },
+  forecast:    { name:'Forecast',               group:'financials' },
+  payapps:     { name:'Pay Apps',               group:'financials' },
+  cashflow:    { name:'Cash Flow',              group:'financials' },
+  jobcost:     { name:'Job Cost',               group:'financials' },
+  schedule:    { name:'Schedule',               group:'financials' },
+  planning:    { name:'Planning',               group:'production' },
+  jcs:         { name:'Job Cost Schedule',      group:'production' },
+  production:  { name:'Production Tracker',     group:'production' },
+  settings:    { name:'Rosters & Settings',     group:'production' },
+  setup:       { name:'Project Set Up',         group:'setup' },
+};
+
+// Placeholder content — Garrett will edit these in-app. Stored in Supabase
+// once loaded; these are only used as the initial seed when a tab has no
+// saved guide yet.
+const TAB_GUIDE_SEEDS = {
+  global: {
+    quick: `**Global View** is your company-wide portfolio snapshot.\n\n- See every active job in one place\n- Filter by trade (Earthwork, Paving, Concrete, etc.)\n- Scan crew utilization, margin health, and upcoming milestones across all projects\n\nUse it when you want to zoom out from a single job and see what's happening org-wide.`,
+    sop: `## Global View — SOP\n\n### Purpose\nQuick portfolio overview. Not a place to edit data — just to monitor.\n\n### How to use\n1. Click **Global View** in the top nav.\n2. Use the trade filter pills to narrow the list.\n3. Click any job card to jump into that job's dashboard.\n\n### Data sources\n- Jobs list: Supabase \`jobs\` table\n- Margin & cost rollups: per-job cached totals\n\n### Common tasks\n- Weekly: scan the list, look for red margins or crews assigned to zero jobs.\n- Monthly: verify job statuses are current (active / completed / on-hold).`,
+  },
+  overview: {
+    quick: `**Overview** is the home screen for a single job.\n\n- Top-line KPIs: contract, JTD cost, projected margin\n- Schedule progress and upcoming milestones\n- Quick links into EVA, Forecast, Pay Apps`,
+    sop: `## Overview — SOP\n\n### Purpose\nSingle-page health check for the active job.\n\n### How to use\n1. Select the job from the **Active Job** dropdown.\n2. Review KPIs at top (contract, JTD, margin, schedule %).\n3. Click into any sub-tab for detail.\n\n### Data sources\n- Contract / SOV: HeavyBid bid items import\n- JTD cost: Spectrum (month-end) + HeavyJob (month-to-date overlay)\n- Schedule progress: Smartsheet import\n\n### Weekly workflow\n- Refresh Spectrum if >7 days stale.\n- Re-import HeavyJob daily detail.\n- Check for red flags in the KPI strip.`,
+  },
+  biditems: {
+    quick: `**Pay Items** lists every SOV line from the HeavyBid Bid Items export.\n\n- Scheduled value, overhead, profit, margin per line\n- Search + filter\n- Feeds Pay Apps and Cash Flow`,
+    sop: `## Pay Items — SOP\n\n### Purpose\nThe master list of billable line items (the SOV).\n\n### How to use\n1. Import HeavyBid Bid Items from **Set Up**.\n2. Use the search box to find a specific line.\n3. Click a line to see its phase/activity breakdown.\n\n### Data sources\n- HeavyBid **Bid Items** .xlsx export\n\n### Notes\n- Do NOT edit pay items here — re-import from HeavyBid instead, otherwise numbers drift.`,
+  },
+  eva: {
+    quick: `**EVA (Earned Value Analysis)** compares planned vs. earned vs. actual in dollars.\n\n- KPIs: CPI, SPI, EAC, ETC, VAC, TCPI\n- S-curve trend from weekly snapshots\n- Projects where the job will land at completion`,
+    sop: `## EVA — SOP\n\n### Purpose\nThe textbook EVA view — are we on budget and on schedule, and where will we land?\n\n### How to use\n1. Import HeavyBid activities + HeavyJob actuals via **Set Up**.\n2. EVA auto-calculates BAC/PV/EV/AC and derived KPIs.\n3. Pick an EAC method from the dropdown (**BAC ÷ CPI** is recommended for ongoing production work).\n4. Override per-line % complete if field disagrees with the quantity-based calc.\n\n### Snapshots\n- Auto-captures once a week (first time the tab is opened that week).\n- Drives the S-curve trend chart.\n\n### Rules of thumb\n- CPI ≥ 1.00 = healthy | 0.95–1.00 = watch | <0.95 = action\n- TCPI > 1.10 = recovery probably unrealistic`,
+  },
+  forecast: {
+    quick: `**Forecast** projects each cost code's final cost (EAC) and flags overrun risk.\n\n- Per-phase projected cost\n- Variance vs. budget\n- Feeds the Cost Variance KPI on Overview`,
+    sop: `## Forecast — SOP\n\n### Purpose\nCost-code level EAC forecasting, more granular than EVA.\n\n### How to use\n1. Make sure HeavyJob actuals are synced.\n2. Review projected EAC per phase.\n3. Use manual overrides if you know something the numbers don't (e.g., a weather-delayed phase).\n\n### Data sources\n- Budget: HeavyBid activities (rolled up by phase)\n- Actuals: HeavyJob Cost Code Summary\n\n### Known issues\n- If actuals are missing, check that Set Up → HeavyJob sync is green.`,
+  },
+  payapps: {
+    quick: `**Pay Apps** builds AIA-style G702/G703 pay applications.\n\n- Monthly billings off the SOV\n- Retainage, previous, this period, stored materials\n- Print/export to PDF`,
+    sop: `## Pay Apps — SOP\n\n### Purpose\nGenerate owner pay applications from the SOV.\n\n### Monthly workflow\n1. Open Pay Apps → click **New Pay App**.\n2. Enter % complete or this-period amount per line.\n3. Add stored materials if any.\n4. Review retainage calculation.\n5. Export PDF, sign, and send.\n\n### Data sources\n- SOV lines: HeavyBid Bid Items\n- Retainage %: job meta (set in Edit Job)\n\n### Notes\n- Keep every month's pay app — the app uses "Previous" from the prior period.`,
+  },
+  cashflow: {
+    quick: `**Cash Flow** projects receipts vs. outflows over the job timeline.\n\n- S-curve of cumulative billings\n- Cash position by month\n- Useful for treasury planning`,
+    sop: `## Cash Flow — SOP\n\n### Purpose\nModel monthly cash in/out to spot funding gaps before they happen.\n\n### How to use\n1. Make sure SOV (Pay Items) is loaded.\n2. Set job start/finish dates and a cash-flow curve shape (S, linear, front-loaded).\n3. Review projected billings + payment timing lag.\n\n### Data sources\n- Schedule of Values (HeavyBid bid items)\n- Job meta: start/finish, retainage, billing lag`,
+  },
+  jobcost: {
+    quick: `**Job Cost** shows Spectrum-synced JTD actuals per cost code.\n\n- Grouped by phase with BELMOS drill-down (labor/equip/material/sub)\n- Variance vs. current estimate\n- Authoritative cost source (accounting system)`,
+    sop: `## Job Cost — SOP\n\n### Purpose\nThe accounting-system view of what has truly hit the books.\n\n### How to use\n1. Select an active job.\n2. Job Cost auto-loads Spectrum phases for that job number.\n3. Click a phase to drill down to BELMOS breakdown.\n4. Click **Refresh** to re-pull from Supabase.\n\n### Data sources\n- Read-only from the finance Supabase (maintained by Nic's Spectrum export).\n- "Spectrum synced" date shows when Nic last ran his export.\n\n### If data looks stale\n- Check the synced-date badge. If >7 days old, ping Nic to re-run his export.`,
+  },
+  schedule: {
+    quick: `**Schedule** shows the Smartsheet-imported tasks with dates, durations, and crew assignments.\n\n- Gantt-style or list view\n- Milestones and critical path\n- Feeds Planning + Production tabs`,
+    sop: `## Schedule — SOP\n\n### Purpose\nSee the full baseline + current schedule for this job.\n\n### How to use\n1. Import Smartsheet export via **Set Up**.\n2. Map tasks to pay items (Set Up → Map Schedule).\n3. Review task list here; green = done, blue = in progress, gray = not started.\n\n### Data sources\n- Smartsheet .xlsx export\n\n### Notes\n- Edits made here don't push back to Smartsheet — edit at the source and re-import.`,
+  },
+  planning: {
+    quick: `**Planning** is the weekly crew + equipment planner.\n\n- Drag-and-drop crews to jobs by day of week\n- Equipment planning with same pattern\n- Auto-suggests crews based on schedule`,
+    sop: `## Planning — SOP\n\n### Purpose\nWeekly look-ahead: who's where, driving what, this week and next.\n\n### How to use\n1. Choose **Crews** or **Equipment** mode.\n2. Click a cell to assign.\n3. Use **Accept All Suggestions** to bulk-apply the app's recommendations.\n\n### Data sources\n- Crews: auto-discovered from HeavyJob daily detail (foreman column)\n- Equipment: imported from HCSS equipment API\n- Suggestions: based on schedule mapping + past history\n\n### Weekly workflow (Friday)\n1. Open Planning → Monday view.\n2. Accept or override suggestions for next week.\n3. Print or screenshot for the Monday crew meeting.`,
+  },
+  jcs: {
+    quick: `**Job Cost Schedule (JCS)** combines schedule + cost to project phase-level performance.\n\n- Spectrum-based variance (not estimated)\n- Per-phase status (ahead/behind, under/over)`,
+    sop: `## Job Cost Schedule — SOP\n\n### Purpose\nSee how each scheduled phase is tracking on both schedule and cost.\n\n### How to use\n1. Make sure both Schedule and Spectrum data are loaded.\n2. Review the phase grid — color coding shows status at a glance.\n\n### Data sources\n- Schedule: Smartsheet\n- Cost: Spectrum (authoritative, not HeavyJob)\n\n### Notes\n- Variance is calculated vs. current Spectrum estimate, not original bid.`,
+  },
+  production: {
+    quick: `**Production Tracker** is the operations dashboard.\n\n- Budget vs. actual: quantity, hours, cost (BELMOS)\n- Productivity % per phase, units/hr budget vs. actual\n- Daily history + BELMOS cost breakdown on click\n- OFF-BUDGET flag when crews code to unbudgeted phases`,
+    sop: `## Production Tracker — SOP\n\n### Purpose\nDaily operations view of physical production and cost.\n\n### How to use\n1. Import HeavyBid activities (budget) + HeavyJob daily detail (actuals) via **Set Up**.\n2. Optional: import HJ Cost Code Summary for full BELMOS cost breakdown.\n3. Sort by any column header; click a row for daily history.\n4. Use the **All / Active** filter to focus on phases with activity.\n\n### Reading the columns\n- **Production group (green tint):** Budget Qty, Actual Qty, Remaining, % Complete, Daily Goal\n- **Hours group (orange tint):** Budget Hrs, Actual Hrs, rates (u/hr), Productivity %, Hrs Var\n- **Cost group (blue tint):** Budget $, Actual $, Cost Var\n\n### Flags\n- **Blue stripe / OFF-BUDGET:** phase has actuals but no budget — usually a mapping gap.\n- **Orange stripe:** productivity <80% or hours/cost >110% of budget.\n\n### Data sources\n- Budget: HeavyBid activities (authoritative) or HJ Summary if imported\n- Actuals: HeavyJob daily detail + HJ Cost Code Summary`,
+  },
+  settings: {
+    quick: `**Rosters & Settings** manages crews, equipment, and subs.\n\n- Edit crew display names\n- Fleet roster with categories and rates\n- Subs list with contact info`,
+    sop: `## Rosters & Settings — SOP\n\n### Purpose\nMaintain the supporting rosters that Planning and other tabs pull from.\n\n### How to use\n1. Crews: rename from auto-generated slugs to human-friendly names.\n2. Equipment: manage categories, hourly rates, status.\n3. Subs: track vendor contacts and trade.\n\n### Data sources\n- Crews: auto-discovered, persisted to job-level settings\n- Equipment: HCSS equipment API + local overrides\n- Subs: manual entries\n\n### Tips\n- Keep crew names consistent across jobs — makes Global View more useful.`,
+  },
+  setup: {
+    quick: `**Project Set Up** is where data imports happen.\n\n- HeavyBid Activities & Bid Items (budget)\n- Smartsheet schedule\n- HeavyJob Summary + Daily Detail (actuals)\n- HCSS auto-sync controls\n- Mapping tools (Schedule → Pay Items, Activity → Phase Code)`,
+    sop: `## Project Set Up — SOP\n\n### Purpose\nIngest source data, map relationships, and configure the job.\n\n### Initial job setup (one-time)\n1. Click **+ New Job**, enter job number/name, dates.\n2. Import HeavyBid **Activities** (.xlsx).\n3. Import HeavyBid **Bid Items** (.xlsx).\n4. Import **Smartsheet schedule**.\n5. Link job to HCSS (Edit Job → HCSS job code).\n6. Run **Sync Jobs & Codes** to pull HCSS cost codes.\n7. Run **Backfill All** once to pull all historical actuals.\n\n### Ongoing (weekly)\n- **Sync Now** to pull fresh HeavyJob actuals (or let the auto-sync do it).\n- Re-import schedule if Smartsheet changed.\n\n### Mapping\n- **Map Schedule → Pay Items:** required for Pay Apps progress and EVA planned value.\n- **Activity → Phase Code:** required when HeavyBid activity names don't exactly match HCSS cost-code phases.\n\n### Gotchas\n- HeavyBid exports are .xls by default — convert to .xlsx before importing.\n- Daily Detail must match the active job's number or rows are rejected.`,
+  },
+};
+
+// Tiny markdown renderer — supports: # ## ### headings, **bold**, *italic*,
+// `code`, - unordered lists, 1. ordered lists, [label](url), blank-line paragraphs.
+function renderMarkdownLite(src){
+  if(!src)return '<p style="color:var(--text-light);font-style:italic;">No content yet. Click Edit to add.</p>';
+  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const lines=String(src).split(/\r?\n/);
+  const out=[];
+  let i=0;
+  const inlineFmt=s=>{
+    s=esc(s);
+    // Code spans first
+    s=s.replace(/`([^`]+)`/g,'<code style="background:var(--ash);padding:1px 5px;border-radius:3px;font-size:.9em;">$1</code>');
+    // Bold then italic
+    s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+    s=s.replace(/\*([^*]+)\*/g,'<em>$1</em>');
+    // Links
+    s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--orange);">$1</a>');
+    return s;
+  };
+  while(i<lines.length){
+    const ln=lines[i];
+    if(!ln.trim()){i++;continue}
+    // Headings
+    const h=/^(#{1,3})\s+(.*)$/.exec(ln);
+    if(h){
+      const lv=h[1].length;
+      const sz=lv===1?18:lv===2?16:14;
+      const wt=lv===1?700:600;
+      const col=lv===1?'var(--green)':'var(--text)';
+      out.push(`<h${lv} style="font-family:Oswald,sans-serif;font-size:${sz}px;font-weight:${wt};color:${col};margin:14px 0 6px;letter-spacing:.5px;">${inlineFmt(h[2])}</h${lv}>`);
+      i++;continue;
+    }
+    // Unordered list
+    if(/^\s*-\s+/.test(ln)){
+      const items=[];
+      while(i<lines.length && /^\s*-\s+/.test(lines[i])){
+        items.push(lines[i].replace(/^\s*-\s+/,''));
+        i++;
+      }
+      out.push('<ul style="margin:6px 0 10px 20px;padding:0;">'+items.map(it=>`<li style="margin:3px 0;">${inlineFmt(it)}</li>`).join('')+'</ul>');
+      continue;
+    }
+    // Ordered list
+    if(/^\s*\d+\.\s+/.test(ln)){
+      const items=[];
+      while(i<lines.length && /^\s*\d+\.\s+/.test(lines[i])){
+        items.push(lines[i].replace(/^\s*\d+\.\s+/,''));
+        i++;
+      }
+      out.push('<ol style="margin:6px 0 10px 22px;padding:0;">'+items.map(it=>`<li style="margin:3px 0;">${inlineFmt(it)}</li>`).join('')+'</ol>');
+      continue;
+    }
+    // Paragraph — gather consecutive non-blank, non-special lines
+    const para=[];
+    while(i<lines.length && lines[i].trim() && !/^(#{1,3}\s|\s*-\s|\s*\d+\.\s)/.test(lines[i])){
+      para.push(lines[i]);
+      i++;
+    }
+    out.push(`<p style="margin:6px 0 10px;">${para.map(inlineFmt).join('<br>')}</p>`);
+  }
+  return out.join('');
+}
+
+// Store for guide content (tabId → {quick_guide, sop, updated_at, updated_by})
+Store.tabGuides = {};
+Store._tabQuickOpen = false;
+Store._sopEditing = false;
+
+// Load all tab guides from Supabase into Store
+async function loadTabGuides(){
+  if(!_currentUser){console.log('loadTabGuides deferred — waiting for auth');return}
+  try{
+    const {data,error}=await sb.from('tab_guides').select('*');
+    if(error){console.warn('tab_guides load failed (table may not exist yet):',error.message);return}
+    (data||[]).forEach(r=>{ Store.tabGuides[r.tab_id]={quick:r.quick_guide||'',sop:r.sop||'',updated_at:r.updated_at,updated_by:r.updated_by}; });
+    updateTabHelpBar();
+  }catch(e){console.warn('loadTabGuides error',e)}
+}
+
+// Upsert one field of a guide
+async function saveTabGuide(tabId,field,value){
+  if(!_currentUser){alert('Log in to edit guides');return false}
+  if(field!=='quick'&&field!=='sop'){console.warn('saveTabGuide bad field',field);return false}
+  const col=field==='quick'?'quick_guide':'sop';
+  const existing=Store.tabGuides[tabId]||{quick:'',sop:''};
+  const row={
+    tab_id:tabId,
+    quick_guide:field==='quick'?value:(existing.quick||''),
+    sop:field==='sop'?value:(existing.sop||''),
+    updated_by:_currentUser.email||_currentUser.id,
+    updated_at:new Date().toISOString(),
+  };
+  const {error}=await sb.from('tab_guides').upsert(row,{onConflict:'tab_id'});
+  if(error){console.error('saveTabGuide error',error);alert('Save failed: '+error.message);return false}
+  Store.tabGuides[tabId]={quick:row.quick_guide,sop:row.sop,updated_at:row.updated_at,updated_by:row.updated_by};
+  return true;
+}
+
+// Determine the active tab id for the help bar
+function currentTabId(){
+  if(_activeNavTab==='global')return 'global';
+  if(_activeNavTab==='setup')return 'setup';
+  return _activeSubTab||'overview';
+}
+
+// Get guide content — falls back to seed if no saved version
+function getGuideContent(tabId,field){
+  const saved=Store.tabGuides[tabId];
+  if(saved && saved[field])return saved[field];
+  const seed=TAB_GUIDE_SEEDS[tabId];
+  return seed?seed[field]||'':'';
+}
+
+// Called after every nav change to refresh the help bar.
+function updateTabHelpBar(){
+  const bar=document.getElementById('tabHelpBar');
+  if(!bar)return;
+  const tabId=currentTabId();
+  const meta=TAB_META[tabId];
+  // Only show on real tabs we know about
+  if(!meta){bar.style.display='none';return}
+  bar.style.display='block';
+  const label=document.getElementById('tabHelpBarLabel');
+  if(label)label.textContent=meta.name+' — Guide & SOP';
+  // Always collapse the quick guide when switching tabs
+  Store._tabQuickOpen=false;
+  const panel=document.getElementById('tabQuickGuidePanel');
+  if(panel)panel.style.display='none';
+}
+
+function toggleTabQuickGuide(){
+  Store._tabQuickOpen=!Store._tabQuickOpen;
+  const panel=document.getElementById('tabQuickGuidePanel');
+  if(!panel)return;
+  if(!Store._tabQuickOpen){panel.style.display='none';return}
+  const tabId=currentTabId();
+  const meta=TAB_META[tabId]||{name:tabId};
+  const content=getGuideContent(tabId,'quick');
+  const saved=Store.tabGuides[tabId];
+  const metaLine=saved?`Last updated ${new Date(saved.updated_at).toLocaleDateString()} by ${saved.updated_by||'—'}`:'Using default placeholder — click Edit to customize';
+  panel.innerHTML=`
+    <div class="card" style="margin:0;background:#FFF8E1;border:2px solid var(--orange);">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>📘 ${esc(meta.name)} — Quick Guide</span>
+        <div style="display:flex;gap:6px;">
+          <button class="edit-btn" style="padding:4px 12px;font-size:11px;" onclick="editQuickGuide()">Edit</button>
+          <button class="edit-btn" style="padding:4px 12px;font-size:11px;" onclick="toggleTabQuickGuide()">Close</button>
+        </div>
+      </div>
+      <div id="quickGuideBody" style="font-size:13px;line-height:1.55;color:var(--text);">${renderMarkdownLite(content)}</div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--sand);font-size:10px;color:var(--text-light);font-family:Oswald,sans-serif;letter-spacing:.5px;text-transform:uppercase;">${esc(metaLine)}</div>
+    </div>`;
+  panel.style.display='block';
+}
+
+function editQuickGuide(){
+  const tabId=currentTabId();
+  const content=getGuideContent(tabId,'quick');
+  const body=document.getElementById('quickGuideBody');
+  if(!body)return;
+  body.innerHTML=`
+    <textarea id="quickGuideTextarea" style="width:100%;min-height:180px;padding:10px;font-family:'Courier New',monospace;font-size:12px;line-height:1.5;border:1px solid var(--border);border-radius:6px;background:#fff;">${esc(content)}</textarea>
+    <div style="margin-top:8px;display:flex;gap:6px;">
+      <button class="edit-btn" style="padding:5px 14px;font-size:11px;background:var(--orange);color:#fff;border:none;" onclick="saveQuickGuide()">Save</button>
+      <button class="edit-btn" style="padding:5px 14px;font-size:11px;" onclick="toggleTabQuickGuide();toggleTabQuickGuide();">Cancel</button>
+      <span style="font-size:10px;color:var(--text-light);margin-left:auto;font-family:Oswald,sans-serif;letter-spacing:.4px;">Markdown: # ## ### **bold** *italic* - list 1. num \`code\` [link](url)</span>
+    </div>`;
+}
+
+async function saveQuickGuide(){
+  const tabId=currentTabId();
+  const ta=document.getElementById('quickGuideTextarea');
+  if(!ta)return;
+  const ok=await saveTabGuide(tabId,'quick',ta.value);
+  if(ok){toggleTabQuickGuide();Store._tabQuickOpen=true;toggleTabQuickGuide();}
+}
+
+function openSopModal(){
+  const tabId=currentTabId();
+  const meta=TAB_META[tabId]||{name:tabId};
+  Store._sopEditing=false;
+  document.getElementById('sopModalTitle').textContent=meta.name;
+  _sopRenderView();
+  document.getElementById('sopModalOverlay').style.display='flex';
+}
+
+function closeSopModal(){
+  Store._sopEditing=false;
+  document.getElementById('sopModalOverlay').style.display='none';
+}
+
+function _sopRenderView(){
+  const tabId=currentTabId();
+  const content=getGuideContent(tabId,'sop');
+  const saved=Store.tabGuides[tabId];
+  const body=document.getElementById('sopModalBody');
+  if(body)body.innerHTML=renderMarkdownLite(content);
+  const metaEl=document.getElementById('sopModalMeta');
+  if(metaEl)metaEl.textContent=saved?`Last updated ${new Date(saved.updated_at).toLocaleDateString()} by ${saved.updated_by||'—'}`:'Default placeholder — click Edit to customize';
+  document.getElementById('sopEditBtn').style.display='inline-block';
+  document.getElementById('sopSaveBtn').style.display='none';
+  document.getElementById('sopCancelBtn').style.display='none';
+}
+
+function editSopContent(){
+  Store._sopEditing=true;
+  const tabId=currentTabId();
+  const content=getGuideContent(tabId,'sop');
+  const body=document.getElementById('sopModalBody');
+  if(body){
+    body.innerHTML=`<textarea id="sopEditTextarea" style="width:100%;min-height:500px;padding:12px;font-family:'Courier New',monospace;font-size:13px;line-height:1.55;border:1px solid var(--border);border-radius:6px;background:#fff;">${content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>`;
+  }
+  document.getElementById('sopEditBtn').style.display='none';
+  document.getElementById('sopSaveBtn').style.display='inline-block';
+  document.getElementById('sopCancelBtn').style.display='inline-block';
+}
+
+async function saveSopContent(){
+  const tabId=currentTabId();
+  const ta=document.getElementById('sopEditTextarea');
+  if(!ta)return;
+  const ok=await saveTabGuide(tabId,'sop',ta.value);
+  if(ok){Store._sopEditing=false;_sopRenderView();}
+}
+
+function cancelSopEdit(){Store._sopEditing=false;_sopRenderView();}
+
 // Delete a job from Supabase + audit entry
 async function deleteJob(jobId){
   if(!_currentUser){ console.warn('deleteJob skipped — not logged in'); return; }
@@ -3345,6 +3696,7 @@ function navSwitch(tab){
       renderActiveSubTab();
     }
   }
+  if(typeof updateTabHelpBar==='function')updateTabHelpBar();
 }
 
 function navSub(group,sub){
@@ -3378,6 +3730,7 @@ function navSub(group,sub){
   }
 
   renderActiveSubTab();
+  if(typeof updateTabHelpBar==='function')updateTabHelpBar();
 }
 
 function _highlightSubTab(group,sub){
