@@ -8995,15 +8995,6 @@ function renderProduction(){
   el.innerHTML=h;
 }
 
-function getBlendedLaborRate(){
-  const v=Number(localStorage.getItem('bdc_blended_labor_rate'));
-  return (v>0)?v:55;
-}
-function setBlendedLaborRate(v){
-  const n=Math.max(0,Number(v)||0);
-  localStorage.setItem('bdc_blended_labor_rate',String(n));
-  renderProduction();
-}
 // Remaining weekdays from today → endDate (inclusive of today if weekday, exclusive of weekends)
 function _remainingWorkDays(endDate){
   if(!endDate)return null;
@@ -9022,92 +9013,110 @@ function _remainingWorkDays(endDate){
 }
 
 function renderProductionTracker(job){
-  const acts=(job.actuals||[]);
-  const activityMap={};
-  (job.activities||[]).forEach(a=>{
-    activityMap[a.code]={description:a.description,quantity:a.quantity||0,units:a.units||''};
-  });
+  // --- Build the universe of cost codes ---
+  // Budget comes from HeavyBid activities rolled up to phaseCode (the HCSS budget source).
+  // Actuals come from HJ daily detail (actualsDetail). We also fold in any existing
+  // job.actuals rollup and hcssCostCodes metadata so no code goes missing.
+  const byPhase={};
+  const ensure=(pc,desc,unit)=>{
+    if(!pc)return null;
+    if(!byPhase[pc]){
+      byPhase[pc]={code:pc,description:desc||'',unit:unit||'',
+        budgetQty:0,budgetHrs:0,budgetCost:0,
+        actualQty:0,actualHrs:0,actualEquipHrs:0};
+    }else{
+      if(!byPhase[pc].description&&desc)byPhase[pc].description=desc;
+      if(!byPhase[pc].unit&&unit)byPhase[pc].unit=unit;
+    }
+    return byPhase[pc];
+  };
 
-  const blendedRate=getBlendedLaborRate();
-
-  // HeavyBid-estimated budget hours, rolled up to cost code via phaseCode
-  const budgetHrsByCode={};
+  // 1) Budget from HeavyBid activities (authoritative HCSS budget)
   (job.activities||[]).forEach(a=>{
-    const pc=String(a.phaseCode||a.code||'').trim();
+    const pc=String(a.phaseCode||'').trim();
     if(!pc)return;
-    budgetHrsByCode[pc]=(budgetHrsByCode[pc]||0)+(Number(a.manHours)||0);
+    const row=ensure(pc,a.phaseDesc||a.description||'',a.units||'');
+    row.budgetHrs+=Number(a.manHours)||0;
+    row.budgetQty+=Number(a.quantity)||0;
+    row.budgetCost+=Number(a.directTotal)||0;
   });
 
-  // Actual labor+equip hours per cost code from HJ daily detail
-  const actualHrsByCode={};
+  // 2) HCSS cost code list (description/unit backfill for codes without bid activities)
+  (job.hcssCostCodes||[]).forEach(c=>{
+    const pc=String(c.cost_code||c.code||'').trim();
+    if(!pc)return;
+    ensure(pc,c.description||'',c.unit||'');
+  });
+
+  // 3) Actuals from HJ daily detail
   (job.actualsDetail||[]).forEach(d=>{
     const pc=String(d.costCode||'').trim();
     if(!pc)return;
-    actualHrsByCode[pc]=(actualHrsByCode[pc]||0)+(Number(d.actualLaborHours)||0);
+    const row=ensure(pc,d.costCodeDesc||'',d.unit||'');
+    row.actualHrs+=Number(d.actualLaborHours)||0;
+    row.actualEquipHrs+=Number(d.actualEquipHours)||0;
+    row.actualQty+=Number(d.actualQty)||0;
   });
 
-  // Unique production days
+  // 4) Fallback from pre-rolled job.actuals (only fills gaps — avoids double-counting detail)
+  (job.actuals||[]).forEach(a=>{
+    const pc=String(a.code||'').trim();
+    if(!pc)return;
+    const row=ensure(pc,a.description||'',a.unit||'');
+    if(row.actualHrs===0)row.actualHrs=Number(a.actualHours)||0;
+    if(row.actualQty===0)row.actualQty=Number(a.qtyInstalled)||0;
+    if(row.budgetQty===0&&Number(a.budgetQty)>0)row.budgetQty=Number(a.budgetQty);
+    if(row.budgetHrs===0&&Number(a.budgetHours)>0)row.budgetHrs=Number(a.budgetHours);
+    if(row.budgetCost===0&&Number(a.budgetCost)>0)row.budgetCost=Number(a.budgetCost);
+  });
+
+  // Unique production days + remaining work days
   const uniqueDates=new Set();
   (job.actualsDetail||[]).forEach(d=>{if(d.date)uniqueDates.add(d.date);});
   const prodDays=uniqueDates.size;
-
-  // Remaining work days → drives Daily Goal
   const endD=job.meta?.endDate?(job.meta.endDate instanceof Date?job.meta.endDate:toDate(job.meta.endDate)):null;
   const remWorkDays=_remainingWorkDays(endD);
 
-  // Top-volume cost code (for "Top Avg/Day" KPI)
+  // Top-volume code for the Avg/Day KPI
   const prodRates=computeProductionRates(job);
 
-  // Build tracker rows
-  const trackerData=acts.map(a=>{
-    const pc=String(a.code||'').trim();
-    const budgetQty=a.budgetQty||(activityMap[pc]?.quantity||0);
-    const actualQty=a.qtyInstalled||0;
-    const remainingQty=Math.max(0,budgetQty-actualQty);
-    const qtyPct=budgetQty>0?(actualQty/budgetQty*100):0;
-    const budgetHrs=budgetHrsByCode[pc]||(a.budgetHours||0);
-    const actualHrs=actualHrsByCode[pc]||(a.actualHours||0);
-    const budgetRate=budgetHrs>0?budgetQty/budgetHrs:0;  // units per hour
-    const actualRate=actualHrs>0?actualQty/actualHrs:0;
+  // Compute derived row fields
+  const rows=Object.values(byPhase).map(r=>{
+    const remainingQty=Math.max(0,r.budgetQty-r.actualQty);
+    const qtyPct=r.budgetQty>0?(r.actualQty/r.budgetQty*100):0;
+    const budgetRate=r.budgetHrs>0?r.budgetQty/r.budgetHrs:0; // units per hour
+    const actualRate=r.actualHrs>0?r.actualQty/r.actualHrs:0;
     const productivityPct=budgetRate>0&&actualRate>0?(actualRate/budgetRate*100):0;
     const dailyGoal=(remWorkDays!=null&&remWorkDays>0&&remainingQty>0)?(remainingQty/remWorkDays):null;
-    // Projected labor $ = (actual hrs + remaining hrs at current pace) × blended rate
-    const effRate=actualRate>0?actualRate:budgetRate;
-    const projRemHrs=effRate>0?(remainingQty/effRate):0;
-    const projTotalHrs=actualHrs+projRemHrs;
-    const projectedLaborCost=projTotalHrs*blendedRate;
-    const budgetLaborCost=budgetHrs*blendedRate;
-    const varCost=projectedLaborCost-budgetLaborCost;  // + = over budget
-    return {code:pc,description:a.description||'',unit:a.unit||'',
-      budgetQty,actualQty,remainingQty,qtyPct,
-      budgetHrs,actualHrs,budgetRate,actualRate,productivityPct,
-      dailyGoal,projectedLaborCost,budgetLaborCost,varCost,
-      hasHJ:actualHrs>0||actualQty>0};
-  });
+    const earnedHrs=budgetRate>0?(r.actualQty/budgetRate):0;
+    const hrsVar=earnedHrs-r.actualHrs; // + = hours saved, - = hours lost
+    return {code:r.code,description:r.description,unit:r.unit,
+      budgetQty:r.budgetQty,actualQty:r.actualQty,remainingQty,qtyPct,
+      budgetHrs:r.budgetHrs,actualHrs:r.actualHrs,budgetRate,actualRate,productivityPct,
+      dailyGoal,earnedHrs,hrsVar,
+      hasAny:r.budgetQty>0||r.budgetHrs>0||r.actualQty>0||r.actualHrs>0};
+  }).filter(r=>r.hasAny);
 
-  // Rollup totals
-  const totBudgetQty=trackerData.reduce((s,r)=>s+r.budgetQty,0);
-  const totActualQty=trackerData.reduce((s,r)=>s+r.actualQty,0);
-  const totBudgetHrs=trackerData.reduce((s,r)=>s+r.budgetHrs,0);
-  const totActualHrs=trackerData.reduce((s,r)=>s+r.actualHrs,0);
-  const totBudgetLabor=trackerData.reduce((s,r)=>s+r.budgetLaborCost,0);
-  const totProjLabor=trackerData.reduce((s,r)=>s+r.projectedLaborCost,0);
-  const totVarCost=totProjLabor-totBudgetLabor;
-  const totGainLoss=-totVarCost;  // + = gain (under budget)
+  if(!rows.length){
+    return '<div class="empty-state"><h2>No Production Data</h2><p>Import HeavyBid activities (for budget hours/qty) and sync HCSS actuals to populate this tracker.</p></div>';
+  }
+
+  // Rollups
+  const totBudgetQty=rows.reduce((s,r)=>s+r.budgetQty,0);
+  const totActualQty=rows.reduce((s,r)=>s+r.actualQty,0);
+  const totBudgetHrs=rows.reduce((s,r)=>s+r.budgetHrs,0);
+  const totActualHrs=rows.reduce((s,r)=>s+r.actualHrs,0);
+  const totEarnedHrs=rows.reduce((s,r)=>s+r.earnedHrs,0);
+  const totHrsVar=totEarnedHrs-totActualHrs;
 
   // Qty-weighted % complete
   let overallPct=0;{
     let wSum=0,wDen=0;
-    trackerData.forEach(r=>{if(r.budgetQty>0){wSum+=r.qtyPct*r.budgetQty;wDen+=r.budgetQty;}});
+    rows.forEach(r=>{if(r.budgetQty>0){wSum+=r.qtyPct*r.budgetQty;wDen+=r.budgetQty;}});
     overallPct=wDen>0?(wSum/wDen):0;
   }
+  const overallProductivity=totActualHrs>0?(totEarnedHrs/totActualHrs*100):0;
 
-  // Overall productivity = earned hrs / actual hrs, where earned = sum(actualQty / budgetRate)
-  let earnedHrs=0;
-  trackerData.forEach(r=>{if(r.budgetRate>0)earnedHrs+=(r.actualQty/r.budgetRate);});
-  const overallProductivity=totActualHrs>0?(earnedHrs/totActualHrs*100):0;
-
-  // Top-volume cost code for the Avg Daily KPI
   let topProd=null;
   Object.entries(prodRates).forEach(([code,pr])=>{
     if(!topProd||pr.totalQty>topProd.totalQty)topProd={code,...pr};
@@ -9121,29 +9130,23 @@ function renderProductionTracker(job){
   const hrsPctUsed=totBudgetHrs>0?(totActualHrs/totBudgetHrs*100):0;
   const hrsCls=(hrsPctUsed<=overallPct+5)?'good':(hrsPctUsed<=overallPct+15?'':'warn');
   const prodCls=overallProductivity>=100?'good':(overallProductivity>=90?'':'warn');
-  const glCls=totGainLoss>=0?'good':'warn';
+  const hrsVarCls=totHrsVar>=0?'good':'warn';
 
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
   h+=tile('% Complete',overallPct.toFixed(1)+'%','','qty-weighted');
   h+=tile('Hours Used',`${fmt(totActualHrs)} / ${fmt(totBudgetHrs)}`,hrsCls,hrsPctUsed>0?(hrsPctUsed.toFixed(0)+'% of budget'):'—');
   h+=tile('Productivity',overallProductivity>0?(overallProductivity.toFixed(0)+'%'):'—',prodCls,overallProductivity>=100?'Beating budget':(overallProductivity>=90?'On pace':(overallProductivity>0?'Behind pace':'No data')));
-  h+=tile('Projected Gain/Loss',(totGainLoss>=0?'+':'')+fmtD(totGainLoss),glCls,totGainLoss>=0?'Under budget':'Over budget');
+  h+=tile('Hours Variance',totActualHrs>0?((totHrsVar>=0?'+':'')+fmt(totHrsVar)+' hrs'):'—',totActualHrs>0?hrsVarCls:'',totActualHrs>0?(totHrsVar>=0?'Hours saved vs earned':'Hours lost vs earned'):'Needs actuals');
   h+=tile('Production Days',String(prodDays),'',prodDays>0?'unique work dates':'');
   h+=tile('Top Avg/Day',topProd&&topProd.ratePerDay?fmt(topProd.ratePerDay):'—','',topProd?topProd.code:'');
   h+='</div>';
 
-  // Rate + deadline strip
-  h+=`<div style="background:var(--ash);padding:10px 14px;border-radius:6px;margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">`;
-  h+=`<span style="font-size:12px;color:var(--text-light);">Blended labor rate (projections):</span>`;
-  h+=`<span style="display:inline-flex;align-items:center;gap:4px;font-family:Oswald;font-size:14px;">`;
-  h+=`$<input type="number" value="${blendedRate}" min="0" step="1" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-family:Oswald;font-size:14px;text-align:right;" onchange="setBlendedLaborRate(this.value)">/hr`;
-  h+=`</span>`;
+  // Deadline / remaining workdays strip (no synthetic rate — production only)
   if(endD){
-    h+=`<span style="font-size:11px;color:var(--text-light);margin-left:auto;">Job end: <strong>${fmtDate(endD)}</strong> · Remaining work days: <strong>${remWorkDays}</strong></span>`;
+    h+=`<div style="background:var(--ash);padding:10px 14px;border-radius:6px;margin-bottom:16px;font-size:11px;color:var(--text-light);">Job end: <strong>${fmtDate(endD)}</strong> · Remaining work days: <strong>${remWorkDays}</strong> — drives the Daily Goal column.</div>`;
   }else{
-    h+=`<span style="font-size:11px;color:var(--orange);margin-left:auto;">⚠ Set a job end date on the schedule to compute Daily Goal</span>`;
+    h+=`<div style="background:var(--ash);padding:10px 14px;border-radius:6px;margin-bottom:16px;font-size:11px;color:var(--orange);">⚠ Set a job end date on the Schedule tab to compute Daily Goal.</div>`;
   }
-  h+=`</div>`;
 
   // Drill-down detail map
   const detailByCode={};
@@ -9162,7 +9165,7 @@ function renderProductionTracker(job){
   Object.values(detailByCode).forEach(arr=>arr.sort((a,b)=>b.date.localeCompare(a.date)));
 
   // Sort
-  let sorted=trackerData;
+  let sorted=rows;
   const s=_tblSort['prod-tracker'];
   if(s&&s.col){
     const defs={
@@ -9179,14 +9182,13 @@ function renderProductionTracker(job){
       budgetRate:(a,b)=>a.budgetRate-b.budgetRate,
       actualRate:(a,b)=>a.actualRate-b.actualRate,
       productivityPct:(a,b)=>a.productivityPct-b.productivityPct,
-      projectedLaborCost:(a,b)=>a.projectedLaborCost-b.projectedLaborCost,
-      varCost:(a,b)=>a.varCost-b.varCost
+      hrsVar:(a,b)=>a.hrsVar-b.hrsVar,
     };
     const fn=defs[s.col];
     if(fn){sorted=[...sorted].sort(fn);if(s.dir==='desc')sorted.reverse();}
   }else{
-    // Default: largest remaining qty first (active work floats up)
-    sorted=[...trackerData].sort((a,b)=>b.remainingQty-a.remainingQty);
+    // Default: largest budget first (scope-weighted)
+    sorted=[...rows].sort((a,b)=>b.budgetHrs-a.budgetHrs);
   }
 
   // Table
@@ -9206,41 +9208,39 @@ function renderProductionTracker(job){
   h+=sortHdr('prod-tracker','budgetRate','Bgt Rate (u/hr)','renderProduction');
   h+=sortHdr('prod-tracker','actualRate','Act Rate (u/hr)','renderProduction');
   h+=sortHdr('prod-tracker','productivityPct','Productivity','renderProduction');
-  h+=sortHdr('prod-tracker','projectedLaborCost','Proj Labor $','renderProduction');
-  h+=sortHdr('prod-tracker','varCost','Variance $','renderProduction');
+  h+=sortHdr('prod-tracker','hrsVar','Hrs Var','renderProduction');
   h+='</tr></thead><tbody>';
 
   sorted.forEach((r,ri)=>{
     const prodBadge=r.productivityPct>=100?'good':(r.productivityPct>=90?'':(r.productivityPct>0?'warn':''));
-    const varBadge=r.varCost<=0?'good':'warn';
+    const hrsVarBadge=r.hrsVar>=0?'good':'warn';
     const qtyBadge=r.qtyPct>=90?'good':'';
     const details=detailByCode[r.code]||[];
     const hasDetail=details.length>0;
     const rowId='pt-detail-'+ri;
     const flagBehind=r.productivityPct>0&&r.productivityPct<80;
-    const flagOver=r.varCost>r.budgetLaborCost*0.10&&r.budgetLaborCost>0;
-    const rowFlag=flagBehind||flagOver;
+    const flagOverHrs=r.budgetHrs>0&&r.actualHrs>r.budgetHrs*1.10;
+    const rowFlag=flagBehind||flagOverHrs;
 
     h+=`<tr style="cursor:${hasDetail?'pointer':'default'};${rowFlag?'background:rgba(242,103,34,0.06);border-left:3px solid var(--orange);':''}" ${hasDetail?`onclick="var el=document.getElementById('${rowId}');el.style.display=el.style.display==='none'?'':'none';var a=this.querySelector('.pt-arrow');if(a)a.textContent=el.style.display==='none'?'▸':'▾';"`:''}>`;
     h+=`<td>${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(r.code)}</td>`;
     h+=`<td>${esc(r.description)}</td>`;
     h+=`<td>${esc(r.unit)}</td>`;
-    h+=`<td class="num">${fmt(r.budgetQty)}</td>`;
-    h+=`<td class="num">${fmt(r.actualQty)}</td>`;
-    h+=`<td class="num">${fmt(r.remainingQty)}</td>`;
-    h+=`<td class="num ${qtyBadge}">${r.qtyPct.toFixed(0)}%</td>`;
+    h+=`<td class="num">${r.budgetQty>0?fmt(r.budgetQty):'—'}</td>`;
+    h+=`<td class="num">${r.actualQty>0?fmt(r.actualQty):'—'}</td>`;
+    h+=`<td class="num">${r.budgetQty>0?fmt(r.remainingQty):'—'}</td>`;
+    h+=`<td class="num ${qtyBadge}">${r.qtyPct>0?r.qtyPct.toFixed(0)+'%':'—'}</td>`;
     h+=`<td class="num">${r.dailyGoal!=null?fmt(r.dailyGoal):'—'}</td>`;
     h+=`<td class="num">${r.budgetHrs>0?fmt(r.budgetHrs):'—'}</td>`;
     h+=`<td class="num">${r.actualHrs>0?fmt(r.actualHrs):'—'}</td>`;
     h+=`<td class="num">${r.budgetRate>0?fmt(r.budgetRate):'—'}</td>`;
     h+=`<td class="num">${r.actualRate>0?fmt(r.actualRate):'—'}</td>`;
     h+=`<td class="num ${prodBadge}">${r.productivityPct>0?r.productivityPct.toFixed(0)+'%':'—'}</td>`;
-    h+=`<td class="num">${r.projectedLaborCost>0?fmtD(r.projectedLaborCost):'—'}</td>`;
-    h+=`<td class="num ${varBadge}">${r.varCost===0?'—':((r.varCost>0?'+':'')+fmtD(r.varCost))}</td>`;
+    h+=`<td class="num ${(r.actualHrs>0&&r.budgetRate>0)?hrsVarBadge:''}">${(r.actualHrs>0&&r.budgetRate>0)?((r.hrsVar>=0?'+':'')+fmt(r.hrsVar)):'—'}</td>`;
     h+=`</tr>`;
 
     if(hasDetail){
-      h+=`<tr id="${rowId}" style="display:none;"><td colspan="15" style="padding:0;border:none;">`;
+      h+=`<tr id="${rowId}" style="display:none;"><td colspan="14" style="padding:0;border:none;">`;
       h+=`<div style="background:var(--ash);padding:8px 12px 8px 28px;border-bottom:2px solid var(--sand);">`;
       h+=`<table style="width:100%;border-collapse:collapse;font-size:12px;">`;
       h+=`<tr style="background:var(--sand);color:var(--text);"><th style="padding:4px 8px;text-align:left;">Date</th><th style="padding:4px 8px;text-align:left;">Foreman</th><th style="padding:4px 8px;text-align:right;">Qty</th><th style="padding:4px 8px;text-align:right;">Labor Hrs</th><th style="padding:4px 8px;text-align:right;">Equip Hrs</th><th style="padding:4px 8px;text-align:right;" title="Units per labor hour">Unit/Hr</th><th style="padding:4px 8px;text-align:right;" title="Day's rate ÷ budget rate">vs Budget</th></tr>`;
@@ -9277,8 +9277,7 @@ function renderProductionTracker(job){
   h+=`<td class="num">—</td>`;
   h+=`<td class="num">—</td>`;
   h+=`<td class="num ${overallProductivity>=100?'good':(overallProductivity>=90?'':(overallProductivity>0?'warn':''))}">${overallProductivity>0?overallProductivity.toFixed(0)+'%':'—'}</td>`;
-  h+=`<td class="num">${fmtD(totProjLabor)}</td>`;
-  h+=`<td class="num ${totVarCost<=0?'good':'warn'}">${totVarCost===0?'—':((totVarCost>0?'+':'')+fmtD(totVarCost))}</td>`;
+  h+=`<td class="num ${totActualHrs>0?(totHrsVar>=0?'good':'warn'):''}">${totActualHrs>0?((totHrsVar>=0?'+':'')+fmt(totHrsVar)):'—'}</td>`;
   h+=`</tr>`;
 
   h+='</tbody></table></div></div>';
