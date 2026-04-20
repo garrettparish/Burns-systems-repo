@@ -63,6 +63,13 @@ const EP = {
   quantities:    (_buId: string, jobId: string) => `${HCSS_API_BASE}/heavyjob/api/v1/costTypeQuantity?jobId=${encodeURIComponent(jobId)}`,
 };
 
+// -------------------- SHARED HELPERS --------------------
+// Numeric coercion with NaN → 0 fallback. Used throughout merge + extraction.
+const num = (v: any) => {
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
+};
+
 // -------------------- TYPES --------------------
 interface TokenResponse { access_token: string; token_type: string; expires_in: number; scope?: string }
 
@@ -685,7 +692,6 @@ async function listQuantities(token: string, buCode: string, jobId: string, sinc
 function mergeJobRows(jobCode: string, timeCards: any[], _quantities: any[]): DetailRow[] {
   const map = new Map<string, DetailRow>();
   const rowKey = (date: string, code: string, foreman: string) => `${date}|${code}|${foreman}`;
-  const num = (v: any) => { const n = Number(v); return isFinite(n) ? n : 0; };
   const fmtDate = (v: any) => {
     if (!v) return '';
     const d = new Date(v);
@@ -789,10 +795,6 @@ function extractEquipmentObservations(
     const d = new Date(v);
     return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
   };
-  const toNum = (v: any) => {
-    const n = Number(v);
-    return isFinite(n) ? n : 0;
-  };
   for (const tc of timeCards) {
     const d = fmtDate(tc.date);
     if (!d) continue;
@@ -808,7 +810,7 @@ function extractEquipmentObservations(
         ...(eq.operatingHours || []),
       ];
       let tcHours = 0;
-      for (const h of allHours) tcHours += toNum(h.hours);
+      for (const h of allHours) tcHours += num(h.hours);
 
       // --- (a) latest-observation accumulator ---
       const existing = acc.get(code);

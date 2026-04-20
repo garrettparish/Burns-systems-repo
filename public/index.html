@@ -2479,27 +2479,6 @@ async function spectrumLoadJob(jobNumber) {
   return jobs.find(j => j.job_number === String(jobNumber)) || null;
 }
 
-// Merge engine: decides data source per cost line based on age
-function pickDataSource(hjRow, specRow, cutoffDays) {
-  cutoffDays = cutoffDays || SPECTRUM_FRESHNESS_DAYS;
-  const now = new Date();
-  // If HJ row has a date, check age
-  const hjDate = hjRow && hjRow.date ? new Date(hjRow.date) : null;
-  const hjAgeDays = hjDate ? Math.floor((now - hjDate) / 86400000) : null;
-
-  // Both sources available — use age to decide
-  if (hjRow && specRow) {
-    if (hjAgeDays !== null && hjAgeDays <= cutoffDays) {
-      return { source: 'heavyjob', data: hjRow, age: hjAgeDays, hasVariance: true, specData: specRow };
-    }
-    return { source: 'spectrum', data: specRow, age: hjAgeDays, hasVariance: true, hjData: hjRow };
-  }
-  // Only one source
-  if (specRow) return { source: 'spectrum', data: specRow, age: null, hasVariance: false };
-  if (hjRow) return { source: 'heavyjob', data: hjRow, age: hjAgeDays, hasVariance: false };
-  return null;
-}
-
 // Save a single job to Supabase
 function serializeForStorage(obj){
   if(obj instanceof Date) return { __date: obj.toISOString() };
@@ -2878,46 +2857,6 @@ function getAllDisciplines(job){
 // ═══════════════════════════════════════════
 // CREW HISTORY HELPERS (from HeavyJob imports)
 // ═══════════════════════════════════════════
-function getCrewHistoryForWeek(startDate,endDate){
-  const startISO=startDate.toISOString().split('T')[0];
-  const endISO=endDate.toISOString().split('T')[0];
-  const result={};
-  Store.crewHistory.forEach(h=>{
-    if(h.date>=startISO&&h.date<=endISO){
-      if(!result[h.crewId])result[h.crewId]=[];
-      result[h.crewId].push(h);
-    }
-  });
-  return result;
-}
-
-function getCrewJobForDate(crewId,dateISO){
-  const today=new Date().toISOString().split('T')[0];
-  if(dateISO<=today){
-    const dayRecords=Store.crewHistory.filter(h=>h.crewId===crewId&&h.date===dateISO);
-    if(dayRecords.length){
-      const byJob={};
-      dayRecords.forEach(r=>{byJob[r.jobCode]=(byJob[r.jobCode]||0)+r.hours});
-      return Object.entries(byJob).sort((a,b)=>b[1]-a[1])[0][0];
-    }
-  }
-  const slug=slugify(crewId);
-  const crew=Store.crews[slug];
-  if(!crew||!crew.assignments)return null;
-  for(const a of crew.assignments){
-    if(a.startDate<=dateISO&&a.endDate>=dateISO)return a.jobId;
-  }
-  return null;
-}
-
-function getCrewTradeForDate(crewId,dateISO,jobCode){
-  const dayRecords=Store.crewHistory.filter(h=>h.crewId===crewId&&h.date===dateISO&&h.jobCode===jobCode);
-  if(!dayRecords.length)return null;
-  const topRecord=dayRecords.sort((a,b)=>b.hours-a.hours)[0];
-  const disc=getDiscipline(topRecord.costCode);
-  return Object.entries(TRADE_ABBR).find(([name,abbr])=>disc.name===name)?.[1]||'GN';
-}
-
 function getJobLabel(jobCode){
   if(Store.jobs[jobCode])return Store.jobs[jobCode].meta.name;
   for(const [k,j]of Object.entries(Store.jobs)){
@@ -3912,7 +3851,6 @@ function renderStaging(){
 }
 function toggleStagingRow(i,v){Store.staging.data[i]._selected=v;renderStaging()}
 function delStagingRow(i){Store.staging.data.splice(i,1);renderStaging()}
-function addStagingRow(){const{type,data}=Store.staging;if(type==='activities')data.push({biditem:'',code:'NEW',description:'',quantity:0,units:'',crew:'',crewHours:0,productivityRate:0,manHours:0,calculatedDays:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,totalMaterial:0,totalEquipment:0,directTotal:0,discipline:getDiscipline(''),_selected:true});else if(type==='biditems')data.push({biditem:'NEW',description:'',type:'',clientBidNum:'',units:'',bidQuantity:0,takeoffQuantity:0,labor:0,burden:0,permMat:0,constMat:0,subs:0,eqpOper:0,compEqp:0,outsideEqp:0,directTotal:0,indirects:0,addonBond:0,total:0,balancedTotal:0,unitPrice:0,manHours:0,markup:0,takeoffTotal:0,bidTotal:0,_selected:true});else data.push({id:data.length+1,name:'',start:null,finish:null,durationDays:0,durationStr:'',predecessors:'',status:'',atRisk:'',crew:'',variance:null,_selected:true});editStagingRow(data.length-1)}
 function editStagingRow(i){const t=Store.staging.type;editRow(t==='biditems'?'biditem':t==='activities'?'activity':'schedule',i,true)}
 function cancelStaging(){Store.staging={type:null,data:[]};document.getElementById('stagingArea').style.display='none'}
 function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[Store.activeJob];if(!job)return;const sel=data.filter(d=>d._selected).map(d=>{const c={...d};delete c._selected;return c});if(type==='activities'){job.activities=sel;
@@ -9963,7 +9901,7 @@ function renderSOVBuilder(){
   area.innerHTML=h;
 }
 
-function esc(s){return(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function escJS(s){return(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
 
 function toggleSOVCard(idx){
