@@ -996,6 +996,59 @@ async function loadHcssEquipment(){
   }
 }
 
+// Import the full HCSS equipment list from an xlsx export. Use case: HCSS's
+// equipment master endpoint returns 404 for our tenant, so timecard discovery
+// only picks up machines that have been on a recent timecard. This import
+// lets the user drop in the complete list (incl. idle/yard machines).
+// Re-import is safe: updates description + equipType + rental flag but
+// preserves manual fields (category, location, notes).
+async function importHcssEquipmentXlsx(file){
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(new Uint8Array(buf),{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+    if(!rows.length){alert('No rows found in spreadsheet.');return}
+    let added=0,updated=0,skipped=0;
+    rows.forEach(r=>{
+      const code=String(r['Code']||r['code']||'').trim();
+      if(!code){skipped++;return}
+      const id=equipIdFromCode(code);
+      const description=String(r['Description']||r['description']||'').trim();
+      const equipType=String(r['Equipment Type']||r['equipment_type']||r['Type']||'').trim();
+      const rentalRaw=String(r['Rental']||r['rental']||'').trim().toLowerCase();
+      const isRental=rentalRaw==='yes'||rentalRaw==='y'||rentalRaw==='true'||code.toUpperCase().startsWith('R-');
+      const existing=Store.equipment[id];
+      if(!existing){
+        Store.equipment[id]={
+          id,code,description,
+          category:'Other',
+          location:'',
+          notes:'',
+          source:'hcss-import',
+          _needsCategory:true,
+          hcssEquipType:equipType,
+          isRental,
+        };
+        added++;
+      }else{
+        if(!existing.description&&description)existing.description=description;
+        if(equipType)existing.hcssEquipType=equipType;
+        existing.isRental=isRental;
+        if(!existing.source)existing.source='hcss-import';
+        updated++;
+      }
+    });
+    persistEquipment();
+    refreshEquipUI();
+    log(`HCSS import: ${added} added, ${updated} updated, ${skipped} skipped`);
+    alert(`Imported ${rows.length} rows from the HCSS list:\n\n• ${added} new machine${added===1?'':'s'}\n• ${updated} updated (manual fields preserved)${skipped?`\n• ${skipped} skipped (no code)`:''}\n\nTip: click the "⚠ Set Category" badge on any new row to assign a category.`);
+  }catch(e){
+    console.error('importHcssEquipmentXlsx failed:',e);
+    alert('Import failed: '+e.message);
+  }
+}
+
 // HCSS equipment day-by-day history — mirrors Store.crewHistory. Keyed by
 // "equipId|YYYY-MM-DD" → { jobCode }. Dominant-job resolution when a
 // machine appears on multiple jobs the same day (most hours wins).
@@ -1311,7 +1364,7 @@ function renderEquipmentPlanner(ctx){
       h+=`<tr><td colspan="6" style="padding:4px 12px;font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:${catColor};font-family:Oswald;background:${catColor}11;border-top:2px solid ${catColor}33;font-weight:600;">${esc(eq.category)}s</td></tr>`;
     }
     h+=`<tr><td style="padding:8px 12px;border-bottom:1px solid var(--border);font-weight:500;background:var(--bg);">`;
-    h+=`<div style="font-size:13px;">${esc(eq.code)}</div>`;
+    h+=`<div style="font-size:13px;">${esc(eq.code)}${eq.isRental?' <span style="display:inline-block;padding:0 4px;background:#4A90D922;color:#4A90D9;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="Rental">R</span>':''}</div>`;
     h+=`<div style="font-size:10px;color:var(--text-light);">${esc(eq.description||'')}</div>`;
     h+=`</td>`;
     for(let i=0;i<5;i++){
@@ -1444,12 +1497,13 @@ function renderEquipmentPlanner(ctx){
       }
       const loc=getEquipLastKnownLocation(eq.id);
       const locStr=loc?`<span style="color:var(--green);font-weight:500;">${esc(loc.jobCode)}</span> <span style="color:var(--text-light);font-size:10px;">${esc(loc.jobName||'')}</span>${loc.source==='hcss'?` <span style="color:var(--orange);font-size:9px;">(HCSS)</span>`:''}`:'<span style="color:var(--text-light);">— Yard —</span>';
-      const hcssBadge=eq.source==='hcss'?` <span style="display:inline-block;padding:1px 5px;background:#F2672222;color:#F26722;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="Auto-discovered from HCSS timecards">HCSS</span>`:'';
+      const hcssBadge=(eq.source==='hcss'||eq.source==='hcss-import')?` <span style="display:inline-block;padding:1px 5px;background:#F2672222;color:#F26722;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="From HCSS (timecards or imported list)">HCSS</span>`:'';
+      const rentalBadge=eq.isRental?` <span style="display:inline-block;padding:1px 5px;background:#4A90D922;color:#4A90D9;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="Rental machine">R</span>`:'';
       const catCell=eq._needsCategory
         ? `<span onclick="openEquipModal('${esc(eq.id)}')" style="display:inline-block;padding:3px 8px;background:#fff3cd;color:#664d03;border:1px solid #ffe69c;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;" title="Click to assign a category">⚠ Set Category</span>`
         : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${EQUIP_CAT_COLORS[eq.category]||'#999'};margin-right:4px;"></span>${esc(eq.category)}`;
       h+=`<tr>`;
-      h+=`<td style="font-weight:600;">${esc(eq.code)}${hcssBadge}</td>`;
+      h+=`<td style="font-weight:600;">${esc(eq.code)}${hcssBadge}${rentalBadge}</td>`;
       h+=`<td>${esc(eq.description||'')}</td>`;
       h+=`<td>${catCell}</td>`;
       h+=`<td>${locStr}</td>`;
@@ -9380,7 +9434,7 @@ function renderSettings(){
     nHcss?`<span style="color:var(--orange);">${nHcss} from HCSS</span>`:null,
     nNeedsCat?`<span style="color:#b38500;">${nNeedsCat} need category</span>`:null,
   ].filter(Boolean).join(' · ');
-  h+=`<div class="card" id="settings-fleet"><div class="card-title" style="justify-content:space-between;"><span>Fleet Roster — ${rosterSub}</span><button class="btn-primary btn-sm" onclick="openEquipModal()">+ Add Machine</button></div>`;
+  h+=`<div class="card" id="settings-fleet"><div class="card-title" style="justify-content:space-between;"><span>Fleet Roster — ${rosterSub}</span><div style="display:flex;gap:8px;align-items:center;"><label class="btn-secondary btn-sm" style="cursor:pointer;margin:0;" title="Upload full HCSS equipment list (xlsx). Re-import preserves your manual category/location/notes.">Import HCSS List<input type="file" accept=".xlsx,.xls" onchange="if(this.files[0]){importHcssEquipmentXlsx(this.files[0]);this.value='';}" style="display:none;"></label><button class="btn-primary btn-sm" onclick="openEquipModal()">+ Add Machine</button></div></div>`;
   if(equipList.length===0){
     h+='<div style="padding:20px;text-align:center;color:var(--text-light);font-size:13px;">No equipment yet. HCSS sync auto-discovers machines from timecards, or add one manually.</div>';
   }else{
@@ -9395,12 +9449,13 @@ function renderSettings(){
       }
       const loc=getEquipLastKnownLocation(eq.id);
       const locStr=loc?`<span style="color:var(--green);font-weight:500;">${esc(loc.jobCode)}</span> <span style="color:var(--text-light);font-size:10px;">${esc(loc.jobName||'')}</span>${loc.source==='hcss'?` <span style="color:var(--orange);font-size:9px;">(HCSS)</span>`:''}`:'<span style="color:var(--text-light);">— Yard —</span>';
-      const hcssBadge=eq.source==='hcss'?` <span style="display:inline-block;padding:1px 5px;background:#F2672222;color:#F26722;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="Auto-discovered from HCSS timecards">HCSS</span>`:'';
+      const hcssBadge=(eq.source==='hcss'||eq.source==='hcss-import')?` <span style="display:inline-block;padding:1px 5px;background:#F2672222;color:#F26722;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="From HCSS (timecards or imported list)">HCSS</span>`:'';
+      const rentalBadge=eq.isRental?` <span style="display:inline-block;padding:1px 5px;background:#4A90D922;color:#4A90D9;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.5px;vertical-align:middle;" title="Rental machine">R</span>`:'';
       const catCell=eq._needsCategory
         ? `<span onclick="openEquipModal('${esc(eq.id)}')" style="display:inline-block;padding:3px 8px;background:#fff3cd;color:#664d03;border:1px solid #ffe69c;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;" title="Click to assign a category">⚠ Set Category</span>`
         : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${EQUIP_CAT_COLORS[eq.category]||'#999'};margin-right:4px;"></span>${esc(eq.category)}`;
       h+=`<tr>`;
-      h+=`<td style="font-weight:600;">${esc(eq.code)}${hcssBadge}</td>`;
+      h+=`<td style="font-weight:600;">${esc(eq.code)}${hcssBadge}${rentalBadge}</td>`;
       h+=`<td>${esc(eq.description||'')}</td>`;
       h+=`<td>${catCell}</td>`;
       h+=`<td>${locStr}</td>`;
