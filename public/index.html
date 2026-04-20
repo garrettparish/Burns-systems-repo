@@ -4751,6 +4751,50 @@ function rollupActualsDetail(detail,prevActuals){
   const prevByCode={};
   (prevActuals||[]).forEach(a=>{if(a&&a.code)prevByCode[a.code]=a});
   const byCode={};
+  // Seed byCode with ALL prior Summary codes so Summary-only codes (those with no
+  // daily detail rows) are preserved after rollup. Without this, uploading Detail
+  // after Summary would drop every code not appearing in Detail.
+  Object.entries(prevByCode).forEach(([code,prev])=>{
+    byCode[code]={
+      code,
+      description:prev.description||'',
+      unit:prev.unit||'',
+      budgetQty:Number(prev.budgetQty)||0,
+      budgetHours:Number(prev.budgetHours)||0,
+      budgetEquipHrs:Number(prev.budgetEquipHrs)||0,
+      budgetLabor:Number(prev.budgetLabor)||0,
+      budgetEquip:Number(prev.budgetEquip)||0,
+      budgetMat:Number(prev.budgetMat)||0,
+      budgetSub:Number(prev.budgetSub)||0,
+      budgetCost:Number(prev.budgetCost)||0,
+      qtyInstalled:0,
+      actualHours:0,
+      actualEquipHrs:0,
+      actualLabor:0,
+      actualEquip:0,
+      actualMat:0,
+      actualSub:0,
+      actualCost:0,
+      laborCostVar:Number(prev.laborCostVar)||0,
+      equipCostVar:Number(prev.equipCostVar)||0,
+      matCostVar:Number(prev.matCostVar)||0,
+      subCostVar:Number(prev.subCostVar)||0,
+      allCostVar:Number(prev.allCostVar)||0,
+      pctComplete:Number(prev.pctComplete)||0,
+      _prevActualLabor:Number(prev.actualLabor)||0,
+      _prevActualEquip:Number(prev.actualEquip)||0,
+      _prevActualMat:Number(prev.actualMat)||0,
+      _prevActualSub:Number(prev.actualSub)||0,
+      _prevActualCost:Number(prev.actualCost)||0,
+      _prevActualHours:Number(prev.actualHours)||0,
+      _prevActualEquipHrs:Number(prev.actualEquipHrs)||0,
+      _prevQtyInstalled:Number(prev.qtyInstalled)||0,
+      _hasSummaryBudget:Number(prev.budgetCost)>0||Number(prev.budgetLabor)>0||Number(prev.budgetHours)>0,
+      lastDate:null,
+      firstDate:null,
+      dayCount:0,
+    };
+  });
   detail.forEach(d=>{
     if(!byCode[d.costCode]){
       const prev=prevByCode[d.costCode]||{};
