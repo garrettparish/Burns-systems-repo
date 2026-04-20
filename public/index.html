@@ -4640,9 +4640,11 @@ function saveNewTask(){
     durationDays=parseInt(durVal)||1;
     finish=new Date(start.getTime()+durationDays*86400000);
   }
-  // Create new schedule task
+  // Create new schedule task. Use nextTaskId (max+1) rather than length+1 —
+  // the latter collides with existing IDs whenever any task has been deleted
+  // or the schedule has been partially re-imported.
   const newTask={
-    id:job.schedule.length+1,
+    id:nextTaskId(job.schedule),
     name:name,
     start:start,
     finish:finish,
@@ -4703,6 +4705,60 @@ function confirmMapping(){
   saveJob(Store.activeJob);
 }
 
+// Next safe task id — one more than the max existing numeric id. Use this for
+// NEW tasks instead of `schedule.length + 1`, which collides with existing IDs
+// whenever any task has been deleted or re-imported.
+function nextTaskId(schedule){
+  const ids=(schedule||[]).map(t=>parseInt(t.id)||0);
+  return (ids.length?Math.max(...ids):0)+1;
+}
+
+// Return the list of task IDs that appear on more than one schedule task.
+// Duplicate IDs cause tasks to share a single taskMap entry — changing the
+// mapping on one silently changes the other, which is never intended.
+function detectDuplicateTaskIds(job){
+  if(!job||!job.schedule)return [];
+  const counts={};
+  job.schedule.forEach(t=>{const k=String(t.id);counts[k]=(counts[k]||0)+1});
+  return Object.entries(counts).filter(([,c])=>c>1).map(([id])=>id);
+}
+
+// Renumber every duplicate task ID. The first occurrence keeps its ID (and its
+// taskMap entry); subsequent occurrences get fresh unique IDs and end up
+// unmapped — the user can re-map them to different pay items / activities.
+function fixDuplicateTaskIds(){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  const dups=detectDuplicateTaskIds(job);
+  if(!dups.length){alert('No duplicate task IDs found.');return}
+  if(!confirm(`Found ${dups.length} duplicate task ID${dups.length===1?'':'s'}: ${dups.join(', ')}.\n\nThis will renumber the duplicate copies and leave them unmapped so you can re-map them separately from the original. Continue?`))return;
+  const seen=new Set();
+  let nxt=nextTaskId(job.schedule);
+  const changes=[];
+  job.schedule.forEach(t=>{
+    const id=String(t.id);
+    if(seen.has(id)){
+      const oldId=t.id;
+      const newId=nxt++;
+      t.id=newId;
+      changes.push({name:t.name||'(unnamed)',oldId,newId});
+      // Intentionally do NOT copy taskMap[oldId] → taskMap[newId]. The shared
+      // entry belongs to the original task; the renumbered copy was only ever
+      // showing those mappings by accident.
+    } else {
+      seen.add(id);
+    }
+  });
+  if(!changes.length){alert('No changes needed.');return}
+  const msg=`Renumbered ${changes.length} task${changes.length===1?'':'s'}:\n\n`+
+    changes.map(c=>`${c.oldId} → ${c.newId}: ${c.name}`).join('\n')+
+    `\n\nThe renumbered task${changes.length===1?' is':'s are'} now unmapped — re-map ${changes.length===1?'it':'them'} using the Pay Items / Activities selectors.`;
+  log(`Fixed duplicate task IDs: ${changes.map(c=>c.oldId+'→'+c.newId).join(', ')}`);
+  alert(msg);
+  saveJob(Store.activeJob);
+  renderMapping();
+  if(typeof renderSchedule==='function') renderSchedule();
+}
+
 // Per-task mapping mode — transient UI state, resets on re-render.
 // 'bi' shows bid-item dropdown, 'act' shows activities grouped by
 // currently-mapped bid items. Stored by task id.
@@ -4735,7 +4791,18 @@ function renderMapping(){
     totalActMappings+=getTaskActivities(job.taskMap,tid).length;
   });
 
-  let h='<div class="map-banner">';
+  // Surface duplicate task IDs prominently — they cause silent mapping sharing.
+  const _dupIds=detectDuplicateTaskIds(job);
+  let h='';
+  if(_dupIds.length){
+    h+=`<div class="card" style="margin-bottom:12px;border:2px solid var(--red);background:#FFF5F5;">`;
+    h+=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:4px 0;">`;
+    h+=`<div><div style="font-family:Oswald;font-size:13px;letter-spacing:.5px;text-transform:uppercase;color:var(--red);margin-bottom:4px;">⚠ Duplicate Task IDs</div>`;
+    h+=`<div style="font-size:12px;color:var(--text);">${_dupIds.length} task ID${_dupIds.length===1?'':'s'} (${_dupIds.map(id=>'#'+id).join(', ')}) appear on more than one schedule task. Tasks with the same ID share one mapping — changing one silently changes the other. Click Fix to give each task its own ID.</div></div>`;
+    h+=`<button class="btn-primary btn-sm" style="background:var(--red);white-space:nowrap;" onclick="fixDuplicateTaskIds()">Fix Duplicate IDs</button>`;
+    h+=`</div></div>`;
+  }
+  h+='<div class="map-banner">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">';
   h+='<div><h3>Map Schedule Tasks → Pay Items / Activities</h3>';
   h+='<p>Map each schedule task to pay items (coarse) or directly to activities (fine). Switch modes per task. Activity mappings override their pay-item envelope on the Job Cost Schedule.</p></div>';
