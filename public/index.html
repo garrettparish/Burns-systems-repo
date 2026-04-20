@@ -4487,6 +4487,43 @@ function buildActivityTaskIndex(job){
   return idx;
 }
 
+// Capture the open mapping dropdown's state (task id, search query, scroll).
+// renderMapping() rebuilds the entire table, which would otherwise close the
+// dropdown on every checkbox click. Capture before the re-render, restore after.
+function _captureOpenMapDD(){
+  const lists=document.querySelectorAll('.map-multi-dd .map-dd-list');
+  let openList=null;
+  lists.forEach(l=>{ if(l.style.display==='block') openList=l; });
+  if(!openList) return null;
+  const container=openList.closest('.map-multi-dd');
+  const taskId=container?container.dataset.taskid:null;
+  if(!taskId) return null;
+  const searchInput=openList.querySelector('input[type="text"]');
+  const scrollPanel=openList.querySelector('.map-dd-scroll');
+  return {
+    taskId,
+    searchValue:searchInput?searchInput.value:'',
+    scrollTop:scrollPanel?scrollPanel.scrollTop:0,
+  };
+}
+function _restoreOpenMapDD(state){
+  if(!state||!state.taskId) return;
+  const container=document.querySelector(`.map-multi-dd[data-taskid="${state.taskId}"]`);
+  if(!container) return;
+  const list=container.querySelector('.map-dd-list');
+  if(!list) return;
+  list.style.display='block';
+  const searchInput=list.querySelector('input[type="text"]');
+  if(searchInput){
+    searchInput.value=state.searchValue||'';
+    if(state.searchValue) filterMapDD(searchInput);
+    // refocus without stealing cursor position mid-click
+    searchInput.focus({preventScroll:true});
+  }
+  const scrollPanel=list.querySelector('.map-dd-scroll');
+  if(scrollPanel) scrollPanel.scrollTop=state.scrollTop||0;
+}
+
 function updateTaskMapping(taskId, bidItemId, isAdd){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.taskMap)job.taskMap={};
@@ -4499,7 +4536,9 @@ function updateTaskMapping(taskId, bidItemId, isAdd){
   }
   if(entries.length)job.taskMap[taskId]=entries;
   else delete job.taskMap[taskId];
+  const _dd=_captureOpenMapDD();
   renderMapping();
+  _restoreOpenMapDD(_dd);
   saveJob(Store.activeJob);
 }
 
@@ -4516,7 +4555,9 @@ function updateTaskActivityMapping(taskId, actCode, isAdd){
   }
   if(entries.length)job.taskMap[taskId]=entries;
   else delete job.taskMap[taskId];
+  const _dd=_captureOpenMapDD();
   renderMapping();
+  _restoreOpenMapDD(_dd);
   saveJob(Store.activeJob);
 }
 
@@ -4773,7 +4814,7 @@ function renderMapping(){
     ddHtml+=`<div class="map-dd-list" style="display:none;position:absolute;z-index:100;top:100%;left:0;right:0;max-height:320px;background:white;border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.15);margin-top:2px;">`;
     const placeholder=isActMode?'Search activities...':'Search pay items...';
     ddHtml+=`<div style="padding:4px;border-bottom:1px solid var(--border);position:sticky;top:0;background:white;z-index:1;"><input type="text" placeholder="${placeholder}" onclick="event.stopPropagation()" oninput="filterMapDD(this)" style="width:100%;box-sizing:border-box;padding:4px 8px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-family:'Source Serif 4',serif;"></div>`;
-    ddHtml+=`<div style="overflow-y:auto;max-height:270px;">`;
+    ddHtml+=`<div class="map-dd-scroll" style="overflow-y:auto;max-height:270px;">`;
 
     if(!isActMode){
       // ── BID-ITEM MODE ──
