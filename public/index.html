@@ -260,12 +260,51 @@ tr:hover{background:#FAF8F5}
 </head>
 <body>
 
+<!-- ═══════════════════════════════════════════
+     LOGIN OVERLAY — gates the entire app
+     Shown until sb.auth confirms a valid session.
+═══════════════════════════════════════════ -->
+<div id="loginOverlay" style="display:none;position:fixed;inset:0;z-index:10000;background:linear-gradient(135deg,#1a1a1a 0%,#2c2c2c 100%);align-items:center;justify-content:center;font-family:'Source Serif 4',serif;">
+  <div style="background:white;border-radius:10px;padding:32px 40px;width:420px;max-width:calc(100vw - 40px);box-shadow:0 12px 40px rgba(0,0,0,.4);">
+    <div style="text-align:center;margin-bottom:20px;">
+      <div style="font-family:Oswald;font-size:26px;letter-spacing:1.5px;font-weight:600;color:var(--orange);">BURNS DIRT</div>
+      <div style="font-family:Oswald;font-size:13px;letter-spacing:2px;color:var(--text-light);margin-top:2px;">PROJECT CONTROLS</div>
+    </div>
+
+    <div id="loginForm">
+      <p style="font-size:13px;color:var(--text-light);text-align:center;margin-bottom:18px;">Enter your email to sign in. We'll send you a one-click login link.</p>
+      <input id="loginEmail" type="email" autocomplete="email" placeholder="you@burnsdirt.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;margin-bottom:10px;" onkeydown="if(event.key==='Enter')handleLogin()">
+      <button id="loginBtn" onclick="handleLogin()" style="width:100%;padding:10px;background:var(--orange);color:white;border:none;border-radius:6px;font-family:Oswald;font-size:14px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#D55A1E'" onmouseout="this.style.background='var(--orange)'">Send magic link</button>
+      <div id="loginError" style="color:var(--red);font-size:12px;margin-top:10px;min-height:14px;text-align:center;"></div>
+    </div>
+
+    <div id="loginSent" style="display:none;text-align:center;">
+      <div style="font-size:40px;color:var(--green);margin-bottom:12px;">&#10004;</div>
+      <div style="font-family:Oswald;font-size:16px;letter-spacing:1px;text-transform:uppercase;color:var(--green);margin-bottom:8px;">Check your inbox</div>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;">We sent a sign-in link to <strong id="loginSentEmail"></strong>. Click it to finish logging in.</p>
+      <button onclick="resetLoginForm()" style="background:none;border:none;color:var(--orange);font-size:12px;cursor:pointer;text-decoration:underline;">Use a different email</button>
+    </div>
+  </div>
+</div>
+
 <div class="topbar">
   <div class="topbar-brand">Burns Dirt <span>Project Controls</span></div>
   <div style="display:flex;align-items:center;gap:12px;">
     <div class="topbar-phase">Phase 1A</div>
     <button onclick="switchToSubTab('setup')" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:18px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Project Set Up" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#9881;</button>
     <button onclick="showAdminPinModal()" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:15px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Admin Password" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#x1f511;</button>
+    <div id="userMenu" style="display:none;position:relative;">
+      <button id="userMenuBtn" onclick="toggleUserMenu()" style="background:none;border:1px solid rgba(255,255,255,.2);cursor:pointer;color:var(--sand);font-size:12px;padding:4px 10px;border-radius:4px;font-family:'Source Serif 4',serif;display:flex;align-items:center;gap:6px;" title="Account">
+        <span style="width:20px;height:20px;border-radius:50%;background:var(--orange);color:white;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;" id="userMenuInitial"></span>
+        <span id="userMenuEmail"></span>
+      </button>
+      <div id="userMenuDropdown" style="display:none;position:absolute;right:0;top:calc(100% + 4px);background:white;color:var(--text);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.18);min-width:200px;z-index:1000;font-family:'Source Serif 4',serif;">
+        <div style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-light);">
+          Signed in as<br><strong id="userMenuEmailFull" style="color:var(--text);word-break:break-all;"></strong>
+        </div>
+        <button onclick="handleLogout()" style="width:100%;padding:10px 14px;background:none;border:none;text-align:left;cursor:pointer;font-size:13px;color:var(--text);font-family:inherit;" onmouseover="this.style.background='var(--ash)'" onmouseout="this.style.background='none'">Sign out</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2439,6 +2478,124 @@ const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // ═══════════════════════════════════════════
+// AUTH — magic-link login, gates app startup
+// ═══════════════════════════════════════════
+let _currentUser = null;
+let _appBooted = false;
+
+function showLoginOverlay(){
+  const el = document.getElementById('loginOverlay');
+  if(el) el.style.display = 'flex';
+  const um = document.getElementById('userMenu');
+  if(um) um.style.display = 'none';
+}
+function hideLoginOverlay(){
+  const el = document.getElementById('loginOverlay');
+  if(el) el.style.display = 'none';
+}
+function updateUserMenu(user){
+  const um = document.getElementById('userMenu');
+  if(!user || !um){ if(um) um.style.display='none'; return; }
+  um.style.display = 'inline-block';
+  const email = user.email || '(no email)';
+  const shortEmail = email.length > 20 ? email.split('@')[0] : email;
+  document.getElementById('userMenuEmail').textContent = shortEmail;
+  document.getElementById('userMenuEmailFull').textContent = email;
+  document.getElementById('userMenuInitial').textContent = (email[0]||'?').toUpperCase();
+}
+function toggleUserMenu(){
+  const dd = document.getElementById('userMenuDropdown');
+  if(!dd) return;
+  dd.style.display = dd.style.display === 'block' ? 'none' : 'block';
+}
+// Close the user menu on outside-click
+document.addEventListener('click', function(e){
+  if(!e.target.closest('#userMenu')){
+    const dd = document.getElementById('userMenuDropdown');
+    if(dd) dd.style.display = 'none';
+  }
+});
+
+async function handleLogin(){
+  const emailInput = document.getElementById('loginEmail');
+  const errEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+  const email = (emailInput.value || '').trim().toLowerCase();
+  errEl.textContent = '';
+  if(!email || !email.includes('@')){ errEl.textContent = 'Please enter a valid email.'; return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin + window.location.pathname }
+    });
+    if(error){ errEl.textContent = error.message || 'Failed to send link.'; return; }
+    document.getElementById('loginSentEmail').textContent = email;
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('loginSent').style.display = 'block';
+  } catch(e){
+    errEl.textContent = e.message || 'Unexpected error.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send magic link';
+  }
+}
+function resetLoginForm(){
+  document.getElementById('loginForm').style.display = 'block';
+  document.getElementById('loginSent').style.display = 'none';
+  document.getElementById('loginError').textContent = '';
+  const em = document.getElementById('loginEmail');
+  if(em){ em.value = ''; em.focus(); }
+}
+async function handleLogout(){
+  try { await sb.auth.signOut(); } catch(e){ console.warn('signOut error', e); }
+  // Hard reload — simplest way to reset all in-memory Store state cleanly
+  location.reload();
+}
+
+// Boot the app once auth is confirmed. Idempotent.
+function bootApp(){
+  if(_appBooted) return;
+  _appBooted = true;
+  hideLoginOverlay();
+  updateUserMenu(_currentUser);
+  // The existing loadJobs() call at the end of the script already fires on
+  // initial load; if it ran before the session was available (rare), invoke
+  // it explicitly here. loadJobs is safe to call multiple times — later
+  // calls just overwrite Store.jobs with the fresh server state.
+  if(typeof loadJobs === 'function') loadJobs();
+}
+
+async function initAuth(){
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    if(session && session.user){
+      _currentUser = session.user;
+      bootApp();
+    } else {
+      showLoginOverlay();
+    }
+  } catch(e){
+    console.error('Auth init error', e);
+    showLoginOverlay();
+  }
+  // Keep state in sync — handles magic-link redirects and explicit logout
+  sb.auth.onAuthStateChange((event, session) => {
+    if((event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') && session && session.user){
+      _currentUser = session.user;
+      bootApp();
+    } else if(event === 'SIGNED_OUT'){
+      _currentUser = null;
+      showLoginOverlay();
+    }
+  });
+}
+
+// Kick off auth immediately. The rest of the app's startup code runs
+// independently but guarded helpers (loadJobs, saveJob, etc.) bail out
+// when there's no logged-in user.
+initAuth();
+
+// ═══════════════════════════════════════════
 // SPECTRUM — Burns Finance Supabase (read-only)
 // ═══════════════════════════════════════════
 const SPECTRUM_URL = 'https://bodcpnytvonucefnbmyz.supabase.co';
@@ -2488,17 +2645,41 @@ function serializeForStorage(obj){
   }
   return obj;
 }
-async function saveJob(jobId){
+async function saveJob(jobId, reason){
   const job = Store.jobs[jobId];
   if(!job) return;
+  // Guard: bail out if there's no authenticated user. Avoids writing with a null
+  // updated_by which would fail RLS anyway.
+  if(!_currentUser){ console.warn('saveJob skipped — not logged in'); return; }
   const serialized = serializeForStorage(job);
-  const { error } = await sb.from('jobs').upsert({ id: jobId, data: serialized });
-  if(error){ console.error('Save error:', error); log('⚠ Save failed: ' + error.message); }
-  else { console.log('Saved job', jobId); }
+  const userId = _currentUser.id;
+  const userEmail = _currentUser.email || null;
+  const nowIso = new Date().toISOString();
+  const { error } = await sb.from('jobs').upsert({
+    id: jobId,
+    data: serialized,
+    updated_by: userId,
+    updated_at: nowIso
+  });
+  if(error){ console.error('Save error:', error); log('⚠ Save failed: ' + error.message); return; }
+  console.log('Saved job', jobId);
+  // Stamp in-memory so the UI can show "last edited by …" without a reload
+  job._lastEditedBy = userEmail;
+  job._lastEditedAt = nowIso;
+  // Fire-and-forget audit log entry
+  sb.from('job_edits').insert({
+    job_id: String(jobId),
+    user_id: userId,
+    user_email: userEmail,
+    action: 'update',
+    summary: reason || null
+  }).then(({error:e})=>{ if(e) console.warn('Audit log error', e); });
 }
 
 // Load all jobs from Supabase on startup
 async function loadJobs(){
+  // Don't fetch until auth has settled — RLS will block anon queries anyway.
+  if(!_currentUser){ console.log('loadJobs deferred — waiting for auth'); return; }
   const { data, error } = await sb.from('jobs').select('*');
   if(error){ console.error('Load error:', error); return; }
   if(!data || !data.length){ console.log('No saved jobs found'); return; }
@@ -2520,6 +2701,10 @@ async function loadJobs(){
   }
   data.forEach(row => {
     const job = reviveDates(row.data);
+    // Attach edit metadata from the row (not from data blob) so the UI can
+    // show "last edited by …" without a round-trip.
+    if(row.updated_at) job._lastEditedAt = row.updated_at;
+    if(row.updated_by) job._lastEditedByUserId = row.updated_by;
     // Migrate taskMap from index-based to task.id-based
     if(job.taskMap&&job.schedule&&job.schedule.length){
       const oldKeys=Object.keys(job.taskMap);
@@ -2536,6 +2721,9 @@ async function loadJobs(){
         console.log('Migrated taskMap from indices to task IDs',newMap);
       }
     }
+    // Normalize taskMap entries to tagged {type,id} form (idempotent).
+    // Handles legacy: string or string[] → [{type:'bi',id}, ...].
+    if(typeof migrateTaskMap==='function') migrateTaskMap(job);
     Store.jobs[row.id] = job;
   });
   const ids = Object.keys(Store.jobs);
@@ -2777,10 +2965,18 @@ async function hcssLoadIntoActiveJob(){
   log(`HCSS → ${job.meta.name}: ${detail.length} synced rows merged into actuals.`);
 }
 
-// Delete a job from Supabase
+// Delete a job from Supabase + audit entry
 async function deleteJob(jobId){
+  if(!_currentUser){ console.warn('deleteJob skipped — not logged in'); return; }
   const { error } = await sb.from('jobs').delete().eq('id', jobId);
-  if(error) console.error('Delete error:', error);
+  if(error){ console.error('Delete error:', error); return; }
+  sb.from('job_edits').insert({
+    job_id: String(jobId),
+    user_id: _currentUser.id,
+    user_email: _currentUser.email || null,
+    action: 'delete',
+    summary: 'Job deleted'
+  }).then(({error:e})=>{ if(e) console.warn('Audit log error', e); });
 }
 
 // ═══════════════════════════════════════════
@@ -4034,7 +4230,7 @@ function autoSuggestAll(){
   job.schedule.forEach(t=>{
     if(!job.taskMap[t.id]){
       const suggested=suggestBidItem(t.name,job.bidItems,job.activities);
-      if(suggested)job.taskMap[t.id]=[suggested];
+      if(suggested)job.taskMap[t.id]=[{type:'bi',id:String(suggested)}];
     }
   });
   renderMapping();
@@ -4045,67 +4241,90 @@ function autoSuggestAll(){
 
 function clearAllMappings(){const job=Store.jobs[Store.activeJob];if(!job)return;job.taskMap={};renderMapping();log('All mappings cleared.');saveJob(Store.activeJob)}
 
-// Helper: get bid items for a task (handles both old string and new array format)
-function getTaskBidItems(tm, taskId){
+// ──────────────────────────────────────────────────────────────────────────────
+// taskMap entry format
+// ──────────────────────────────────────────────────────────────────────────────
+// Legacy formats we migrate from:
+//   taskMap[id] = "500"                            // single string (oldest)
+//   taskMap[id] = ["500","501"]                    // array of bid-item strings
+// Current format:
+//   taskMap[id] = [{type:'bi', id:'500'}, {type:'act', id:'X-100'}, ...]
+// Tagged entries let one task map to a mix of whole bid items AND specific
+// activities. Activities override their own bid-item envelope at render time.
+// ──────────────────────────────────────────────────────────────────────────────
+function _taskMapEntriesRaw(tm, taskId){
   const v=tm[taskId];
   if(!v) return [];
-  if(Array.isArray(v)) return v;
-  return [v]; // backward compat: old string format
+  const arr=Array.isArray(v)?v:[v];
+  return arr.map(e=>{
+    if(typeof e==='string')return {type:'bi',id:e};
+    if(e&&typeof e==='object'&&e.type&&e.id!=null)return {type:e.type,id:String(e.id)};
+    return null;
+  }).filter(Boolean);
+}
+// Helper: get bid items for a task (legacy callers)
+function getTaskBidItems(tm, taskId){
+  return _taskMapEntriesRaw(tm,taskId).filter(e=>e.type==='bi').map(e=>e.id);
+}
+// Helper: get activity codes directly mapped to a task
+function getTaskActivities(tm, taskId){
+  return _taskMapEntriesRaw(tm,taskId).filter(e=>e.type==='act').map(e=>e.id);
+}
+// Helper: get all entries (tagged form), used when we want both types together
+function getTaskEntries(tm, taskId){
+  return _taskMapEntriesRaw(tm,taskId);
+}
+// Migrate a job's taskMap in-place. Idempotent — safe to run multiple times.
+function migrateTaskMap(job){
+  if(!job||!job.taskMap)return;
+  Object.keys(job.taskMap).forEach(k=>{
+    job.taskMap[k]=_taskMapEntriesRaw(job.taskMap,k);
+  });
+}
+// Build reverse index: activityCode → [taskId,...] for direct activity mappings.
+// Cached on the job object; rebuilt by callers that mutate taskMap.
+function buildActivityTaskIndex(job){
+  const idx={};
+  if(!job||!job.taskMap)return idx;
+  Object.keys(job.taskMap).forEach(taskId=>{
+    getTaskActivities(job.taskMap,taskId).forEach(actCode=>{
+      if(!idx[actCode])idx[actCode]=[];
+      idx[actCode].push(taskId);
+    });
+  });
+  return idx;
 }
 
 function updateTaskMapping(taskId, bidItemId, isAdd){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   if(!job.taskMap)job.taskMap={};
-  let current=getTaskBidItems(job.taskMap,taskId);
+  // Work in the tagged form so activity entries on this task aren't wiped out
+  let entries=getTaskEntries(job.taskMap,taskId);
   if(isAdd){
-    if(!current.includes(bidItemId))current.push(bidItemId);
+    if(!entries.some(e=>e.type==='bi'&&e.id===String(bidItemId)))entries.push({type:'bi',id:String(bidItemId)});
   }else{
-    current=current.filter(b=>b!==bidItemId);
+    entries=entries.filter(e=>!(e.type==='bi'&&e.id===String(bidItemId)));
   }
-  if(current.length)job.taskMap[taskId]=current;
+  if(entries.length)job.taskMap[taskId]=entries;
   else delete job.taskMap[taskId];
-  // Update tags + row style inline (no full re-render — keeps dropdown open)
-  const dd=document.querySelector(`.map-multi-dd[data-taskid="${taskId}"]`);
-  if(dd){
-    const tagArea=dd.querySelector('.map-dd-tags');
-    const isMapped=current.length>0;
-    if(tagArea){
-      let tH='';
-      if(!isMapped){tH='<span style="color:var(--text-light);font-size:12px;">— Unassigned —</span>'}
-      else{current.forEach(bi=>{const b=job.bidItems.find(x=>x.biditem===bi);const desc=b?b.description:'';const sd=desc.length>20?desc.substring(0,20)+'…':desc;tH+=`<span style="display:inline-block;background:var(--ash);border-radius:3px;padding:1px 6px;margin:1px 2px;font-size:11px;white-space:nowrap;">${bi}${sd?' — '+sd:''} <span style="cursor:pointer;color:var(--red);font-weight:bold;margin-left:3px;" onclick="event.stopPropagation();updateTaskMapping(${taskId},'${bi}',false)">×</span></span>`})}
-      tagArea.innerHTML=tH;
-    }
-    // Hide/show item in dropdown list
-    if(isAdd){
-      const item=dd.querySelector(`.map-dd-item[data-biditem="${bidItemId}"]`);
-      if(item)item.style.display='none';
-    } else {
-      // Item removed via × tag — do full re-render to add it back to the dropdown list
-      renderMapping();
-      saveJob(Store.activeJob);
-      return;
-    }
-    // Hide discipline group headers if all items in group are now hidden
-    dd.querySelectorAll('.map-dd-group').forEach(gh=>{
-      let next=gh.nextElementSibling;let hasVisible=false;
-      while(next&&next.classList.contains('map-dd-item')){if(next.style.display!=='none')hasVisible=true;next=next.nextElementSibling}
-      gh.style.display=hasVisible?'':'none';
-    });
-    // Update border/bg color
-    const trigger=dd.querySelector('.map-dd-trigger');
-    if(trigger){trigger.style.borderColor=isMapped?'var(--green)':'var(--border)';trigger.style.background=isMapped?'#F4F7F4':'#FFFDF0'}
-    // Update row bg
-    const row=dd.closest('tr');
-    if(row)row.style.background=isMapped?'':'#FFFDF0';
-    // Update progress bar
-    const mapped=Object.keys(job.taskMap).length;const total=job.schedule.length;const pct=total>0?Math.round(mapped/total*100):0;
-    const mc=document.querySelector('.mapped-count');if(mc)mc.textContent=mapped+' mapped';
-    const uc=document.querySelector('.unmapped-count');if(uc)uc.textContent=(total-mapped)+' unmapped';
-    const pb=document.querySelector('.map-pct-label');if(pb)pb.textContent=pct+'%';
-    const bar=document.querySelector('.map-pct-bar');if(bar)bar.style.width=pct+'%';
-  } else {
-    renderMapping(); // fallback: full re-render if DOM element not found
+  renderMapping();
+  saveJob(Store.activeJob);
+}
+
+// Add / remove a direct activity→task mapping. Mirrors updateTaskMapping.
+function updateTaskActivityMapping(taskId, actCode, isAdd){
+  const job=Store.jobs[Store.activeJob];if(!job)return;
+  if(!job.taskMap)job.taskMap={};
+  let entries=getTaskEntries(job.taskMap,taskId);
+  const code=String(actCode);
+  if(isAdd){
+    if(!entries.some(e=>e.type==='act'&&e.id===code))entries.push({type:'act',id:code});
+  }else{
+    entries=entries.filter(e=>!(e.type==='act'&&e.id===code));
   }
+  if(entries.length)job.taskMap[taskId]=entries;
+  else delete job.taskMap[taskId];
+  renderMapping();
   saveJob(Store.activeJob);
 }
 
@@ -4202,9 +4421,9 @@ function saveNewTask(){
     atRisk:'No',
   };
   job.schedule.push(newTask);
-  // Auto-map to the bid item
+  // Auto-map to the bid item (tagged-entry form)
   if(!job.taskMap)job.taskMap={};
-  job.taskMap[newTask.id]=[biditem];
+  job.taskMap[newTask.id]=[{type:'bi',id:String(biditem)}];
   // Update meta dates
   const dates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
   if(dates.length){job.meta.startDate=new Date(Math.min(...dates));job.meta.endDate=new Date(Math.max(...dates))}
@@ -4219,9 +4438,20 @@ function confirmMapping(){
   const job=Store.jobs[Store.activeJob];if(!job)return;
   const mapped=Object.keys(job.taskMap||{}).length;
   // Check for bid items with activities but no schedule task mapped
-  const mappedBidItems=new Set(Object.values(job.taskMap||{}).flat());
+  // A bid item is considered mapped if (a) it's directly mapped to a task, OR
+  // (b) at least one activity under it is directly mapped to a task.
+  const mappedBidItems=new Set();
+  Object.keys(job.taskMap||{}).forEach(tid=>{
+    getTaskBidItems(job.taskMap,tid).forEach(b=>mappedBidItems.add(String(b)));
+  });
+  const _cmActIdx=buildActivityTaskIndex(job);
+  job.activities.forEach(a=>{
+    if(_cmActIdx[String(a.code)]&&_cmActIdx[String(a.code)].length){
+      mappedBidItems.add(String(a.biditem||''));
+    }
+  });
   const orphanBids=job.bidItems.filter(b=>{
-    if(mappedBidItems.has(b.biditem))return false;
+    if(mappedBidItems.has(String(b.biditem)))return false;
     return job.activities.some(a=>String(a.biditem)===String(b.biditem));
   });
   if(orphanBids.length){
@@ -4240,6 +4470,14 @@ function confirmMapping(){
   saveJob(Store.activeJob);
 }
 
+// Per-task mapping mode — transient UI state, resets on re-render.
+// 'bi' shows bid-item dropdown, 'act' shows activities grouped by
+// currently-mapped bid items. Stored by task id.
+let _mapDDMode={};
+function setMapDDMode(taskId,mode){
+  _mapDDMode[String(taskId)]=mode;
+  renderMapping();
+}
 function renderMapping(){
   const el=document.getElementById('mappingArea');
   const job=Store.jobs[Store.activeJob];
@@ -4257,16 +4495,25 @@ function renderMapping(){
   const sortedGroups=discOrder.filter(d=>discGroups[d]).map(d=>({name:d,items:discGroups[d]}));
   Object.keys(discGroups).filter(d=>!discOrder.includes(d)).forEach(d=>sortedGroups.push({name:d,items:discGroups[d]}));
 
+  // Totals for header counts
+  let totalBiMappings=0,totalActMappings=0;
+  Object.keys(job.taskMap).forEach(tid=>{
+    totalBiMappings+=getTaskBidItems(job.taskMap,tid).length;
+    totalActMappings+=getTaskActivities(job.taskMap,tid).length;
+  });
+
   let h='<div class="map-banner">';
   h+='<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">';
-  h+='<div><h3>Map Schedule Tasks → Pay Items</h3>';
-  h+='<p>Assign each schedule task to a pay item. This links your schedule to phase codes, cost tracking, and earned value.</p></div>';
+  h+='<div><h3>Map Schedule Tasks → Pay Items / Activities</h3>';
+  h+='<p>Map each schedule task to pay items (coarse) or directly to activities (fine). Switch modes per task. Activity mappings override their pay-item envelope on the Job Cost Schedule.</p></div>';
   h+='<div style="display:flex;gap:8px;">';
   h+='<button class="map-auto-btn" onclick="autoSuggestAll()">Auto-Suggest</button>';
   h+='<button class="btn-secondary btn-sm" onclick="clearAllMappings()">Clear All</button>';
   h+='<button class="btn-green" onclick="confirmMapping()">Confirm Mapping</button>';
   h+='</div></div>';
-  h+=`<div style="margin-top:12px;"><div style="display:flex;justify-content:space-between;font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px;"><span class="mapped-count">${mapped} mapped</span><span class="unmapped-count">${total-mapped} unmapped</span><span class="map-pct-label">${pct}%</span></div>`;
+  h+=`<div style="margin-top:12px;"><div style="display:flex;justify-content:space-between;font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px;"><span class="mapped-count">${mapped} mapped</span>`;
+  h+=`<span style="color:var(--text-light);">${totalBiMappings} pay-item · ${totalActMappings} activity</span>`;
+  h+=`<span class="unmapped-count">${total-mapped} unmapped</span><span class="map-pct-label">${pct}%</span></div>`;
   h+=`<div style="height:6px;background:var(--ash);border-radius:3px;overflow:hidden;"><div class="map-pct-bar" style="height:100%;width:${pct}%;background:var(--green);border-radius:3px;transition:width .3s;"></div></div></div>`;
   h+='</div>';
 
@@ -4278,60 +4525,124 @@ function renderMapping(){
   h+=sortHdrL('mapTbl','finish','Finish','renderMapping');
   h+=sortHdr('mapTbl','dur','Duration','renderMapping');
   h+=sortHdrL('mapTbl','status','Status','renderMapping');
-  h+='<th style="min-width:280px;">Pay Item Assignment</th></tr>';
+  h+='<th style="min-width:340px;">Mapping</th></tr>';
 
-  // Build set of ALL bid items already assigned to ANY task — so they disappear from other dropdowns
-  const allMappedBIs=new Set(Object.values(job.taskMap).flat());
+  // Build set of ALL bid items already assigned to ANY task (as a bid-item entry) — used to
+  // hide them from OTHER tasks' bid-item dropdowns (one bid item can't live on two tasks as a 'bi').
+  const allMappedBIs=new Set();
+  Object.keys(job.taskMap).forEach(tid=>{
+    getTaskBidItems(job.taskMap,tid).forEach(b=>allMappedBIs.add(String(b)));
+  });
+  // Reverse index: activity code → [taskId,...] from direct mappings. Lets us show
+  // "already on task N" in other task dropdowns.
+  const actTaskIdx=buildActivityTaskIndex(job);
 
   _mapTasks.forEach(t=>{
-    const currentBIs=getTaskBidItems(job.taskMap,t.id);
-    const isMapped=currentBIs.length>0;
-    const selClass=isMapped?'mapped':'unmapped';
+    const entries=getTaskEntries(job.taskMap,t.id);
+    const currentBIs=entries.filter(e=>e.type==='bi').map(e=>e.id);
+    const currentActs=entries.filter(e=>e.type==='act').map(e=>e.id);
+    const isMapped=entries.length>0;
+    const mode=_mapDDMode[String(t.id)]||'bi';
 
-    // Build tags for selected items
+    // Tags — bid items (ash) + activities (blue). Activities show their bid-item parent.
     let tagHtml='';
-    if(currentBIs.length===0){
+    if(!isMapped){
       tagHtml='<span style="color:var(--text-light);font-size:12px;">— Unassigned —</span>';
     } else {
       currentBIs.forEach(bi=>{
-        const b=job.bidItems.find(x=>x.biditem===bi);
+        const b=job.bidItems.find(x=>String(x.biditem)===String(bi));
         const desc=b?b.description:'';
         const shortDesc=desc.length>20?desc.substring(0,20)+'…':desc;
-        tagHtml+=`<span style="display:inline-block;background:var(--ash);border-radius:3px;padding:1px 6px;margin:1px 2px;font-size:11px;white-space:nowrap;">${bi}${shortDesc?' — '+shortDesc:''} <span style="cursor:pointer;color:var(--red);font-weight:bold;margin-left:3px;" onclick="event.stopPropagation();updateTaskMapping(${t.id},'${bi}',false)">×</span></span>`;
+        tagHtml+=`<span style="display:inline-block;background:var(--ash);border-radius:3px;padding:1px 6px;margin:1px 2px;font-size:11px;white-space:nowrap;" title="Pay item — all activities inherit dates">${esc(bi)}${shortDesc?' — '+esc(shortDesc):''} <span style="cursor:pointer;color:var(--red);font-weight:bold;margin-left:3px;" onclick="event.stopPropagation();updateTaskMapping(${t.id},'${esc(bi)}',false)">×</span></span>`;
+      });
+      currentActs.forEach(ac=>{
+        const a=job.activities.find(x=>String(x.code)===String(ac));
+        const desc=a?(a.description||''):'';
+        const biLabel=a?` · ${esc(a.biditem||'')}`:'';
+        const shortDesc=desc.length>22?desc.substring(0,20)+'…':desc;
+        tagHtml+=`<span style="display:inline-block;background:#E8F0F7;color:#1E5F91;border:1px solid #4A90D9;border-radius:3px;padding:1px 6px;margin:1px 2px;font-size:11px;white-space:nowrap;" title="Activity mapping — this activity uses this task's exact dates">${esc(ac)}${shortDesc?' — '+esc(shortDesc):''}${biLabel} <span style="cursor:pointer;color:var(--red);font-weight:bold;margin-left:3px;" onclick="event.stopPropagation();updateTaskActivityMapping(${t.id},'${esc(ac)}',false)">×</span></span>`;
       });
     }
 
-    // Build checkbox dropdown
+    // Segmented mode toggle
+    const isActMode=mode==='act';
+    const segBi=`<span onclick="event.stopPropagation();setMapDDMode(${t.id},'bi')" style="display:inline-block;padding:2px 8px;font-size:10px;font-family:Oswald;letter-spacing:.5px;text-transform:uppercase;cursor:pointer;background:${!isActMode?'var(--green)':'transparent'};color:${!isActMode?'white':'var(--text-light)'};border:1px solid ${!isActMode?'var(--green)':'var(--border)'};border-radius:3px 0 0 3px;">Pay Items</span>`;
+    const segAct=`<span onclick="event.stopPropagation();setMapDDMode(${t.id},'act')" style="display:inline-block;padding:2px 8px;font-size:10px;font-family:Oswald;letter-spacing:.5px;text-transform:uppercase;cursor:pointer;background:${isActMode?'#4A90D9':'transparent'};color:${isActMode?'white':'var(--text-light)'};border:1px solid ${isActMode?'#4A90D9':'var(--border)'};border-left:none;border-radius:0 3px 3px 0;">Activities</span>`;
+
+    // Build dropdown
     let ddHtml=`<div class="map-multi-dd" data-taskid="${t.id}" style="position:relative;">`;
+    ddHtml+=`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">${segBi}${segAct}${currentActs.length?`<span style="font-size:10px;color:#4A90D9;">${currentActs.length} activit${currentActs.length===1?'y':'ies'}</span>`:''}</div>`;
     ddHtml+=`<div class="map-dd-trigger" onclick="toggleMapDD(this)" style="border:1px solid ${isMapped?'var(--green)':'var(--border)'};border-radius:4px;padding:4px 8px;min-height:28px;cursor:pointer;display:flex;align-items:center;flex-wrap:wrap;gap:2px;background:${isMapped?'#F4F7F4':'#FFFDF0'};"><span class="map-dd-tags" style="display:contents;">${tagHtml}</span><span style="margin-left:auto;font-size:10px;color:var(--text-light);">▼</span></div>`;
-    ddHtml+=`<div class="map-dd-list" style="display:none;position:absolute;z-index:100;top:100%;left:0;right:0;max-height:300px;background:white;border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.15);margin-top:2px;">`;
-    ddHtml+=`<div style="padding:4px;border-bottom:1px solid var(--border);position:sticky;top:0;background:white;z-index:1;"><input type="text" placeholder="Search pay items..." onclick="event.stopPropagation()" oninput="filterMapDD(this)" style="width:100%;box-sizing:border-box;padding:4px 8px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-family:'Source Serif 4',serif;"></div>`;
-    ddHtml+=`<div style="overflow-y:auto;max-height:250px;">`;
-    sortedGroups.forEach(g=>{
-      // Filter to only show items not yet assigned to OTHER tasks
-      const availableItems=g.items.filter(b=>currentBIs.includes(b.biditem)||!allMappedBIs.has(b.biditem));
-      if(availableItems.length===0) return; // Skip empty groups entirely
-      ddHtml+=`<div class="map-dd-group" style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${g.name} <span style="font-weight:400;font-size:10px;">(${availableItems.length})</span></div>`;
-      availableItems.forEach(b=>{
-        const isChecked=currentBIs.includes(b.biditem);
-        if(isChecked) return; // Already assigned to THIS task — shown as tag above
-        const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
-        const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
-        const pcLabel=pcCount?` (${pcCount} phases)`:'';
-        ddHtml+=`<label class="map-dd-item" data-biditem="${b.biditem}" data-search="${b.biditem} ${(b.description||'').toLowerCase()}" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''"><input type="checkbox" onchange="updateTaskMapping(${t.id},'${b.biditem}',this.checked)" style="margin:0;"> <strong>${b.biditem}</strong> — ${b.description}${pcLabel}</label>`;
+    ddHtml+=`<div class="map-dd-list" style="display:none;position:absolute;z-index:100;top:100%;left:0;right:0;max-height:320px;background:white;border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.15);margin-top:2px;">`;
+    const placeholder=isActMode?'Search activities...':'Search pay items...';
+    ddHtml+=`<div style="padding:4px;border-bottom:1px solid var(--border);position:sticky;top:0;background:white;z-index:1;"><input type="text" placeholder="${placeholder}" onclick="event.stopPropagation()" oninput="filterMapDD(this)" style="width:100%;box-sizing:border-box;padding:4px 8px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-family:'Source Serif 4',serif;"></div>`;
+    ddHtml+=`<div style="overflow-y:auto;max-height:270px;">`;
+
+    if(!isActMode){
+      // ── BID-ITEM MODE ──
+      sortedGroups.forEach(g=>{
+        const availableItems=g.items.filter(b=>currentBIs.includes(String(b.biditem))||!allMappedBIs.has(String(b.biditem)));
+        if(availableItems.length===0)return;
+        ddHtml+=`<div class="map-dd-group" style="padding:4px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;">${esc(g.name)} <span style="font-weight:400;font-size:10px;">(${availableItems.length})</span></div>`;
+        availableItems.forEach(b=>{
+          const isChecked=currentBIs.includes(String(b.biditem));
+          if(isChecked)return; // shown as tag
+          const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
+          const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
+          const pcLabel=pcCount?` (${pcCount} phases)`:'';
+          ddHtml+=`<label class="map-dd-item" data-biditem="${esc(b.biditem)}" data-search="${esc(b.biditem)} ${esc((b.description||'').toLowerCase())}" style="display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''"><input type="checkbox" onchange="updateTaskMapping(${t.id},'${esc(b.biditem)}',this.checked)" style="margin:0;"> <strong>${esc(b.biditem)}</strong> — ${esc(b.description||'')}${pcLabel}</label>`;
+        });
       });
-    });
+    } else {
+      // ── ACTIVITY MODE ──
+      // Only show activities whose bid item is already mapped to this task.
+      if(!currentBIs.length){
+        ddHtml+=`<div style="padding:16px;font-size:12px;color:var(--text-light);text-align:center;font-style:italic;">Map this task to a pay item first (switch to Pay Items), then come back here to pick individual activities.</div>`;
+      } else {
+        currentBIs.forEach(bi=>{
+          const biMeta=job.bidItems.find(x=>String(x.biditem)===String(bi));
+          const biDesc=biMeta?biMeta.description||'':'';
+          const biActs=job.activities.filter(a=>String(a.biditem)===String(bi));
+          if(!biActs.length)return;
+          const allChecked=biActs.every(a=>currentActs.includes(String(a.code)));
+          // "Select all" shortcut = the pay-item mapping already covers these.
+          // Clicking it in activity mode is a no-op visual; provide a disabled hint instead.
+          ddHtml+=`<div class="map-dd-group" style="padding:6px 8px;font-family:Oswald;font-size:11px;letter-spacing:.5px;color:var(--text-light);background:var(--ash);text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;">`;
+          ddHtml+=`<span>${esc(bi)} — ${esc(biDesc)} <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-light);">(${biActs.length} activit${biActs.length===1?'y':'ies'})</span></span>`;
+          ddHtml+=`<span style="font-size:9px;text-transform:none;letter-spacing:0;color:var(--green);font-style:italic;">pay-item mapping covers all</span>`;
+          ddHtml+=`</div>`;
+          biActs.forEach(a=>{
+            const code=String(a.code);
+            const isChecked=currentActs.includes(code);
+            const desc=a.description||'';
+            const days=a.calculatedDays||1;
+            const otherTasks=(actTaskIdx[code]||[]).filter(tid=>String(tid)!==String(t.id));
+            const otherLabel=otherTasks.length?` <span style="font-size:10px;color:var(--orange);" title="Also mapped to task ${otherTasks.join(', ')}">⚠ on ${otherTasks.length} other task${otherTasks.length===1?'':'s'}</span>`:'';
+            ddHtml+=`<label class="map-dd-item map-dd-act" data-search="${esc(code)} ${esc(desc.toLowerCase())}" style="display:flex;align-items:center;gap:6px;padding:4px 8px 4px 20px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;${isChecked?'background:#EEF5FB;':''}" onmouseover="if(this.style.background!=='rgb(238, 245, 251)')this.style.background='#F9F7F4'" onmouseout="this.style.background='${isChecked?'#EEF5FB':''}'"><input type="checkbox" ${isChecked?'checked':''} onchange="updateTaskActivityMapping(${t.id},'${esc(code)}',this.checked)" style="margin:0;"> <strong>${esc(code)}</strong> — ${esc(desc)} <span style="color:var(--text-light);font-size:10px;margin-left:auto;">${days}d</span>${otherLabel}</label>`;
+          });
+        });
+      }
+    }
     ddHtml+=`</div></div></div>`;
 
     const rowBg=isMapped?'':'background:#FFFDF0;';
-    h+=`<tr style="${rowBg}"><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr||'—'}</td><td>${t.status||'—'}</td><td style="min-width:300px;">${ddHtml}</td></tr>`;
+    h+=`<tr style="${rowBg}"><td>${t.id}</td><td>${esc(t.name||'')}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${esc(t.durationStr||'—')}</td><td>${esc(t.status||'—')}</td><td style="min-width:340px;">${ddHtml}</td></tr>`;
   });
 
   h+='</table></div></div>';
 
-  // Find bid items with no schedule task mapped to them
-  const mappedBidItems=new Set(Object.values(job.taskMap).flat());
-  const orphanBids=job.bidItems.filter(b=>!mappedBidItems.has(b.biditem));
+  // Find bid items with no schedule task mapped to them (bid-item OR any activity under it)
+  const mappedBidItems=new Set();
+  Object.keys(job.taskMap).forEach(tid=>{
+    getTaskBidItems(job.taskMap,tid).forEach(b=>mappedBidItems.add(String(b)));
+  });
+  const _orphActIdx=buildActivityTaskIndex(job);
+  job.activities.forEach(a=>{
+    if(_orphActIdx[String(a.code)]&&_orphActIdx[String(a.code)].length){
+      mappedBidItems.add(String(a.biditem||''));
+    }
+  });
+  const orphanBids=job.bidItems.filter(b=>!mappedBidItems.has(String(b.biditem)));
   if(orphanBids.length){
     h+='<div class="card" style="margin-top:12px;border-color:var(--orange);">';
     h+='<div class="card-title" style="color:var(--orange);border-bottom-color:var(--orange);">Pay Items Missing Schedule Tasks <span style="font-weight:300;font-size:12px;">('+orphanBids.length+' pay items have no schedule task — phase codes &amp; activities under these won\'t appear on the JCS timeline)</span></div>';
@@ -7329,35 +7640,51 @@ function renderSchedule(){
         schedPct=Math.min(100,elapsed/span*100);
       }
 
-      // Get mapped bid items for this task
+      // Get mapped bid items AND directly-mapped activities for this task
       const mappedBIs=getTaskBidItems(_tm,tId);
+      const mappedActCodes=getTaskActivities(_tm,tId);
+      // Pull direct-mapped activity objects. They override the bid-item rollup — if an
+      // activity is directly mapped to THIS task, include it here. If it's directly mapped
+      // to a DIFFERENT task but its bid item rolls up here, exclude it (the direct task owns it).
+      const directActs=mappedActCodes.map(code=>_acts.find(a=>String(a.code)===String(code))).filter(Boolean);
+      // Build a set of activity codes that are directly mapped somewhere (to ANY task) so
+      // we can subtract them out of bid-item rollups.
+      const _allDirectActCodes=new Set();
+      Object.keys(_tm).forEach(k=>{getTaskActivities(_tm,k).forEach(c=>_allDirectActCodes.add(String(c)))});
 
-      // Actual % complete from HeavyJob — weighted average across mapped bid items
+      // Actual % complete from HeavyJob — weighted average across mapped bid items + direct acts
       let totalBudget=0,weightedPct=0,totalActualCost=0,totalBudgetCost=0;
       let hasActualData=false;
+      const _accumulate=(a)=>{
+        const ac=actualsMap[String(a.code||'').trim()]||actualsMap[String(a.phaseCode||'').trim()];
+        if(ac){
+          hasActualData=true;
+          const bCost=ac.budgetCost||0;
+          totalBudget+=bCost;
+          weightedPct+=bCost*(ac.pctComplete||0);
+          totalActualCost+=ac.actualCost||0;
+          totalBudgetCost+=bCost;
+        }
+      };
       mappedBIs.forEach(bi=>{
         const biActs=actByBi[bi];
         if(!biActs) return;
         biActs.forEach(a=>{
-          const ac=actualsMap[String(a.code||'').trim()]||actualsMap[String(a.phaseCode||'').trim()];
-          if(ac){
-            hasActualData=true;
-            const bCost=ac.budgetCost||0;
-            totalBudget+=bCost;
-            weightedPct+=bCost*(ac.pctComplete||0);
-            totalActualCost+=ac.actualCost||0;
-            totalBudgetCost+=bCost;
-          }
+          // Skip activities that are directly mapped elsewhere
+          if(_allDirectActCodes.has(String(a.code)))return;
+          _accumulate(a);
         });
       });
+      directActs.forEach(_accumulate);
       const actualPct=totalBudget>0?weightedPct/totalBudget:0;
 
-      // Budget cost from mapped activities
+      // Budget cost: mapped bid items' activities (minus direct-mapped-elsewhere) + direct acts on this task
       let biBudgetDirect=0;
       mappedBIs.forEach(bi=>{
         const biActs=actByBi[bi];
-        if(biActs) biBudgetDirect+=biActs.reduce((s,a)=>s+(a.directTotal||0),0);
+        if(biActs) biBudgetDirect+=biActs.filter(a=>!_allDirectActCodes.has(String(a.code))).reduce((s,a)=>s+(a.directTotal||0),0);
       });
+      directActs.forEach(a=>{biBudgetDirect+=(a.directTotal||0)});
       const schedCostToDate=biBudgetDirect*(schedPct/100);
       const costVar=schedCostToDate-totalActualCost;
 
@@ -7387,7 +7714,7 @@ function renderSchedule(){
 
       compRows.push({taskId:tId,name:t.name||'Untitled',schedPct,actualPct,delta,status,statusLabel,statusColor,
         biBudgetDirect,schedCostToDate,totalActualCost,costVar,hasActualData,
-        tStart,tEnd,mappedCount:mappedBIs.length});
+        tStart,tEnd,mappedCount:mappedBIs.length+directActs.length});
     });
 
     // Filter logic
@@ -7740,9 +8067,9 @@ function addChangeOrderTask(){
     _coNumber:coNumber
   });
 
-  // ── Auto-map task → bid item via taskMap ──
+  // ── Auto-map task → bid item via taskMap (tagged-entry form) ──
   if(!job.taskMap)job.taskMap={};
-  job.taskMap[String(nextId)]=[phaseCode];
+  job.taskMap[String(nextId)]=[{type:'bi',id:String(phaseCode)}];
 
   // ── Update meta dates ──
   const allDates=job.schedule.map(t=>toDate(t.start)).concat(job.schedule.map(t=>toDate(t.finish))).filter(d=>d);
@@ -7812,8 +8139,24 @@ function renderJobCostSchedule(){
     });
   });
 
-  // Determine project timeline from schedule dates
-  const allDates=Object.values(biDates).flatMap(d=>[d.start,d.finish]).filter(d=>d);
+  // Activity-direct mapping: for each activity mapped directly to one or more tasks,
+  // compute its date envelope (min start, max finish) from those tasks.
+  const actTaskIdx=buildActivityTaskIndex(job);
+  const actDirectDates={};
+  Object.entries(actTaskIdx).forEach(([code,taskIds])=>{
+    const rec={start:null,finish:null,taskIds:taskIds.slice()};
+    taskIds.forEach(tid=>{
+      const t=sched.find(x=>String(x.id)===String(tid));if(!t)return;
+      const s=toDate(t.start),f=toDate(t.finish);
+      if(s&&(!rec.start||s<rec.start))rec.start=s;
+      if(f&&(!rec.finish||f>rec.finish))rec.finish=f;
+    });
+    if(rec.start||rec.finish) actDirectDates[code]=rec;
+  });
+
+  // Determine project timeline from schedule dates (include activity-direct dates too)
+  const allDates=Object.values(biDates).flatMap(d=>[d.start,d.finish]).filter(d=>d)
+    .concat(Object.values(actDirectDates).flatMap(d=>[d.start,d.finish]).filter(d=>d));
   const m=job.meta;
   let projStart=allDates.length?new Date(Math.min(...allDates)):(toDate(m.startDate)||new Date());
   let projEnd=allDates.length?new Date(Math.max(...allDates)):(toDate(m.endDate)||new Date(projStart.getTime()+180*86400000));
@@ -7823,23 +8166,53 @@ function renderJobCostSchedule(){
   const totalMs=projEnd.getTime()-projStart.getTime();
   const totalWeeks=Math.max(Math.round(totalMs/(7*86400000)),1);
 
-  // Assign each activity a start/finish based on its bid item's schedule dates
-  // Activities within the same bid item are spread sequentially across its date range
+  // Assign each activity a start/finish. Precedence:
+  //   1) Activity directly mapped to task(s) → use those tasks' date envelope
+  //   2) Otherwise activity's bid item is mapped → spread proportionally across the bid-item envelope
+  //   3) Otherwise unmapped (no bar)
   const biActGroups={};
   acts.forEach(a=>{
     const bi=String(a.biditem||'');
     if(!biActGroups[bi])biActGroups[bi]=[];
     biActGroups[bi].push(a);
   });
-  acts.forEach(a=>{a._barStart=null;a._barEnd=null});
+  acts.forEach(a=>{a._barStart=null;a._barEnd=null;a._conflict=false;a._directMapped=false});
+
+  // First pass — apply direct mappings
+  acts.forEach(a=>{
+    const code=String(a.code||'');
+    const direct=actDirectDates[code];
+    if(direct&&(direct.start||direct.finish)){
+      a._barStart=direct.start||direct.finish;
+      a._barEnd=direct.finish||direct.start;
+      a._directMapped=true;
+      // Conflict detection: activity is directly mapped AND its bid item is mapped to a
+      // different task (one the activity isn't on). The direct mapping wins visually.
+      const bi=String(a.biditem||'');
+      if(biDates[bi]&&biDates[bi].start){
+        // find any tasks mapped to this bid item
+        const biTaskIds=new Set();
+        Object.keys(tm).forEach(tid=>{
+          if(getTaskBidItems(tm,tid).map(String).includes(bi))biTaskIds.add(String(tid));
+        });
+        const directTaskIds=new Set((direct.taskIds||[]).map(String));
+        const hasOther=[...biTaskIds].some(tid=>!directTaskIds.has(tid));
+        if(hasOther) a._conflict=true;
+      }
+    }
+  });
+
+  // Second pass — bid-item envelope spread, skipping direct-mapped activities
   Object.entries(biActGroups).forEach(([bi,biActs])=>{
     const dates=biDates[bi];
-    if(!dates||!dates.start||!dates.finish){return}// unmapped
+    if(!dates||!dates.start||!dates.finish){return}// bid item unmapped
+    const remaining=biActs.filter(a=>!a._directMapped);
+    if(!remaining.length)return;// all activities mapped directly
     const biStart=dates.start.getTime();
     const biSpan=Math.max(dates.finish.getTime()-biStart,86400000);
-    const totalDaysInBi=biActs.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+    const totalDaysInBi=remaining.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
     let daysCursor=0;
-    biActs.forEach(a=>{
+    remaining.forEach(a=>{
       const days=a.calculatedDays||1;
       const startRatio=daysCursor/totalDaysInBi;
       const endRatio=(daysCursor+days)/totalDaysInBi;
@@ -7922,6 +8295,8 @@ function renderJobCostSchedule(){
     const shortName=a.description||(a.code||'Activity');
     const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
     const pcBadge=a.phaseCode?`<span style="font-size:9px;color:var(--green);font-weight:700;margin-right:3px;">${a.phaseCode}</span>`:'';
+    const directBadge=a._directMapped?`<span style="display:inline-block;font-size:9px;color:#1E5F91;background:#E8F0F7;border:1px solid #4A90D9;border-radius:2px;padding:0 3px;margin-right:3px;font-weight:700;letter-spacing:.3px;" title="Activity directly mapped to schedule task">ACT</span>`:'';
+    const conflictBadge=a._conflict?`<span style="display:inline-block;font-size:9px;color:white;background:var(--orange);border-radius:2px;padding:0 3px;margin-right:3px;font-weight:700;letter-spacing:.3px;" title="Conflict: this activity is directly mapped AND its pay item is mapped to a different task. Direct mapping wins.">!</span>`:'';
 
     // Baseline comparison - if baseline exists, show baseline cost
     let baselineCost=0;
@@ -7934,13 +8309,16 @@ function renderJobCostSchedule(){
         baselineCost=baseCostForCode||baseBidItem.directTotal||0;
       }
     }
-    // Baseline schedule dates from baseline bid items
+    // Baseline schedule dates from baseline bid items (uses getTaskBidItems to handle any
+    // entry shape — legacy string, legacy string[], or tagged {type,id}).
     let baselineStart=null,baselineEnd=null;
     if(job.baseline?.bidItems){
       const baseBidItem=job.baseline.bidItems.find(bi=>bi.biditem===a.biditem);
-      if(baseBidItem&&job.baseline.schedule){
+      if(baseBidItem&&job.baseline.schedule&&job.baseline.taskMap){
         job.baseline.schedule.forEach(st=>{
-          if(st.id&&job.baseline.taskMap&&(Array.isArray(job.baseline.taskMap[st.id])?job.baseline.taskMap[st.id]:[job.baseline.taskMap[st.id]||'']).includes(a.biditem)){
+          if(!st.id)return;
+          const bis=getTaskBidItems(job.baseline.taskMap,st.id);
+          if(bis.map(String).includes(String(a.biditem))){
             const s=toDate(st.start),f=toDate(st.finish);
             if(s&&(!baselineStart||s<baselineStart))baselineStart=s;
             if(f&&(!baselineEnd||f>baselineEnd))baselineEnd=f;
@@ -7955,7 +8333,7 @@ function renderJobCostSchedule(){
     const _normParent=String(a.parentPhase||'').trim();
     const actualData=_actualsMap[_normCode]||_actualsMap[_normPhase]||(_normParent?_actualsMap[_normParent]:null);
     let r='<tr>';
-    r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${pcBadge}${shortName}</td>`;
+    r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${conflictBadge}${directBadge}${pcBadge}${shortName}</td>`;
     r+=`<td>${qty}${units?' '+units:''}</td>`;
     r+=`<td>${rate}</td>`;
     r+=`<td>${days}</td>`;
@@ -9384,11 +9762,31 @@ function renderSettings(){
   h+=`</div>`;
   // Quick links
   h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;">`;
+  h+=`<a href="#settings-team" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Team</a>`;
   h+=`<a href="#settings-crews" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Crews</a>`;
   h+=`<a href="#settings-fleet" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Fleet</a>`;
   h+=`<a href="#settings-subs" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Subs</a>`;
   h+=`</div>`;
   h+=`</div></div>`;
+
+  // ══════════════════════════════════════════
+  // TEAM & RECENT ACTIVITY (multi-user)
+  // ══════════════════════════════════════════
+  h+=`<div class="card" id="settings-team"><div class="card-title">Team &amp; Activity</div>`;
+  h+=`<div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px;">`;
+  h+=`<div style="flex:1;min-width:240px;">`;
+  h+=`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:4px;">Signed in as</div>`;
+  h+=`<div style="font-size:14px;"><strong>${esc(_currentUser?.email||'—')}</strong></div>`;
+  h+=`<div style="font-size:11px;color:var(--text-light);margin-top:2px;">User ID: <code style="font-size:10px;">${esc(_currentUser?.id||'—')}</code></div>`;
+  h+=`</div>`;
+  h+=`<div style="flex:1;min-width:240px;">`;
+  h+=`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:4px;">Invite teammates</div>`;
+  h+=`<div style="font-size:12px;color:var(--text);">Invite people from the Supabase dashboard:<br><strong>Authentication → Users → Invite</strong>. They'll get a one-click link to sign in.</div>`;
+  h+=`</div>`;
+  h+=`</div>`;
+  h+=`<div style="font-family:Oswald;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);margin:10px 0 6px;">Recent Activity</div>`;
+  h+=`<div id="recentActivityList" style="font-size:12px;color:var(--text-light);">Loading…</div>`;
+  h+=`</div>`;
 
   // ══════════════════════════════════════════
   // CREW SETTINGS
@@ -9495,6 +9893,43 @@ function renderSettings(){
   h+='</div>';
 
   el.innerHTML=h;
+  // Kick off async fetch of recent activity — fills in after render
+  loadRecentActivity();
+}
+
+// ═══════════════════════════════════════════
+// RECENT ACTIVITY — last 50 edits across all jobs
+// ═══════════════════════════════════════════
+async function loadRecentActivity(){
+  const el = document.getElementById('recentActivityList');
+  if(!el) return;
+  if(!_currentUser){ el.innerHTML = '<em>Sign in to see activity.</em>'; return; }
+  const { data, error } = await sb.from('job_edits')
+    .select('job_id, user_email, action, summary, created_at')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if(error){ el.innerHTML = '<em>Could not load activity: '+esc(error.message)+'</em>'; return; }
+  if(!data || !data.length){ el.innerHTML = '<em>No activity yet.</em>'; return; }
+  const now = Date.now();
+  const rel = (iso) => {
+    const t = new Date(iso).getTime();
+    if(isNaN(t)) return '';
+    const s = Math.round((now-t)/1000);
+    if(s<60) return s+'s ago';
+    if(s<3600) return Math.round(s/60)+'m ago';
+    if(s<86400) return Math.round(s/3600)+'h ago';
+    return Math.round(s/86400)+'d ago';
+  };
+  let h = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+  h += '<tr style="background:var(--ash);"><th style="text-align:left;padding:6px 8px;">When</th><th style="text-align:left;padding:6px 8px;">Who</th><th style="text-align:left;padding:6px 8px;">Job</th><th style="text-align:left;padding:6px 8px;">Action</th></tr>';
+  data.forEach(r=>{
+    const job = Store.jobs[r.job_id];
+    const jobLabel = job ? `${esc(job.meta.name||r.job_id)} #${esc(job.meta.number||'')}` : esc(r.job_id);
+    const actionColor = r.action==='delete'?'var(--red)':(r.action==='create'?'var(--green)':'var(--text-light)');
+    h += `<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border);color:var(--text-light);" title="${esc(r.created_at)}">${rel(r.created_at)}</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);">${esc(r.user_email||'—')}</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);">${jobLabel}</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);color:${actionColor};">${esc(r.action)}${r.summary?' — '+esc(r.summary):''}</td></tr>`;
+  });
+  h += '</table>';
+  el.innerHTML = h;
 }
 
 function getJobActualsDateRange(job){
