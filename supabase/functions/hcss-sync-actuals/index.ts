@@ -78,7 +78,7 @@ interface TokenResponse { access_token: string; token_type: string; expires_in: 
 // Module-level cache of the last minted token's granted scope string,
 // so discovery mode can surface it to the caller for debugging.
 let _lastGrantedScope: string | null = null;
-interface SyncRequest { trigger?: 'cron'|'manual'|'api'; discover?: boolean; syncMetadata?: boolean; scanEndpoints?: boolean; lookbackDays?: number; jobNumber?: string; fullHistory?: boolean }
+interface SyncRequest { trigger?: 'cron'|'manual'|'api'; discover?: boolean; syncMetadata?: boolean; syncJobCosts?: boolean; scanEndpoints?: boolean; lookbackDays?: number; jobNumber?: string; fullHistory?: boolean }
 interface EquipObservation {
   code: string;
   description: string;
@@ -263,6 +263,53 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Phase 3: Cost & budget endpoints (2026-04-28 — found in developer.hcssapps.com docs).
+      // These are HJ endpoints under /heavyjob/api/v1/ that we never tested in the original
+      // flat-path scan. Some are POST with a JSON body. If any 200, we can replace the
+      // Cost Code Summary xlsx upload with API sync.
+      const costEndpointResults: { label: string; method: string; url: string; status: number; body: string }[] = [];
+      const buMatched = bus.find(b => b.code === buEnv || b.id === buEnv);
+      const buUuid = buMatched?.id || '';
+      const COST_CANDIDATES: { label: string; method: 'GET' | 'POST'; url: string; body?: any }[] = [
+        // Cost endpoints (HeavyJob > Cost section)
+        { label: 'GET /jobs/{id}/costs',                          method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobs/${testJobId}/costs` },
+        { label: 'POST /jobCosts/advancedRequest (per-code $+hr)', method: 'POST', url: `${HCSS_API_BASE}/heavyjob/api/v1/jobCosts/advancedRequest`, body: { jobIds: [testJobId], businessUnitId: buUuid, limit: 5 } },
+        // CostCodeProgress (qty + hours by date range)
+        { label: 'POST /costCode/progress/advancedRequest (qty)',  method: 'POST', url: `${HCSS_API_BASE}/heavyjob/api/v1/costCode/progress/advancedRequest`, body: { jobId: testJobId, limit: 5 } },
+        // CostAdjustment
+        { label: 'GET /jobs/{id}/costAdjustments',                method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobs/${testJobId}/costAdjustments` },
+        // CostCodeTransaction
+        { label: 'GET /jobs/{id}/costCodeTransactions',           method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobs/${testJobId}/costCodeTransactions` },
+        { label: 'POST /costCodeTransactions/advancedRequest',     method: 'POST', url: `${HCSS_API_BASE}/heavyjob/api/v1/costCodeTransactions/advancedRequest`, body: { jobIds: [testJobId], limit: 5 } },
+        // AdvancedBudget (3 variants — material, subcontract, custom cost type)
+        { label: 'GET /jobs/{id}/advancedBudgets/material',        method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobs/${testJobId}/advancedBudgets/material` },
+        { label: 'GET /jobs/{id}/advancedBudgets/subcontract',     method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobs/${testJobId}/advancedBudgets/subcontract` },
+        { label: 'GET /jobs/{id}/advancedBudgets/customCostType',  method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/jobs/${testJobId}/advancedBudgets/customCostType` },
+        // Accounting (rate sets, etc.)
+        { label: 'GET /accounting/rateSets',                       method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/accounting/rateSets` },
+        { label: 'GET /accounting/rateSetGroups',                  method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/accounting/rateSetGroups` },
+        // PayClass (employee pay rates)
+        { label: 'GET /payClasses',                                method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/payClasses` },
+      ];
+
+      for (const c of COST_CANDIDATES) {
+        try {
+          const resp = await fetch(c.url, {
+            method: c.method,
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/json',
+              ...(c.method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+            },
+            ...(c.method === 'POST' ? { body: JSON.stringify(c.body || {}) } : {}),
+          });
+          const txt = await resp.text();
+          costEndpointResults.push({ label: c.label, method: c.method, url: c.url, status: resp.status, body: txt.substring(0, 2500) });
+        } catch (e) {
+          costEndpointResults.push({ label: c.label, method: c.method, url: c.url, status: 0, body: String(e) });
+        }
+      }
+
       return json({
         ok: true,
         mode: 'endpoint-scan',
@@ -271,6 +318,7 @@ Deno.serve(async (req) => {
         jobSamples,
         results,
         tcDetailResults,
+        costEndpointResults,
       });
     }
 
@@ -308,12 +356,15 @@ Deno.serve(async (req) => {
         jobsUpserted += count || chunk.length;
       }
 
-      // 3. Pull cost codes for active jobs only (to avoid API rate limits)
+      // 3. Pull cost codes for ALL jobs (active + inactive). Inactive jobs still
+      //    have historical jobCosts data referencing their codes, so we need the
+      //    full mapping to translate costCodeId → cost_code without dropping rows.
+      //    HCSS rate-limit hasn't been a problem at ~135 jobs.
       const activeJobs = allJobs.filter(j => isJobActive(j));
       let totalCostCodes = 0;
       const ccErrors: { job: string; error: string }[] = [];
 
-      for (const job of activeJobs) {
+      for (const job of allJobs) {
         try {
           const ccUrl = `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${encodeURIComponent(job.id)}`;
           const ccData = await hcssGetPaginated(ccUrl, token);
@@ -327,6 +378,7 @@ Deno.serve(async (req) => {
               unit: String(cc.unit || cc.unitOfMeasure || ''),
               is_hidden: cc.isHiddenFromMobile || false,
               quantity_driven: cc.quantityDriving || cc.isQuantityDriving || false,
+              cost_code_id: String(cc.id || cc.costCodeId || cc.costcodeId || ''),
               raw: cc,
               synced_at: new Date().toISOString(),
             })).filter(r => r.cost_code);
@@ -364,6 +416,189 @@ Deno.serve(async (req) => {
         activeJobs: activeJobs.length,
         costCodesUpserted: totalCostCodes,
         costCodeErrors: ccErrors.length,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+
+    // ── Sync Job Costs mode (2026-04-28): pull per-(date × cost code × foreman) BELMOS
+    // dollars from POST /heavyjob/api/v1/jobCosts/advancedRequest. This is the bridge
+    // that makes Production Tracker dollars fresh — Spectrum's 30-day lag stops mattering.
+    if (body.syncJobCosts) {
+      const matchedBU = bus.find(b => b.code === buEnv || b.id === buEnv);
+      if (!matchedBU) throw new Error(`BU '${buEnv}' not found`);
+      const buId = matchedBU.id || matchedBU.code;
+
+      let jcJobs = await listJobs(token, buId);
+      if (body.jobNumber) jcJobs = jcJobs.filter(j => j.jobCode === body.jobNumber);
+      const activeJcJobs = jcJobs.filter(j => isJobActive(j));
+
+      // 1. Build a global costCodeId → cost_code map from the metadata table.
+      //    If a job's codes haven't been captured yet (cost_code_id empty), we
+      //    fetch live and update on the fly.
+      const { data: ccRows, error: ccErr } = await supa
+        .from('hcss_cost_codes')
+        .select('hcss_job_id, cost_code, cost_code_id');
+      if (ccErr) throw new Error(`hcss_cost_codes fetch: ${ccErr.message}`);
+      const ccMap = new Map<string, string>(); // costCodeId → cost_code
+      for (const r of (ccRows || [])) {
+        if (r.cost_code_id) ccMap.set(r.cost_code_id, r.cost_code);
+      }
+
+      const sinceISO = body.fullHistory ? null : (() => {
+        const d = new Date(); d.setUTCDate(d.getUTCDate() - (lookback || 14)); return d.toISOString().slice(0,10);
+      })();
+
+      const jcRows: any[] = [];
+      const errors: any[] = [];
+      let totalFetched = 0;
+      let jobsProcessed = 0;
+
+      for (const job of activeJcJobs) {
+        if (!job.id) { errors.push({ job: job.jobCode, error: 'Missing HCSS UUID' }); continue; }
+        // Small inter-job pause so a 51-job loop doesn't slam HCSS into a 429.
+        // hcssRequest already auto-retries 429s, but proactive spacing is faster.
+        if (jobsProcessed > 0) await new Promise(r => setTimeout(r, 250));
+        jobsProcessed++;
+
+        // If we don't have any cost_code_id mapping for this job, hot-load it now.
+        const haveAnyForJob = (ccRows || []).some(r => r.hcss_job_id === job.id && r.cost_code_id);
+        if (!haveAnyForJob) {
+          try {
+            const ccUrl = `${HCSS_API_BASE}/heavyjob/api/v1/costCodes?jobId=${encodeURIComponent(job.id)}`;
+            const ccData = await hcssGetPaginated(ccUrl, token);
+            const updates: any[] = [];
+            for (const cc of (ccData || [])) {
+              const ccId = String(cc.id || cc.costCodeId || '');
+              const code = String(cc.code || '').trim();
+              if (ccId && code) {
+                ccMap.set(ccId, code);
+                updates.push({ hcss_job_id: job.id, cost_code: code, cost_code_id: ccId });
+              }
+            }
+            // Backfill cost_code_id values into hcss_cost_codes
+            if (updates.length > 0) {
+              for (const u of updates) {
+                await supa.from('hcss_cost_codes')
+                  .update({ cost_code_id: u.cost_code_id })
+                  .eq('hcss_job_id', u.hcss_job_id)
+                  .eq('cost_code', u.cost_code);
+              }
+            }
+          } catch (e) {
+            errors.push({ job: job.jobCode, error: `costCodes fetch: ${e.message || e}` });
+          }
+        }
+
+        // 2. Page through jobCosts/advancedRequest for this job.
+        let cursor: string | null = null;
+        let pages = 0;
+        try {
+          while (true) {
+            const reqBody: any = {
+              jobIds: [job.id],
+              businessUnitId: buId,
+              limit: 1000,
+            };
+            if (sinceISO) reqBody.startDate = sinceISO;
+            if (cursor) reqBody.cursor = cursor;
+
+            const data = await hcssRequest('POST', `${HCSS_API_BASE}/heavyjob/api/v1/jobCosts/advancedRequest`, token, reqBody);
+            const results: any[] = data.results || data.items || data.data || [];
+            totalFetched += results.length;
+            pages += 1;
+
+            for (const r of results) {
+              const ccId = String(r.costCodeId || '');
+              // Use mapped cost code if known, else placeholder using first 8 chars
+              // of the UUID. A later metadata sync that captures this code will let
+              // us backfill the readable cost_code via cost_code_id.
+              const code = ccMap.get(ccId) || (ccId ? `??${ccId.slice(0, 8)}` : '');
+              if (!code) continue;
+              const dateStr = r.date ? String(r.date).slice(0, 10) : '';
+              if (!dateStr) continue;
+              jcRows.push({
+                job_number: job.jobCode,
+                date: dateStr,
+                cost_code: code,
+                cost_code_id: ccId,
+                foreman_id: String(r.foremanId || ''),
+                foreman_name: '', // resolved later from timecards
+                qty:           num(r.quantity),
+                labor_hours:   num(r.laborHours),
+                labor_cost:    num(r.laborCost),
+                equip_hours:   num(r.equipmentHours),
+                equip_cost:    num(r.equipmentCost),
+                mat_cost:      num(r.materialCost),
+                sub_cost:      num(r.subcontractCost),
+                trucking_cost: num(r.truckingCost),
+                source: 'hcss-jobcosts-api',
+                synced_at: new Date().toISOString(),
+              });
+            }
+
+            cursor = data?.metadata?.nextCursor || data?.nextCursor || null;
+            if (!cursor || pages > 50) break; // safety cap
+          }
+        } catch (e) {
+          errors.push({ job: job.jobCode, error: `jobCosts fetch: ${e.message || e}` });
+        }
+      }
+
+      // 3. Upsert in chunks. Same primary-key shape: (job, date, code, foreman_id).
+      // First chunk uses .select() so we capture the actual returned data — if upsert
+      // silently no-ops we'll see it as data:[] vs an error message.
+      let jcUpserted = 0;
+      let firstUpsertProbe: any = null;
+      for (let i = 0; i < jcRows.length; i += 500) {
+        const chunk = jcRows.slice(i, i + 500);
+        if (i === 0 && chunk.length > 0) {
+          // Probe with a single row first so we see exactly what Supabase returns
+          const probeRow = chunk[0];
+          const { data: pData, error: pErr, status: pStatus, statusText: pStatusText } = await supa
+            .from('hcss_job_costs')
+            .upsert([probeRow], { onConflict: 'job_number,date,cost_code,foreman_id' })
+            .select();
+          firstUpsertProbe = {
+            sentRow: probeRow,
+            returnedData: pData,
+            error: pErr ? { message: pErr.message, code: pErr.code, details: pErr.details, hint: pErr.hint } : null,
+            status: pStatus,
+            statusText: pStatusText,
+          };
+          if (pErr) {
+            errors.push({ job: '(jc-probe)', error: `probe upsert: ${pErr.message}` });
+            break;
+          }
+        }
+        const { error } = await supa
+          .from('hcss_job_costs')
+          .upsert(chunk, { onConflict: 'job_number,date,cost_code,foreman_id' });
+        if (error) {
+          errors.push({ job: '(jc-upsert)', error: `hcss_job_costs upsert: ${error.message}` });
+          break;
+        }
+        jcUpserted += chunk.length;
+      }
+
+      await logRun(errors.length > 0 ? 'partial' : 'success', {
+        details: {
+          mode: 'jobCosts',
+          jobsScanned: activeJcJobs.length,
+          rowsFetched: totalFetched,
+          rowsUpserted: jcUpserted,
+          errors,
+        },
+      });
+
+      return json({
+        ok: true,
+        mode: 'jobCosts',
+        jobsScanned: activeJcJobs.length,
+        rowsFetched: totalFetched,
+        rowsUpserted: jcUpserted,
+        errorCount: errors.length,
+        errors,
+        firstUpsertProbe,
         durationMs: Date.now() - startedAt,
       });
     }
@@ -553,20 +788,45 @@ async function mintToken(clientId: string, clientSecret: string): Promise<string
 }
 
 async function hcssGet(url: string, token: string): Promise<any> {
-  const res = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Accept': 'application/json',
-      'User-Agent': 'BurnsProjectControls/1.0 (+https://bdcprojectcontrols.netlify.app)',
-    },
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    const hdrs: string[] = [];
-    res.headers.forEach((v, k) => { if (/^(www-authenticate|x-|content-type)/i.test(k)) hdrs.push(`${k}=${v}`); });
-    throw new Error(`GET ${url} → ${res.status}: body="${txt.slice(0, 500)}" headers=[${hdrs.join(', ')}]`);
+  return await hcssRequest('GET', url, token);
+}
+
+// Generic HCSS request with auto-retry on 429 rate-limit. HCSS responds with
+// `{statusCode:429, message:"Rate limit is exceeded. Try again in N seconds."}`.
+// We parse the suggested wait, sleep, and retry — up to 3 attempts. Anything
+// else throws (5xx is rare on HCSS and usually transient — caller decides).
+async function hcssRequest(method: 'GET' | 'POST', url: string, token: string, body?: any): Promise<any> {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+        'User-Agent': 'BurnsProjectControls/1.0 (+https://bdcprojectcontrols.netlify.app)',
+        ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(method === 'POST' && body ? { body: JSON.stringify(body) } : {}),
+    });
+
+    if (res.status === 429 && attempt < maxAttempts) {
+      const txt = await res.text();
+      const m = txt.match(/(\d+)\s*seconds?/i);
+      const waitSec = m ? Math.min(60, parseInt(m[1], 10) + 2) : Math.min(60, 5 * attempt);
+      console.warn(`HCSS 429 on ${method} ${url} — sleeping ${waitSec}s (attempt ${attempt}/${maxAttempts})`);
+      await new Promise(r => setTimeout(r, waitSec * 1000));
+      continue;
+    }
+
+    if (!res.ok) {
+      const txt = await res.text();
+      const hdrs: string[] = [];
+      res.headers.forEach((v, k) => { if (/^(www-authenticate|x-|content-type|retry-after)/i.test(k)) hdrs.push(`${k}=${v}`); });
+      throw new Error(`${method} ${url} → ${res.status}: body="${txt.slice(0, 500)}" headers=[${hdrs.join(', ')}]`);
+    }
+    return await res.json();
   }
-  return await res.json();
+  throw new Error(`${method} ${url} → exhausted ${maxAttempts} retry attempts`);
 }
 
 async function hcssGetPaginated(url: string, token: string): Promise<any[]> {

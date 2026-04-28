@@ -200,3 +200,38 @@
 - Activity → phase-code mapping UI in Set Up (task #5)
 - Overview tab — variance/KPI strip (Spectrum month-start + HJ mid-month) (task #9)
 - Spectrum sync — Burns-side import (task #12)
+
+### 2026-04-28 — Session 11
+- **Verified the Production Tracker fixes live on Steel Driver:** uploaded fresh Cost Code Summary `(44).xlsx` and Detail `(40).xlsx`. Setup card jumped from "9 actuals" → "35 actuals" (was the bug — Detail loop was overwriting Summary-only codes). Production Tracker now shows 35 active codes, 2 BAD QTY rows flagged, KPIs sane (48.1% complete, 50% productivity, −1,288.5 hrs variance). Both `595e485` (Summary preservation) and `3191437` (outlier cap) confirmed working.
+- **Discovered an entire suite of HeavyJob cost endpoints we never tested.** Original endpoint scan tried flat paths (`/heavyjob/api/v1/quantities`, `/heavyjob/api/v1/costCodeProgress`) — all 404. The HCSS developer portal docs show the working pattern is nested + uses POST for the rich queries. Confirmed paths from docs:
+  - `POST /heavyjob/api/v1/jobCosts/advancedRequest` — costs and hours per cost code (Summary xlsx replacement)
+  - `POST /heavyjob/api/v1/costCode/progress/advancedRequest` — qty by date range
+  - `GET /heavyjob/api/v1/jobs/{jobId}/costs` — per-job cost rollup
+  - `GET /heavyjob/api/v1/jobs/{jobId}/advancedBudgets/{material|subcontract|customCostType}` — per-code budgets (the budget-side bridge)
+  - Plus CostAdjustment, CostCodeTransaction, Accounting, PayClass endpoints
+- **Why this matters — bridges the Spectrum lag for $:** today's blended-actuals only blends *hours* (Spectrum ≥30d + HJ <30d). For *dollars*, we have no fresh source — Spectrum's 30-day lag means recent-month Production Tracker $ are stale. If `jobCosts/advancedRequest` works under our scopes, that's the bridge: fresh per-code BELMOS dollars for the rolling 30 days.
+- **Extended the Edge Function endpoint scanner** with 12 new candidates covering the cost suite (mix of GET and POST; POST sends a minimal filter body). Added as a Phase 3 in the existing `scanEndpoints` mode (`supabase/functions/hcss-sync-actuals/index.ts` ~line 274). Output adds a new `costEndpointResults` array.
+- **Scan results (post-deploy):** 5 of 12 endpoints returned 200 — `GET /jobs/{id}/costs`, `POST /jobCosts/advancedRequest`, `POST /costCode/progress/advancedRequest`, `GET /jobs/{id}/advancedBudgets/material`, `GET /jobs/{id}/advancedBudgets/subcontract`. The big one (`jobCosts/advancedRequest`) returned full per-(date × cost code × foreman) BELMOS rows: `{costCodeId, foremanId, date, quantity, laborHours, laborCost, equipmentHours, equipmentCost, materialCost, subcontractCost, truckingCost}`. This solves the bridge problem — fresh $ daily, no Spectrum lag.
+- **Pass 1 built (deploy pending):**
+  - Migration `supabase/migrations/20260428_hcss_job_costs.sql` — creates `public.hcss_job_costs` table (per-row BELMOS dollars) + adds `cost_code_id` column to `hcss_cost_codes` so we can join API rows back to local cost codes.
+  - Edge Function: extended `syncMetadata` to capture `cc.id` into the new column. New mode `syncJobCosts` (POST `{syncJobCosts:true}`) iterates active jobs, paginates `/jobCosts/advancedRequest` via cursor, maps `costCodeId → cost_code` from local table (hot-loads from API if not yet captured), upserts into `hcss_job_costs`. Lookback honors `lookbackDays` (default 14) and `fullHistory:true`.
+- **Deploy steps:**
+  1. Apply migration: `cd ~/Desktop/Burns\ System\ Repo && supabase db push`
+  2. Deploy function: `supabase functions deploy hcss-sync-actuals --no-verify-jwt`
+  3. Re-run `{syncMetadata:true}` once to backfill `cost_code_id` for all 938 cost codes.
+  4. Run `{syncJobCosts:true}` to populate `hcss_job_costs` for the last 14 days.
+- **Pass 1 status (mid-deploy):** Edge Function syncJobCosts is working — probe upsert returns the inserted row with all BELMOS fields populated (e.g., Steel Driver code 312321: `qty:144, labor_hours:20.3, labor_cost:$810.89, equip_cost:$130.60, mat_cost:$720`). But anon/authenticated SELECT returned 0 rows because the 20260428 migration created `hcss_job_costs` with the old anon-only RLS pattern; the 20260420 auth-RLS migration had switched all the other HCSS tables to authenticated. Patched with `20260428b_hcss_job_costs_auth_rls.sql` (drop the anon policy, add `auth users select hcss job costs`). Run `supabase db push` to apply, then re-query.
+- **Mapping rate fix (#20) shipped:**
+  - `syncMetadata` now pulls cost codes for ALL 135 jobs, not just the 51 active ones. Inactive jobs still have historical jobCosts data referencing their codes, so we need the full mapping to translate costCodeId → cost_code without dropping rows.
+  - `syncJobCosts` no longer drops unmapped rows — uses `??<uuid8>` placeholder for `cost_code` so data lands. A subsequent metadata sync that captures the missing code will let us backfill the readable string via `cost_code_id`.
+- **Pass 2 wired (front-end, deploy pending):** `public/index.html`
+  - New `loadHcssJobCosts(jobCode)` reads from `hcss_job_costs` into `job.hcssJobCosts`.
+  - New `applyHcssJobCostsToActuals(job)` rolls up the per-(date × code × foreman) rows by code and merges totals into `job.actuals[code]` using the existing rollup schema (`actualLabor`, `actualEquip`, `actualMat`, `actualSub`, `actualCost`, `actualHours`, `actualEquipHrs`, `qtyInstalled`). Greater-of policy on dollars so a 14-day partial sync can't downgrade a full xlsx Summary that already has costs-to-date. Trucking $ rolls into `actualSub`.
+  - New `hcssSyncJobCosts({fullHistory})` button handler. Two new buttons in Set Up: **Sync Costs (Live $)** (orange, last 14 days) and **Backfill Costs** (full history, prompts confirm).
+  - `hcssLoadIntoActiveJob` now also runs `loadHcssJobCosts` + `applyHcssJobCostsToActuals` so dollars land in memory whenever a job becomes active.
+- **Pending deploy (one push for everything):**
+  1. Edge Function: `cd ~/Desktop/Burns\ System\ Repo && supabase functions deploy hcss-sync-actuals --no-verify-jwt`
+  2. Front-end: `deploy.command` to push `public/index.html` changes
+  3. In the app: hit **Sync Jobs & Codes** (re-runs metadata sync — now covers all 135 jobs), then **Backfill Costs** (one-time full history pull). After that, daily 5am cron + the standard Sync Now is enough.
+- **Validation gate before Pass 2 finalize:** confirm Steel Driver Production Tracker $ totals roughly match the Cost Code Summary xlsx numbers. If they do, the Summary upload box can be retired.
+- **Rate-limit hardening:** Backfill All hit a 429 on first re-pull ("Rate limit is exceeded. Try again in 14 seconds."). Wrapped all HCSS API calls in `hcssRequest()` which auto-parses the wait-time hint, sleeps, and retries up to 4 attempts. Also added a 250ms pause between job iterations in `syncJobCosts` so a 51-job loop doesn't burst into a 429 in the first place. Needs another `supabase functions deploy hcss-sync-actuals --no-verify-jwt` to ship.

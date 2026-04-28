@@ -521,8 +521,10 @@ tr:hover{background:#FAF8F5}
       <div><strong style="color:var(--olive);">HCSS Auto-Sync</strong> <span id="hcssSyncStatus" style="color:var(--text-light);">Loading…</span></div>
       <div style="display:flex;gap:6px;">
         <button class="edit-btn" onclick="hcssSyncNow()" style="padding:5px 12px;">Sync Now</button>
+        <button class="edit-btn" onclick="hcssSyncJobCosts()" style="padding:5px 12px;background:#fff5e0;border-color:var(--orange);color:var(--orange);" title="Pull live BELMOS dollars + hours per cost code from HeavyJob API (last 14 days)">Sync Costs (Live $)</button>
         <button class="edit-btn" onclick="hcssSyncMetadata()" style="padding:5px 12px;" title="Pull job list & cost codes from HeavyJob API">Sync Jobs & Codes</button>
         <button class="edit-btn" onclick="hcssBackfill()" style="padding:5px 12px;" title="Pull full history (use once on first deployment)">Backfill All</button>
+        <button class="edit-btn" onclick="hcssSyncJobCosts({fullHistory:true})" style="padding:5px 12px;" title="Pull FULL HCSS cost history for every active job (one-time use)">Backfill Costs</button>
         <button class="edit-btn" onclick="hcssSyncDiscover()" style="padding:5px 12px;" title="List HCSS business units (use once to find your BU code)">Discover BU</button>
       </div>
     </div>
@@ -3295,6 +3297,117 @@ async function hcssSyncMetadata(){
   }
 }
 
+// ── Pull fresh per-(date × cost code × foreman) BELMOS dollars from
+//    POST /heavyjob/api/v1/jobCosts/advancedRequest. This is the bridge
+//    that makes Production Tracker $ fresh — Spectrum's 30-day lag stops
+//    mattering. Backed by the hcss_job_costs Supabase table.
+async function hcssSyncJobCosts(opts){
+  opts=opts||{};
+  const el=document.getElementById('hcssSyncStatus');
+  const fullHistory=opts.fullHistory===true;
+  if(fullHistory && !confirm('Backfill ALL HCSS cost history (all jobs, all dates)? Can take several minutes.'))return;
+  if(el)el.textContent=fullHistory?'Pulling FULL HCSS cost history…':'Syncing HCSS costs (last 14 days)…';
+  try{
+    const body={syncJobCosts:true};
+    if(fullHistory)body.fullHistory=true;
+    const j=await hcssCallFn(body);
+    log(`HCSS job-costs sync: ${j.jobsScanned} jobs · ${j.rowsFetched} fetched · ${j.rowsUpserted} upserted · ${Math.round(j.durationMs/1000)}s`);
+    if(j.errorCount>0)log(`Job-costs sync had ${j.errorCount} per-job errors — see sync_log`);
+    alert(`Job costs synced!\n\nJobs: ${j.jobsScanned}\nRows fetched: ${j.rowsFetched}\nRows upserted: ${j.rowsUpserted}\n\nDuration: ${Math.round(j.durationMs/1000)}s`);
+    await hcssLoadSyncStatus();
+    // Refresh cached cost data in the Store so Production Tracker picks up the new $.
+    if(Store.activeJob){
+      const n=await loadHcssJobCosts(Store.activeJob);
+      const job=Store.jobs[Store.activeJob];
+      const t=applyHcssJobCostsToActuals(job);
+      log(`Loaded ${n} job-cost rows · merged $ into ${t} cost codes for active job ${Store.activeJob}`);
+      await saveJob(Store.activeJob);
+      renderActiveSubTab&&renderActiveSubTab();
+    }
+  }catch(e){
+    log('HCSS job-costs sync failed: '+e.message);
+    if(el)el.textContent='Job-costs sync error: '+e.message;
+    alert('Job-costs sync failed: '+e.message);
+  }
+}
+
+// ── Read fresh cost rows for the active job from hcss_job_costs.
+//    Stored on Store.jobs[jobCode].hcssJobCosts as an array of rows so
+//    Production Tracker (and others) can roll up by date / cost code.
+async function loadHcssJobCosts(jobCode){
+  if(!jobCode)return 0;
+  const job=Store.jobs[jobCode];
+  if(!job)return 0;
+  try{
+    const{data,error}=await sb
+      .from('hcss_job_costs')
+      .select('date,cost_code,cost_code_id,foreman_id,foreman_name,qty,labor_hours,labor_cost,equip_hours,equip_cost,mat_cost,sub_cost,trucking_cost')
+      .eq('job_number',String(jobCode))
+      .order('date',{ascending:false});
+    if(error){console.warn('loadHcssJobCosts:',error);return 0}
+    job.hcssJobCosts=data||[];
+    return job.hcssJobCosts.length;
+  }catch(e){
+    console.warn('loadHcssJobCosts failed:',e);
+    return 0;
+  }
+}
+
+// ── Roll up hcss_job_costs rows into job.actuals[code] so Production Tracker
+//    sees fresh BELMOS dollars without code changes. Uses a "greater of"
+//    policy on dollars so a partial 14-day sync can't downgrade a full
+//    Cost Code Summary xlsx upload that already has costs-to-date.
+//    For hours and qty, we don't override (the timecard sync is the canonical
+//    source); we only fill in if the existing rollup is empty.
+function applyHcssJobCostsToActuals(job){
+  if(!job||!job.hcssJobCosts||!job.hcssJobCosts.length)return 0;
+  if(!job.actuals)job.actuals={};
+  const byCode={};
+  for(const r of job.hcssJobCosts){
+    const code=String(r.cost_code||'');
+    if(!code||code.startsWith('??'))continue; // skip placeholder UUIDs (unmapped)
+    if(!byCode[code])byCode[code]={laborCost:0,equipCost:0,matCost:0,subCost:0,truckingCost:0,qty:0,laborHours:0,equipHours:0,minDate:'',maxDate:''};
+    const b=byCode[code];
+    b.laborCost+=Number(r.labor_cost)||0;
+    b.equipCost+=Number(r.equip_cost)||0;
+    b.matCost+=Number(r.mat_cost)||0;
+    b.subCost+=Number(r.sub_cost)||0;
+    b.truckingCost+=Number(r.trucking_cost)||0;
+    b.qty+=Number(r.qty)||0;
+    b.laborHours+=Number(r.labor_hours)||0;
+    b.equipHours+=Number(r.equip_hours)||0;
+    if(r.date){
+      if(!b.minDate||r.date<b.minDate)b.minDate=r.date;
+      if(!b.maxDate||r.date>b.maxDate)b.maxDate=r.date;
+    }
+  }
+  let touched=0;
+  const greater=(a,b)=>(b>a)?b:a;
+  for(const code in byCode){
+    if(!job.actuals[code])job.actuals[code]={};
+    const a=job.actuals[code];
+    const j=byCode[code];
+    // Field names match the rollupActualsDetail bucket schema (job.actuals[code]):
+    //   actualLabor / actualEquip / actualMat / actualSub = $ per BELMOS component
+    //   actualCost = total $; actualHours = labor hrs; actualEquipHrs = equip hrs
+    //   qtyInstalled = qty installed
+    // Trucking is rolled into actualCost (the total) — no dedicated field exists.
+    const allCost=j.laborCost+j.equipCost+j.matCost+j.subCost+j.truckingCost;
+    a.actualLabor=greater(Number(a.actualLabor)||0,j.laborCost);
+    a.actualEquip=greater(Number(a.actualEquip)||0,j.equipCost);
+    a.actualMat=greater(Number(a.actualMat)||0,j.matCost);
+    a.actualSub=greater(Number(a.actualSub)||0,j.subCost+j.truckingCost);
+    a.actualCost=greater(Number(a.actualCost)||0,allCost);
+    if(!a.actualHours)a.actualHours=j.laborHours;
+    if(!a.actualEquipHrs)a.actualEquipHrs=j.equipHours;
+    if(!a.qtyInstalled)a.qtyInstalled=j.qty;
+    a._hcssJobCostsApplied=true;
+    a._hcssJobCostsRange={from:j.minDate,to:j.maxDate};
+    touched++;
+  }
+  return touched;
+}
+
 // ── Load HCSS job list for auto-match ──
 async function hcssLoadJobList(){
   const{data,error}=await sb.from('hcss_jobs').select('hcss_id,job_code,job_name,status').order('job_code');
@@ -3383,11 +3496,19 @@ async function hcssLoadIntoActiveJob(){
   // Merge with any locally-imported rows (XLSX fallback) so the app never loses data
   job.actualsDetail=mergeActualsDetail(job.actualsDetail||[],detail);
   job.actuals=rollupActualsDetail(job.actualsDetail,job.actuals);
+  // Pull fresh BELMOS $ from hcss_job_costs (Pass 1 of the API-driven cost sync)
+  // and merge per-code totals into job.actuals so Production Tracker can read $
+  // without changes. Greater-of policy: only override an existing actual$ if the
+  // new value is GREATER, so a 14-day partial sync can't downgrade a full xlsx
+  // Summary that already has costs to date.
+  await loadHcssJobCosts(Store.activeJob);
+  applyHcssJobCostsToActuals(job);
   job.meta.lastActualsImport=new Date().toISOString();
   if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(job);
   await saveJob(Store.activeJob);
   if(typeof renderActiveSubTab==='function')renderActiveSubTab();
-  log(`HCSS → ${job.meta.name}: ${detail.length} synced rows merged into actuals.`);
+  const jcCount=(job.hcssJobCosts||[]).length;
+  log(`HCSS → ${job.meta.name}: ${detail.length} timecard rows + ${jcCount} job-cost rows merged.`);
 }
 
 // ═══════════════════════════════════════════
