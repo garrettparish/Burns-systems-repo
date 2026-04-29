@@ -290,6 +290,11 @@ Deno.serve(async (req) => {
         { label: 'GET /accounting/rateSetGroups',                  method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/accounting/rateSetGroups` },
         // PayClass (employee pay rates)
         { label: 'GET /payClasses',                                method: 'GET',  url: `${HCSS_API_BASE}/heavyjob/api/v1/payClasses` },
+        // ── Diary / Attachments (2026-04-28: testing for photos, notes, weather) ──
+        { label: 'POST /diaries/search',                           method: 'POST', url: `${HCSS_API_BASE}/heavyjob/api/v1/diaries/search`, body: { businessUnitId: buUuid, jobIds: [testJobId], limit: 5 } },
+        { label: 'POST /attachment/advancedRequest (photos)',      method: 'POST', url: `${HCSS_API_BASE}/heavyjob/api/v1/attachment/advancedRequest`, body: { businessUnitId: buUuid, jobIds: [testJobId], attachmentType: 'diary', fileType: 'photos', limit: 5 } },
+        { label: 'POST /attachment/advancedRequest (all)',         method: 'POST', url: `${HCSS_API_BASE}/heavyjob/api/v1/attachment/advancedRequest`, body: { businessUnitId: buUuid, jobIds: [testJobId], attachmentType: 'diary', fileType: 'all', limit: 5 } },
+        { label: 'POST /attachment/advancedRequest (pdf)',         method: 'POST', url: `${HCSS_API_BASE}/heavyjob/api/v1/attachment/advancedRequest`, body: { businessUnitId: buUuid, jobIds: [testJobId], attachmentType: 'diary', fileType: 'pdf', limit: 5 } },
       ];
 
       for (const c of COST_CANDIDATES) {
@@ -304,7 +309,7 @@ Deno.serve(async (req) => {
             ...(c.method === 'POST' ? { body: JSON.stringify(c.body || {}) } : {}),
           });
           const txt = await resp.text();
-          costEndpointResults.push({ label: c.label, method: c.method, url: c.url, status: resp.status, body: txt.substring(0, 2500) });
+          costEndpointResults.push({ label: c.label, method: c.method, url: c.url, status: resp.status, body: txt.substring(0, 12000) });
         } catch (e) {
           costEndpointResults.push({ label: c.label, method: c.method, url: c.url, status: 0, body: String(e) });
         }

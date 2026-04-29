@@ -317,6 +317,10 @@ tr:hover{background:#FAF8F5}
       <span id="topbarSyncLabel">Sync…</span>
     </div>
     <div class="topbar-phase">Phase 1A</div>
+    <div id="notifBellWrap" style="position:relative;">
+      <button id="notifBellBtn" onclick="toggleNotifPanel()" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:18px;padding:4px 8px;border-radius:4px;transition:all .2s;position:relative;" title="Upcoming work alerts" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#128276;<span id="notifBadge" style="display:none;position:absolute;top:0;right:0;background:var(--orange);color:white;font-size:9px;font-weight:700;border-radius:10px;min-width:14px;height:14px;line-height:14px;padding:0 4px;text-align:center;">0</span></button>
+      <div id="notifPanel" style="display:none;position:absolute;right:0;top:calc(100% + 6px);background:white;color:var(--text);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.18);width:380px;max-height:500px;overflow-y:auto;z-index:1000;font-family:'Source Serif 4',serif;"></div>
+    </div>
     <button onclick="switchToSubTab('setup')" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:18px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Project Set Up" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#9881;</button>
     <button onclick="showAdminPinModal()" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:15px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Admin Password" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#x1f511;</button>
     <div id="userMenu" style="display:none;position:relative;">
@@ -6902,6 +6906,379 @@ function renderPayApps(){
 }
 
 // ═══════════════════════════════════════════
+// DAILY INSIGHTS — computational helpers
+// One coherent module that turns the data we already have into actionable
+// signals. Used by the Overview "Daily Insights" panel, Production Tracker
+// stuck-work column, the notifications system, and the diary attention queue.
+// All functions are PURE — they read job data and return plain values, no
+// mutation, no DOM. UI consumers handle rendering.
+// ═══════════════════════════════════════════
+function insightsTodayUTC(){
+  const d=new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()));
+}
+function insightsDaysBetween(a,b){
+  const A=toDate(a), B=toDate(b);
+  if(!A||!B) return 0;
+  return Math.round((B.getTime()-A.getTime())/86400000);
+}
+// Schedule-vs-production divergence at the JOB level:
+//   schedPctElapsed = days from start → today / total job duration
+//   actualPctComplete = actual cost-to-date / budget cost
+//   slipDays = (schedPctElapsed - actualPctComplete) × total duration
+// Negative slip = ahead of schedule. Positive slip = behind.
+function computeJobScheduleDivergence(job){
+  const m=job&&job.meta; if(!m) return null;
+  const start=toDate(m.startDate), end=toDate(m.endDate);
+  if(!start||!end) return null;
+  const today=insightsTodayUTC();
+  const totalDays=Math.max(1, insightsDaysBetween(start,end));
+  const elapsedDays=Math.max(0, Math.min(totalDays, insightsDaysBetween(start,today)));
+  const schedPct=elapsedDays/totalDays;
+
+  // Sum bucket actuals + budgets across job.actuals (already populated by xlsx
+  // Summary, timecard sync, and hcss_job_costs merge in rollupActualsDetail).
+  let budgetCost=0, actualCost=0;
+  for(const code in (job.actuals||{})){
+    const a=job.actuals[code];
+    budgetCost += Number(a.budgetCost)||0;
+    actualCost += Number(a.actualCost)||0;
+  }
+  const actualPct = budgetCost>0 ? Math.min(1.5, actualCost/budgetCost) : 0;
+  const slipDays = Math.round((schedPct-actualPct)*totalDays);
+
+  return {
+    start, end, today,
+    totalDays, elapsedDays,
+    schedPct: schedPct*100,
+    actualPct: actualPct*100,
+    slipDays,                 // +ve = behind, -ve = ahead
+    budgetCost, actualCost,
+  };
+}
+// Project finish date based on current burn rate (cost-driven).
+//   daysRemainingByBurn = (budgetCost - actualCost) / dailyBurn
+//   forecastEnd = today + daysRemainingByBurn
+// Returns {forecastEnd, daysOffSchedule, dailyBurn}.
+// daysOffSchedule = forecastEnd - scheduledEnd; positive = forecast finishes late.
+function computeJobForecastEnd(job){
+  const div=computeJobScheduleDivergence(job);
+  if(!div) return null;
+  const dailyBurn = div.elapsedDays>0 ? div.actualCost/div.elapsedDays : 0;
+  const remaining = Math.max(0, div.budgetCost-div.actualCost);
+  if(dailyBurn<=0 || div.budgetCost<=0){
+    return { forecastEnd:null, daysOffSchedule:null, dailyBurn };
+  }
+  const daysToGo = Math.round(remaining/dailyBurn);
+  const forecastEnd = new Date(div.today); forecastEnd.setUTCDate(forecastEnd.getUTCDate()+daysToGo);
+  const daysOffSchedule = insightsDaysBetween(div.end, forecastEnd);
+  return { forecastEnd, daysOffSchedule, dailyBurn };
+}
+// "Stuck work": cost codes where qty hasn't moved in N days and aren't yet
+// 100% complete. Reads job.actualsDetail to find the most recent qty entry
+// per cost code, compares to today.
+function computeStuckCodes(job, daysThreshold){
+  daysThreshold = Number(daysThreshold)||14;
+  const today=insightsTodayUTC();
+  const lastByCode={};
+  for(const r of (job.actualsDetail||[])){
+    if(!(Number(r.actualQty)>0)) continue;
+    const d=toDate(r.date); if(!d) continue;
+    const code=String(r.costCode||'');
+    if(!code) continue;
+    if(!lastByCode[code]||d>lastByCode[code]) lastByCode[code]=d;
+  }
+  const stuck=[];
+  for(const code in (job.actuals||{})){
+    const a=job.actuals[code];
+    const budgetQty=Number(a.budgetQty)||0;
+    const installed=Number(a.qtyInstalled)||0;
+    if(budgetQty<=0) continue;
+    const pct=installed/budgetQty;
+    if(pct>=0.99) continue;            // basically done, not stuck
+    const last=lastByCode[code];
+    if(!last) continue;                 // never started — can't be "stuck", call it "not started"
+    const idleDays=insightsDaysBetween(last,today);
+    if(idleDays>=daysThreshold){
+      stuck.push({
+        code,
+        description: a.description||a.costCodeDesc||'',
+        budgetQty, installed,
+        pctComplete: pct*100,
+        lastQtyDate: last.toISOString().slice(0,10),
+        idleDays,
+      });
+    }
+  }
+  return stuck.sort((a,b)=>b.idleDays-a.idleDays);
+}
+// Cost codes where bid $/unit ≠ actual $/unit beyond a threshold. Surfaces
+// the worst calibration gaps so estimating can refine future bids.
+function computeBidVsActualUnitCost(job, opts){
+  opts = opts||{};
+  const dollarThreshold = Number(opts.dollarThreshold)||1; // per-unit $ delta
+  const pctThreshold = Number(opts.pctThreshold)||10;       // % of bid unit cost
+  const out=[];
+  for(const code in (job.actuals||{})){
+    const a=job.actuals[code];
+    const budgetQty=Number(a.budgetQty)||0;
+    const budgetCost=Number(a.budgetCost)||0;
+    const installed=Number(a.qtyInstalled)||0;
+    const actualCost=Number(a.actualCost)||0;
+    if(budgetQty<=0||installed<=0) continue;
+    const bidUnit = budgetCost/budgetQty;
+    const actualUnit = actualCost/installed;
+    if(bidUnit<=0) continue;
+    const dollarDelta = actualUnit - bidUnit;
+    const pctDelta = (dollarDelta/bidUnit)*100;
+    if(Math.abs(dollarDelta)<dollarThreshold) continue;
+    if(Math.abs(pctDelta)<pctThreshold) continue;
+    out.push({
+      code,
+      description: a.description||a.costCodeDesc||'',
+      unit: a.unit||'',
+      bidUnit, actualUnit,
+      dollarDelta, pctDelta,
+      installed, budgetQty,
+      pctComplete: budgetQty>0?(installed/budgetQty*100):0,
+    });
+  }
+  // Worst overruns first (biggest positive pct), then worst underruns
+  return out.sort((a,b)=>Math.abs(b.pctDelta)-Math.abs(a.pctDelta));
+}
+// Diary attention queue: scan diary notes for keywords that suggest a problem
+// and surface them as a daily brief. Reads from optional job.hcssDiaries (set
+// by a future loader) — if not present, returns empty list.
+const DIARY_KEYWORDS = [
+  {tag:'down',     re:/\b(down|broken|broke|busted|inoperable|won['’]t start)\b/i, severity:'high'},
+  {tag:'delay',    re:/\b(delay|delayed|behind|stopped|halted|stuck)\b/i,           severity:'med'},
+  {tag:'weather',  re:/\b(rain|storm|wet|flooded|wind|frozen|ice|snow|mud)\b/i,     severity:'low'},
+  {tag:'incident', re:/\b(incident|injur|accident|hospital|first[- ]?aid|hurt)\b/i, severity:'high'},
+  {tag:'complaint',re:/\b(complaint|complain|upset|angry|argue|owner)\b/i,          severity:'med'},
+  {tag:'damage',   re:/\b(damage|damaged|hit|crashed|broke through)\b/i,            severity:'high'},
+];
+function scanDiariesForAttention(diaries){
+  const out=[];
+  for(const d of (diaries||[])){
+    const note=String(d.note||'');
+    const tags=[];
+    let maxSeverity='low';
+    for(const kw of DIARY_KEYWORDS){
+      if(kw.re.test(note)){
+        tags.push(kw.tag);
+        if(kw.severity==='high') maxSeverity='high';
+        else if(kw.severity==='med'&&maxSeverity!=='high') maxSeverity='med';
+      }
+    }
+    if(tags.length){
+      out.push({
+        date: d.date,
+        jobCode: d.job?.code||'',
+        jobName: d.job?.description||'',
+        foreman: `${d.foreman?.firstName||''} ${d.foreman?.lastName||''}`.trim(),
+        note,
+        tags,
+        severity: maxSeverity,
+      });
+    }
+  }
+  return out.sort((a,b)=>{
+    const sev=({high:0,med:1,low:2})[a.severity] - ({high:0,med:1,low:2})[b.severity];
+    return sev!==0 ? sev : (a.date<b.date?1:-1);
+  });
+}
+// Upcoming-work alerts: scan all jobs' schedules for tasks whose START date
+// falls within configured horizons (e.g., 30/15/5 days from today). Returns
+// per-task entries grouped by horizon. Internal user notification only — no
+// external messaging. Subs are referenced for context but never contacted.
+const NOTIF_DEFAULTS = { horizons:[30,15,5], includeSubsOnly:false };
+function getNotifSettings(){
+  try{
+    const raw = localStorage.getItem('bdc_notif_settings');
+    if(!raw) return {...NOTIF_DEFAULTS};
+    const parsed = JSON.parse(raw);
+    return {
+      horizons: Array.isArray(parsed.horizons)&&parsed.horizons.length ? parsed.horizons.map(n=>Math.max(1,Math.min(365,Math.round(+n||0)))).filter(n=>n>0).slice(0,6) : NOTIF_DEFAULTS.horizons.slice(),
+      includeSubsOnly: !!parsed.includeSubsOnly,
+    };
+  }catch(e){ return {...NOTIF_DEFAULTS}; }
+}
+function saveNotifSettings(s){
+  const clean = {
+    horizons: (s.horizons||NOTIF_DEFAULTS.horizons).map(n=>Math.max(1,Math.min(365,Math.round(+n||0)))).filter(n=>n>0).slice(0,6),
+    includeSubsOnly: !!s.includeSubsOnly,
+  };
+  localStorage.setItem('bdc_notif_settings', JSON.stringify(clean));
+  return clean;
+}
+function computeUpcomingWorkAlerts(allJobs, settings){
+  settings = settings || getNotifSettings();
+  const horizons = (settings.horizons||NOTIF_DEFAULTS.horizons).slice().sort((a,b)=>b-a); // 30,15,5
+  const today = insightsTodayUTC();
+  const alertsByHorizon = {};
+  for(const h of horizons) alertsByHorizon[h]=[];
+  for(const jobKey in (allJobs||{})){
+    const job = allJobs[jobKey]; if(!job) continue;
+    const m = job.meta||{};
+    const jobCode = String(m.number||jobKey);
+    const sched = job.schedule||[];
+    for(const t of sched){
+      const start = toDate(t.start); if(!start) continue;
+      const daysOut = insightsDaysBetween(today, start);
+      if(daysOut<0) continue; // already started
+      // Filter: if includeSubsOnly, only show tasks whose crews include a sub
+      const crews = Array.isArray(t.crews)?t.crews:[];
+      const isSubTask = crews.some(c=>String(c).toLowerCase().startsWith('sub:'));
+      if(settings.includeSubsOnly && !isSubTask) continue;
+      // Match to the closest horizon BUCKET (alert exactly when daysOut==horizon
+      // or within the day bucket). To keep the queue light, alert only when
+      // daysOut is within ±1 of any threshold.
+      for(const h of horizons){
+        if(Math.abs(daysOut-h)<=1){
+          alertsByHorizon[h].push({
+            jobCode, jobName: m.name||jobCode,
+            taskId: t.id, taskName: t.name||t.taskName||'(unnamed)',
+            start: start.toISOString().slice(0,10),
+            daysOut, crews, isSubTask,
+          });
+          break;
+        }
+      }
+    }
+  }
+  // Sort each horizon by daysOut (ascending = closest in time first)
+  for(const h of horizons) alertsByHorizon[h].sort((a,b)=>a.daysOut-b.daysOut);
+  return { horizons, alertsByHorizon, settings };
+}
+// Render the notification panel (top-right bell). Pulls upcoming-work alerts
+// across ALL jobs (not just the active one) at the configured horizons.
+function renderNotifPanel(){
+  const panel = document.getElementById('notifPanel');
+  const badge = document.getElementById('notifBadge');
+  if(!panel) return;
+  const data = computeUpcomingWorkAlerts(Store.jobs, getNotifSettings());
+  let total = 0;
+  for(const h of data.horizons) total += data.alertsByHorizon[h].length;
+  if(badge){
+    badge.textContent = total;
+    badge.style.display = total>0 ? 'inline-block' : 'none';
+  }
+  let h = '';
+  h += '<div style="padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">';
+  h += `<strong style="font-family:Oswald,sans-serif;color:var(--olive);">Upcoming Work</strong>`;
+  h += `<button class="edit-btn" style="font-size:11px;padding:3px 8px;" onclick="navSub('production','settings');toggleNotifPanel(false);" title="Configure thresholds">&#9881; Settings</button>`;
+  h += '</div>';
+  if(total===0){
+    h += '<div style="padding:24px 14px;font-size:13px;color:var(--text-light);text-align:center;">No upcoming work in your alert windows.</div>';
+  }else{
+    for(const horizon of data.horizons){
+      const list = data.alertsByHorizon[horizon];
+      if(!list.length) continue;
+      h += `<div style="padding:10px 14px;background:#FAF7F2;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">${horizon}-DAY HORIZON · ${list.length} task${list.length>1?'s':''}</div>`;
+      for(const alert of list.slice(0, 8)){
+        const subBadge = alert.isSubTask ? `<span style="font-size:10px;background:#8E44AD;color:white;border-radius:3px;padding:1px 5px;margin-left:6px;">SUB</span>` : '';
+        h += `<div style="padding:10px 14px;border-bottom:1px solid #f0eee9;cursor:pointer;" onclick="Store.activeJob='${alert.jobCode}';refreshJobSelectors();switchToSubTab('schedule');toggleNotifPanel(false);">`;
+        h += `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">`;
+        h += `<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:var(--text);">${alert.taskName}${subBadge}</div>`;
+        h += `<div style="font-size:11px;color:var(--text-light);margin-top:2px;">Job ${alert.jobCode} · ${alert.jobName}</div></div>`;
+        h += `<div style="text-align:right;font-size:11px;"><div style="color:var(--orange);font-weight:600;">${alert.daysOut}d</div><div style="color:var(--text-light);">${alert.start}</div></div>`;
+        h += `</div></div>`;
+      }
+      if(list.length > 8){
+        h += `<div style="padding:8px 14px;font-size:11px;color:var(--text-light);">+ ${list.length-8} more in this window</div>`;
+      }
+    }
+  }
+  panel.innerHTML = h;
+}
+function toggleNotifPanel(force){
+  const panel = document.getElementById('notifPanel');
+  if(!panel) return;
+  const willOpen = (force===true) || (force!==false && panel.style.display==='none');
+  if(willOpen){
+    renderNotifPanel();
+    panel.style.display = 'block';
+  }else{
+    panel.style.display = 'none';
+  }
+}
+// Click-outside to close the notification panel
+if(typeof window !== 'undefined'){
+  document.addEventListener('click', function(e){
+    const wrap = document.getElementById('notifBellWrap');
+    const panel = document.getElementById('notifPanel');
+    if(!wrap||!panel||panel.style.display==='none') return;
+    if(!wrap.contains(e.target)) panel.style.display='none';
+  });
+}
+// Refresh badge whenever the active sub-tab changes — keeps the count fresh
+// without polling. Wrap once so multiple loads don't pile listeners.
+if(typeof window !== 'undefined' && !window._notifBadgeWired){
+  window._notifBadgeWired = true;
+  setInterval(()=>{
+    try{
+      const badge = document.getElementById('notifBadge');
+      if(!badge) return;
+      const data = computeUpcomingWorkAlerts(Store.jobs, getNotifSettings());
+      let total = 0;
+      for(const h of data.horizons) total += data.alertsByHorizon[h].length;
+      badge.textContent = total;
+      badge.style.display = total>0 ? 'inline-block' : 'none';
+    }catch(e){/* swallow */}
+  }, 60_000); // tick every minute — schedule data doesn't change often
+}
+
+// Notification settings UI handlers (wired into the Settings card).
+function saveNotifHorizonsFromUI(){
+  const inputs = document.querySelectorAll('.notif-horizon-input');
+  const horizons = [...inputs].map(i => parseInt(i.value,10)).filter(n => n>0).slice(0,6);
+  const subsOnly = document.getElementById('notifSubsOnly')?.checked||false;
+  const saved = saveNotifSettings({horizons, includeSubsOnly: subsOnly});
+  log(`Notification settings saved · ${saved.horizons.join(', ')}d horizons${saved.includeSubsOnly?' · subs only':''}`);
+  if(typeof renderActiveSubTab==='function') renderActiveSubTab();
+  // Refresh the bell badge immediately
+  const data = computeUpcomingWorkAlerts(Store.jobs, saved);
+  let total = 0; for(const h of data.horizons) total += data.alertsByHorizon[h].length;
+  const badge = document.getElementById('notifBadge');
+  if(badge){ badge.textContent = total; badge.style.display = total>0?'inline-block':'none'; }
+}
+function addNotifHorizon(){
+  const cur = getNotifSettings();
+  if(cur.horizons.length >= 6){ alert('Max 6 thresholds.'); return; }
+  cur.horizons.push(7); // default new threshold
+  saveNotifSettings(cur);
+  if(typeof renderActiveSubTab==='function') renderActiveSubTab();
+}
+function toggleNotifSubsOnly(checked){
+  const cur = getNotifSettings();
+  cur.includeSubsOnly = !!checked;
+  saveNotifSettings(cur);
+  // Don't re-render the whole tab — just update the badge live
+  const data = computeUpcomingWorkAlerts(Store.jobs, cur);
+  let total = 0; for(const h of data.horizons) total += data.alertsByHorizon[h].length;
+  const badge = document.getElementById('notifBadge');
+  if(badge){ badge.textContent = total; badge.style.display = total>0?'inline-block':'none'; }
+}
+
+// One-line label helpers used by panels.
+function fmtSlipBadge(slipDays){
+  if(slipDays===null||slipDays===undefined) return '';
+  if(slipDays<=-3) return `<span style="color:var(--green);font-weight:600;">${Math.abs(slipDays)}d ahead</span>`;
+  if(slipDays>=3)  return `<span style="color:var(--red);font-weight:600;">${slipDays}d behind</span>`;
+  return `<span style="color:var(--text-light);">on pace</span>`;
+}
+function fmtForecastEndBadge(forecast, scheduledEnd){
+  if(!forecast||!forecast.forecastEnd) return '<span style="color:var(--text-light);">—</span>';
+  const fe = forecast.forecastEnd;
+  const off = forecast.daysOffSchedule;
+  const dateStr = fe.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});
+  if(off===null||off===undefined||Math.abs(off)<3) return `<span>${dateStr}</span>`;
+  const color = off>0?'var(--red)':'var(--green)';
+  const label = off>0?`${off}d late`:`${Math.abs(off)}d early`;
+  return `<span>${dateStr}</span> <span style="color:${color};font-weight:600;font-size:11px;">(${label})</span>`;
+}
+
+// ═══════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════
 function renderDashboard(){
@@ -6995,6 +7372,62 @@ function renderDashboard(){
       h+=`<button class="edit-btn" style="border-color:var(--orange);color:var(--orange);" onclick="switchSubTab('${a.action}')">${a.label}</button>`;
       h+=`</div>`;
     });
+    h+='</div>';
+  }
+
+  // ── Daily Insights — schedule slip, stuck work, predicted end date ──
+  const __divergence = computeJobScheduleDivergence(job);
+  const __forecast   = __divergence ? computeJobForecastEnd(job) : null;
+  const __stuck      = computeStuckCodes(job, 14);
+  const __unitCalib  = computeBidVsActualUnitCost(job, {dollarThreshold:1, pctThreshold:15});
+  if(__divergence || __stuck.length || __unitCalib.length){
+    h+='<div style="margin-bottom:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px 16px;">';
+    h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
+    h+='<strong style="color:var(--olive);font-family:Oswald,sans-serif;font-size:14px;letter-spacing:0.5px;">DAILY INSIGHTS</strong>';
+    h+='<span style="font-size:11px;color:var(--text-light);">live · derived from schedule + actuals</span>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;">';
+    // Tile 1: Schedule slip
+    if(__divergence){
+      h+=`<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;">`;
+      h+=`<div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Pace</div>`;
+      h+=`<div style="font-size:16px;">${fmtSlipBadge(__divergence.slipDays)}</div>`;
+      h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;">${__divergence.elapsedDays} of ${__divergence.totalDays} days · ${__divergence.actualPct.toFixed(0)}% spent vs ${__divergence.schedPct.toFixed(0)}% time elapsed</div>`;
+      h+=`</div>`;
+    }
+    // Tile 2: Forecast end date
+    if(__forecast){
+      h+=`<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;">`;
+      h+=`<div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Forecast Finish</div>`;
+      h+=`<div style="font-size:16px;">${fmtForecastEndBadge(__forecast, __divergence?__divergence.end:null)}</div>`;
+      h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;">$${(__forecast.dailyBurn||0).toFixed(0)}/day burn rate</div>`;
+      h+=`</div>`;
+    }
+    // Tile 3: Stuck work
+    h+=`<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;cursor:pointer;" onclick="navSub('production','production')" title="Open Production Tracker">`;
+    h+=`<div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Stuck Work (14d+)</div>`;
+    h+=`<div style="font-size:18px;font-weight:600;color:${__stuck.length?'var(--red)':'var(--text)'};">${__stuck.length}</div>`;
+    h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;">${__stuck.length?'Codes with no qty entry in 14+ days':'No stalled cost codes'}</div>`;
+    h+=`</div>`;
+    // Tile 4: Unit cost calibration count
+    h+=`<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;cursor:pointer;" onclick="navSub('production','production')" title="Open Production Tracker">`;
+    h+=`<div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Unit Cost Mismatches</div>`;
+    h+=`<div style="font-size:18px;font-weight:600;color:${__unitCalib.length?'var(--orange)':'var(--text)'};">${__unitCalib.length}</div>`;
+    h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;">${__unitCalib.length?'Codes where actual $/unit drifts >15% from bid':'Bid is calibrated'}</div>`;
+    h+=`</div>`;
+    h+='</div>';
+    // Stuck work table (only if any)
+    if(__stuck.length){
+      h+='<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">';
+      h+='<div style="font-size:12px;color:var(--text-light);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Stalled Cost Codes</div>';
+      h+='<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+      h+='<thead><tr style="border-bottom:1px solid var(--border);text-align:left;color:var(--text-light);"><th style="padding:4px 6px;">Code</th><th style="padding:4px 6px;">Description</th><th style="padding:4px 6px;text-align:right;">% Done</th><th style="padding:4px 6px;text-align:right;">Last Qty</th><th style="padding:4px 6px;text-align:right;">Idle</th></tr></thead><tbody>';
+      __stuck.slice(0,5).forEach(s=>{
+        h+=`<tr style="border-bottom:1px solid #f0eee9;"><td style="padding:4px 6px;font-family:monospace;">${s.code}</td><td style="padding:4px 6px;">${(s.description||'').slice(0,40)}</td><td style="padding:4px 6px;text-align:right;">${s.pctComplete.toFixed(0)}%</td><td style="padding:4px 6px;text-align:right;">${s.lastQtyDate}</td><td style="padding:4px 6px;text-align:right;color:var(--red);font-weight:600;">${s.idleDays}d</td></tr>`;
+      });
+      if(__stuck.length>5) h+=`<tr><td colspan="5" style="padding:4px 6px;color:var(--text-light);font-size:11px;">+ ${__stuck.length-5} more</td></tr>`;
+      h+='</tbody></table></div>';
+    }
     h+='</div>';
   }
 
@@ -11361,9 +11794,44 @@ function renderSettings(){
   // Quick links
   h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;">`;
   h+=`<a href="#settings-team" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Team</a>`;
+  h+=`<a href="#settings-notifications" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Notifications</a>`;
   h+=`<a href="#settings-crews" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Crews</a>`;
   h+=`<a href="#settings-fleet" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Fleet</a>`;
   h+=`<a href="#settings-subs" style="font-size:11px;padding:4px 10px;background:var(--ash);border-radius:4px;text-decoration:none;color:var(--text);">Subs</a>`;
+  h+=`</div>`;
+  h+=`</div></div>`;
+
+  // ══════════════════════════════════════════
+  // NOTIFICATIONS — internal alerts only, no external messaging
+  // ══════════════════════════════════════════
+  const __notif = getNotifSettings();
+  const __upcomingPreview = computeUpcomingWorkAlerts(Store.jobs, __notif);
+  let __upcomingTotal = 0;
+  for(const hh of __upcomingPreview.horizons) __upcomingTotal += __upcomingPreview.alertsByHorizon[hh].length;
+  h+=`<div class="card" id="settings-notifications"><div class="card-title">Upcoming-Work Notifications</div>`;
+  h+=`<div style="font-size:12px;color:var(--text-light);margin-bottom:12px;">Internal alerts only — pinned to the bell icon in the top right. Set day-out thresholds to surface tasks before they start. Subs are shown for context but never contacted automatically.</div>`;
+  h+=`<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">`;
+  h+=`<div style="flex:1;min-width:260px;">`;
+  h+=`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:6px;">Day-out thresholds</div>`;
+  h+=`<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;" id="notifHorizonRow">`;
+  __notif.horizons.forEach((d,i)=>{
+    h+=`<input type="number" min="1" max="365" value="${d}" data-idx="${i}" class="notif-horizon-input" style="width:64px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-family:Oswald,sans-serif;font-size:13px;text-align:center;"> <span style="font-size:11px;color:var(--text-light);margin-right:6px;">days</span>`;
+  });
+  h+=`<button class="edit-btn" style="font-size:11px;padding:4px 8px;" onclick="addNotifHorizon()">+ Add</button>`;
+  h+=`<button class="edit-btn" style="font-size:11px;padding:4px 8px;background:var(--orange);color:white;border-color:var(--orange);" onclick="saveNotifHorizonsFromUI()">Save</button>`;
+  h+=`</div>`;
+  h+=`<div style="font-size:11px;color:var(--text-light);margin-top:6px;">Default: 30, 15, 5. Up to 6 thresholds. Each fires when a task's start date is within ±1 day of the threshold.</div>`;
+  h+=`<label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;cursor:pointer;">`;
+  h+=`<input type="checkbox" id="notifSubsOnly" ${__notif.includeSubsOnly?'checked':''} onchange="toggleNotifSubsOnly(this.checked)"> <span>Only alert on tasks assigned to subcontractors</span>`;
+  h+=`</label>`;
+  h+=`</div>`;
+  h+=`<div style="flex:1;min-width:260px;">`;
+  h+=`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:6px;">Current state</div>`;
+  h+=`<div style="font-size:13px;"><strong style="color:var(--orange);font-size:18px;">${__upcomingTotal}</strong> active alert${__upcomingTotal===1?'':'s'} across all jobs</div>`;
+  __notif.horizons.forEach(h_=>{
+    const ct = __upcomingPreview.alertsByHorizon[h_]?.length || 0;
+    h+=`<div style="font-size:11px;color:var(--text-light);margin-top:2px;">${h_}d horizon: <strong style="color:var(--text);">${ct}</strong></div>`;
+  });
   h+=`</div>`;
   h+=`</div></div>`;
 
