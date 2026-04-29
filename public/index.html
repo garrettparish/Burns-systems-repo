@@ -3365,11 +3365,21 @@ async function loadHcssJobCosts(jobCode){
 //    source); we only fill in if the existing rollup is empty.
 function applyHcssJobCostsToActuals(job){
   if(!job||!job.hcssJobCosts||!job.hcssJobCosts.length)return 0;
-  if(!job.actuals)job.actuals={};
+  // job.actuals is an ARRAY of cost-code records (built by rollupActualsDetail
+  // via Object.values(byCode)). Earlier this function treated it as a keyed
+  // object — corrupted the structure and broke renderJobCostSchedule.
+  if(!Array.isArray(job.actuals)) job.actuals = [];
+  // Build a lookup so we can find an existing actuals row for each cost code.
+  const idx = new Map();
+  for(let i=0; i<job.actuals.length; i++){
+    const row = job.actuals[i];
+    if(row && row.code) idx.set(String(row.code), i);
+  }
+  // Aggregate hcssJobCosts rows by cost_code (skipping placeholder UUIDs).
   const byCode={};
   for(const r of job.hcssJobCosts){
     const code=String(r.cost_code||'');
-    if(!code||code.startsWith('??'))continue; // skip placeholder UUIDs (unmapped)
+    if(!code||code.startsWith('??'))continue;
     if(!byCode[code])byCode[code]={laborCost:0,equipCost:0,matCost:0,subCost:0,truckingCost:0,qty:0,laborHours:0,equipHours:0,minDate:'',maxDate:''};
     const b=byCode[code];
     b.laborCost+=Number(r.labor_cost)||0;
@@ -3388,14 +3398,20 @@ function applyHcssJobCostsToActuals(job){
   let touched=0;
   const greater=(a,b)=>(b>a)?b:a;
   for(const code in byCode){
-    if(!job.actuals[code])job.actuals[code]={};
-    const a=job.actuals[code];
+    let a;
+    if(idx.has(code)){
+      a = job.actuals[idx.get(code)];
+    } else {
+      a = { code };
+      idx.set(code, job.actuals.length);
+      job.actuals.push(a);
+    }
     const j=byCode[code];
-    // Field names match the rollupActualsDetail bucket schema (job.actuals[code]):
+    // Field names match the rollupActualsDetail bucket schema:
     //   actualLabor / actualEquip / actualMat / actualSub = $ per BELMOS component
     //   actualCost = total $; actualHours = labor hrs; actualEquipHrs = equip hrs
     //   qtyInstalled = qty installed
-    // Trucking is rolled into actualCost (the total) — no dedicated field exists.
+    // Trucking is rolled into actualSub since the rollup schema has no trucking field.
     const allCost=j.laborCost+j.equipCost+j.matCost+j.subCost+j.truckingCost;
     a.actualLabor=greater(Number(a.actualLabor)||0,j.laborCost);
     a.actualEquip=greater(Number(a.actualEquip)||0,j.equipCost);
@@ -6955,10 +6971,19 @@ function computeScopeAdjustmentByPhase(job){
     if(!ph) continue;
     bidQtyByPhase[ph] = (bidQtyByPhase[ph]||0) + (Number(a.quantity)||0);
   }
-  // 2. Compare to actual qty installed (from job.actuals) per phase
+  // 2. Build a quick lookup for qtyInstalled by phase code. job.actuals is
+  //    an array of {code, qtyInstalled, ...}; if it's a legacy object,
+  //    Object.values normalizes it.
+  const arr = Array.isArray(job.actuals) ? job.actuals : Object.values(job.actuals||{});
+  const installedByPhase = {};
+  for(const a of arr){
+    if(!a||!a.code) continue;
+    installedByPhase[String(a.code)] = (installedByPhase[String(a.code)]||0) + (Number(a.qtyInstalled)||0);
+  }
+  // 3. Compute scope factor per phase
   for(const ph in bidQtyByPhase){
     const bid = bidQtyByPhase[ph];
-    const installed = Number(job.actuals?.[ph]?.qtyInstalled)||0;
+    const installed = installedByPhase[ph] || 0;
     if(bid>0 && installed>bid){
       out[ph] = installed/bid;
     } else {
@@ -7127,10 +7152,13 @@ function computeJobScheduleDivergence(job, opts){
       },0)
     : bids.reduce((s,b)=>s+(Number(b.directTotal)||0),0);
 
-  // Actual cost: sum across all cost codes that have any actuals data
+  // Actual cost: sum across all cost codes that have any actuals data.
+  // job.actuals can be an array (rollupActualsDetail output) or a legacy
+  // keyed object — handle both.
+  const __actualsArr = Array.isArray(job.actuals) ? job.actuals : Object.values(job.actuals||{});
   let actualCost=0;
-  for(const code in (job.actuals||{})){
-    actualCost += Number(job.actuals[code].actualCost)||0;
+  for(const a of __actualsArr){
+    if(a) actualCost += Number(a.actualCost)||0;
   }
 
   // Planned cost from JCS curve at today (honors scopeAdjusted)
@@ -7223,15 +7251,18 @@ function computeStuckCodes(job, daysThreshold){
     if(!lastByCode[code]||d>lastByCode[code]) lastByCode[code]=d;
   }
   const stuck=[];
-  for(const code in (job.actuals||{})){
-    const a=job.actuals[code];
+  // job.actuals may be an array (canonical) or a legacy keyed object.
+  const arr = Array.isArray(job.actuals) ? job.actuals : Object.values(job.actuals||{});
+  for(const a of arr){
+    if(!a||!a.code) continue;
+    const code=String(a.code);
     const budgetQty=Number(a.budgetQty)||0;
     const installed=Number(a.qtyInstalled)||0;
     if(budgetQty<=0) continue;
     const pct=installed/budgetQty;
     if(pct>=0.99) continue;            // basically done, not stuck
     const last=lastByCode[code];
-    if(!last) continue;                 // never started — can't be "stuck", call it "not started"
+    if(!last) continue;                 // never started — can't be "stuck"
     const idleDays=insightsDaysBetween(last,today);
     if(idleDays>=daysThreshold){
       stuck.push({
@@ -7250,11 +7281,13 @@ function computeStuckCodes(job, daysThreshold){
 // the worst calibration gaps so estimating can refine future bids.
 function computeBidVsActualUnitCost(job, opts){
   opts = opts||{};
-  const dollarThreshold = Number(opts.dollarThreshold)||1; // per-unit $ delta
-  const pctThreshold = Number(opts.pctThreshold)||10;       // % of bid unit cost
+  const dollarThreshold = Number(opts.dollarThreshold)||1;
+  const pctThreshold = Number(opts.pctThreshold)||10;
   const out=[];
-  for(const code in (job.actuals||{})){
-    const a=job.actuals[code];
+  const arr = Array.isArray(job.actuals) ? job.actuals : Object.values(job.actuals||{});
+  for(const a of arr){
+    if(!a||!a.code) continue;
+    const code=String(a.code);
     const budgetQty=Number(a.budgetQty)||0;
     const budgetCost=Number(a.budgetCost)||0;
     const installed=Number(a.qtyInstalled)||0;
@@ -7277,7 +7310,6 @@ function computeBidVsActualUnitCost(job, opts){
       pctComplete: budgetQty>0?(installed/budgetQty*100):0,
     });
   }
-  // Worst overruns first (biggest positive pct), then worst underruns
   return out.sort((a,b)=>Math.abs(b.pctDelta)-Math.abs(a.pctDelta));
 }
 // Diary attention queue: scan diary notes for keywords that suggest a problem
