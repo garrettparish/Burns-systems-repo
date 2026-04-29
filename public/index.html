@@ -3083,6 +3083,34 @@ async function loadJobs(){
     // Normalize taskMap entries to tagged {type,id} form (idempotent).
     // Handles legacy: string or string[] → [{type:'bi',id}, ...].
     if(typeof migrateTaskMap==='function') migrateTaskMap(job);
+    // Sanitize job.actuals — must be a clean array of {code, ...} rows. A
+    // bug in an earlier session corrupted some jobs' actuals into a hybrid
+    // array+object with sparse null holes (treating it like a keyed map by
+    // numeric cost-code strings inflated the array length). Filter nulls,
+    // drop entries without a code, dedupe, and ensure the result is an
+    // ordinary array. Idempotent — running on already-clean data is a no-op.
+    if(job.actuals){
+      let arr;
+      if(Array.isArray(job.actuals)){
+        arr = job.actuals.filter(r => r && typeof r === 'object' && r.code);
+      } else if(typeof job.actuals === 'object'){
+        arr = Object.values(job.actuals).filter(r => r && typeof r === 'object' && r.code);
+      } else {
+        arr = [];
+      }
+      // Dedupe by code — keep the row with the highest actualCost
+      const byCode = new Map();
+      for(const r of arr){
+        const k = String(r.code);
+        const existing = byCode.get(k);
+        if(!existing || (Number(r.actualCost)||0) > (Number(existing.actualCost)||0)){
+          byCode.set(k, r);
+        }
+      }
+      job.actuals = [...byCode.values()];
+    } else {
+      job.actuals = [];
+    }
     Store.jobs[row.id] = job;
   });
   const ids = Object.keys(Store.jobs);
