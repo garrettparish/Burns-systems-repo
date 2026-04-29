@@ -6936,15 +6936,32 @@ function computeJobScheduleDivergence(job){
   const elapsedDays=Math.max(0, Math.min(totalDays, insightsDaysBetween(start,today)));
   const schedPct=elapsedDays/totalDays;
 
-  // Sum bucket actuals + budgets across job.actuals (already populated by xlsx
-  // Summary, timecard sync, and hcss_job_costs merge in rollupActualsDetail).
-  let budgetCost=0, actualCost=0;
+  // Budget reference: total DIRECT COST from activities (preferred) or bid
+  // items. This is the same reference the Overview KPI tiles use, so the
+  // numbers stay consistent with the rest of the dashboard. Summing
+  // job.actuals[code].budgetCost was wrong — that only covers codes that
+  // have actuals data, which on a partially-progressed job can be a small
+  // fraction of the real budget and made actualPct look like 150%.
+  const acts = job.activities||[];
+  const bids = job.bidItems||[];
+  const budgetCost = acts.length
+    ? acts.reduce((s,a)=>s+(Number(a.directTotal)||0),0)
+    : bids.reduce((s,b)=>s+(Number(b.directTotal)||0),0);
+  // Actual cost: sum across all cost codes that have any actuals data
+  let actualCost=0;
   for(const code in (job.actuals||{})){
-    const a=job.actuals[code];
-    budgetCost += Number(a.budgetCost)||0;
-    actualCost += Number(a.actualCost)||0;
+    actualCost += Number(job.actuals[code].actualCost)||0;
   }
-  const actualPct = budgetCost>0 ? Math.min(1.5, actualCost/budgetCost) : 0;
+  const actualPct = budgetCost>0 ? actualCost/budgetCost : 0;
+  // slipDays interpretation:
+  //   actualPct < schedPct → spending less than time elapsed implies → likely BEHIND (work not done)
+  //   actualPct > schedPct → spending more than time elapsed implies → over budget pace, BEHIND
+  //   actualPct ≈ schedPct → on pace
+  // We display only meaningful deviation:
+  //   slipDays = (schedPct - actualPct) × totalDays
+  //     positive = under-spending vs schedule (could mean behind or under-budget — caveat in label)
+  //     negative = over-spending vs schedule (over-budget)
+  // Both cases are "off pace," so the badge says BEHIND if |slipDays| ≥ 3 days.
   const slipDays = Math.round((schedPct-actualPct)*totalDays);
 
   return {
@@ -7261,11 +7278,16 @@ function toggleNotifSubsOnly(checked){
 }
 
 // One-line label helpers used by panels.
+// slipDays semantics (set by computeJobScheduleDivergence):
+//   positive  = under-spending vs % of time elapsed → likely BEHIND on installs
+//   negative  = over-spending vs % of time elapsed  → OVER BUDGET PACE
+//   ~zero     = burn matches schedule = on pace
+// Without per-task qty progress we can't say "ahead" — just call it pace variance.
 function fmtSlipBadge(slipDays){
   if(slipDays===null||slipDays===undefined) return '';
-  if(slipDays<=-3) return `<span style="color:var(--green);font-weight:600;">${Math.abs(slipDays)}d ahead</span>`;
+  if(slipDays<=-3) return `<span style="color:var(--orange);font-weight:600;">${Math.abs(slipDays)}d over-burn</span>`;
   if(slipDays>=3)  return `<span style="color:var(--red);font-weight:600;">${slipDays}d behind</span>`;
-  return `<span style="color:var(--text-light);">on pace</span>`;
+  return `<span style="color:var(--green);font-weight:600;">on pace</span>`;
 }
 function fmtForecastEndBadge(forecast, scheduledEnd){
   if(!forecast||!forecast.forecastEnd) return '<span style="color:var(--text-light);">—</span>';
