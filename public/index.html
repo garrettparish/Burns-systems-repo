@@ -6922,55 +6922,187 @@ function insightsDaysBetween(a,b){
   if(!A||!B) return 0;
   return Math.round((B.getTime()-A.getTime())/86400000);
 }
-// Schedule-vs-production divergence at the JOB level:
-//   schedPctElapsed = days from start → today / total job duration
-//   actualPctComplete = actual cost-to-date / budget cost
-//   slipDays = (schedPctElapsed - actualPctComplete) × total duration
-// Negative slip = ahead of schedule. Positive slip = behind.
+// Build per-activity date envelopes the same way renderJobCostSchedule does.
+// Returns activities annotated with {_barStart, _barEnd, directTotal} so we
+// can sum planned cost at any reference date.
+function buildActivityEnvelopes(job){
+  if(!job||!job.activities||!job.activities.length) return [];
+  const acts=job.activities.slice().map(a=>({...a, _barStart:null, _barEnd:null}));
+  const sched=job.schedule||[];
+  const tm=job.taskMap||{};
+  // 1. Bid-item date envelope from taskMap
+  const biDates={};
+  Object.entries(tm).forEach(([taskId])=>{
+    const bis=(typeof getTaskBidItems==='function')?getTaskBidItems(tm,taskId):[];
+    const t=sched.find(task=>String(task.id)===String(taskId));if(!t)return;
+    const s=toDate(t.start),f=toDate(t.finish);
+    bis.forEach(bi=>{
+      if(!biDates[bi])biDates[bi]={start:null,finish:null};
+      if(s&&(!biDates[bi].start||s<biDates[bi].start))biDates[bi].start=s;
+      if(f&&(!biDates[bi].finish||f>biDates[bi].finish))biDates[bi].finish=f;
+    });
+  });
+  // 2. Direct activity → task mapping
+  const actTaskIdx=(typeof buildActivityTaskIndex==='function')?buildActivityTaskIndex(job):{};
+  const actDirectDates={};
+  Object.entries(actTaskIdx).forEach(([code,taskIds])=>{
+    const rec={start:null,finish:null};
+    (taskIds||[]).forEach(tid=>{
+      const t=sched.find(x=>String(x.id)===String(tid));if(!t)return;
+      const s=toDate(t.start),f=toDate(t.finish);
+      if(s&&(!rec.start||s<rec.start))rec.start=s;
+      if(f&&(!rec.finish||f>rec.finish))rec.finish=f;
+    });
+    if(rec.start||rec.finish) actDirectDates[code]=rec;
+  });
+  // 3. First pass — direct mappings win
+  acts.forEach(a=>{
+    const direct=actDirectDates[String(a.code||'')];
+    if(direct&&(direct.start||direct.finish)){
+      a._barStart=direct.start||direct.finish;
+      a._barEnd=direct.finish||direct.start;
+      a._directMapped=true;
+    }
+  });
+  // 4. Second pass — bid-item envelope spread (linear by calculatedDays)
+  const biActGroups={};
+  acts.forEach(a=>{
+    const bi=String(a.biditem||'');
+    if(!biActGroups[bi])biActGroups[bi]=[];
+    biActGroups[bi].push(a);
+  });
+  Object.entries(biActGroups).forEach(([bi,biActs])=>{
+    const dates=biDates[bi];
+    if(!dates||!dates.start||!dates.finish)return;
+    const remaining=biActs.filter(a=>!a._directMapped);
+    if(!remaining.length)return;
+    const biStart=dates.start.getTime();
+    const biSpan=Math.max(dates.finish.getTime()-biStart, 86400000);
+    const totalDaysInBi=remaining.reduce((s,a)=>s+(a.calculatedDays||1),0)||1;
+    let daysCursor=0;
+    remaining.forEach(a=>{
+      const days=a.calculatedDays||1;
+      const startRatio=daysCursor/totalDaysInBi;
+      const endRatio=(daysCursor+days)/totalDaysInBi;
+      a._barStart=new Date(biStart+startRatio*biSpan);
+      a._barEnd=new Date(biStart+endRatio*biSpan);
+      daysCursor+=days;
+    });
+  });
+  return acts;
+}
+// Job Cost Schedule (JCS) planned cost at a given reference date.
+// For each activity with start+finish, applies linear pro-rata between its
+// dates: 0 before start, full directTotal after finish, linear in between.
+// This is the same curve renderJobCostSchedule visualizes — pace metric now
+// honors front- vs back-loaded cost shapes instead of pretending all jobs
+// burn linearly with calendar time.
+function computeJCSPlannedAt(job, refDate){
+  const ref=toDate(refDate)||insightsTodayUTC();
+  const acts=buildActivityEnvelopes(job);
+  let planned=0;
+  for(const a of acts){
+    const cost=Number(a.directTotal)||0;
+    if(cost<=0||!a._barStart||!a._barEnd) continue;
+    const s=a._barStart.getTime(), f=a._barEnd.getTime(), r=ref.getTime();
+    if(r>=f) planned += cost;
+    else if(r<=s) /* 0 */;
+    else planned += cost*((r-s)/Math.max(f-s,86400000));
+  }
+  return planned;
+}
+// Find the schedule date when JCS planned cost equals targetCost (= today's
+// actual cost). Used to translate $ variance into days-of-slip. Walks day by
+// day from project start to end; returns null if curve never reaches target.
+function findJCSDateAt(job, targetCost){
+  if(!(targetCost>0)) return null;
+  const acts=buildActivityEnvelopes(job);
+  // Project span = min start to max finish
+  let minStart=null, maxFinish=null;
+  for(const a of acts){
+    if(a._barStart && (!minStart||a._barStart<minStart)) minStart=a._barStart;
+    if(a._barEnd   && (!maxFinish||a._barEnd>maxFinish)) maxFinish=a._barEnd;
+  }
+  if(!minStart||!maxFinish) return null;
+  const totalDays=Math.ceil((maxFinish-minStart)/86400000);
+  if(totalDays<=0) return null;
+  // Binary search instead of linear scan — JCS planned cost is monotonic non-decreasing
+  let lo=0, hi=totalDays;
+  while(lo<hi){
+    const mid=(lo+hi)>>1;
+    const probeDate=new Date(minStart.getTime()+mid*86400000);
+    const pv=computeJCSPlannedAt(job, probeDate);
+    if(pv<targetCost) lo=mid+1; else hi=mid;
+  }
+  if(lo>=totalDays) return maxFinish;
+  return new Date(minStart.getTime()+lo*86400000);
+}
+// Schedule-vs-production divergence using the JOB COST SCHEDULE (JCS), not
+// linear time elapsed. The JCS knows when each activity is supposed to spend
+// $ — front-loaded vs back-loaded jobs both compute correctly:
+//   plannedToDate = sum of activity directTotal × pro-rata of (start, finish, today)
+//   actualToDate  = sum of job.actuals[code].actualCost
+//   $variance     = actualToDate - plannedToDate (positive = over-spent vs plan)
+//   slipDays      = today - jcsDateMatchingActual
+//                   (positive = AHEAD of cost plan, negative = BEHIND of cost plan)
+// "Ahead/behind" here is relative to the COST CURVE, which honors loading
+// shape. Front-loaded jobs that haven't ramped yet won't read as "behind"
+// anymore; back-loaded jobs that just started won't read as "ahead."
 function computeJobScheduleDivergence(job){
   const m=job&&job.meta; if(!m) return null;
-  const start=toDate(m.startDate), end=toDate(m.endDate);
-  if(!start||!end) return null;
   const today=insightsTodayUTC();
-  const totalDays=Math.max(1, insightsDaysBetween(start,end));
-  const elapsedDays=Math.max(0, Math.min(totalDays, insightsDaysBetween(start,today)));
-  const schedPct=elapsedDays/totalDays;
 
-  // Budget reference: total DIRECT COST from activities (preferred) or bid
-  // items. This is the same reference the Overview KPI tiles use, so the
-  // numbers stay consistent with the rest of the dashboard. Summing
-  // job.actuals[code].budgetCost was wrong — that only covers codes that
-  // have actuals data, which on a partially-progressed job can be a small
-  // fraction of the real budget and made actualPct look like 150%.
+  // Budget reference: total DIRECT COST from activities (preferred) or bid items
   const acts = job.activities||[];
   const bids = job.bidItems||[];
   const budgetCost = acts.length
     ? acts.reduce((s,a)=>s+(Number(a.directTotal)||0),0)
     : bids.reduce((s,b)=>s+(Number(b.directTotal)||0),0);
+
   // Actual cost: sum across all cost codes that have any actuals data
   let actualCost=0;
   for(const code in (job.actuals||{})){
     actualCost += Number(job.actuals[code].actualCost)||0;
   }
+
+  // Planned cost from JCS curve at today
+  const plannedToDate = computeJCSPlannedAt(job, today);
+
+  // Translate $ variance to days using the JCS curve. Find the date when JCS
+  // planned cost equals actualToDate. If actual exceeds planned, that date is
+  // in the future → we're "ahead of plan" by (jcsDate - today). If actual is
+  // less than planned, that date is in the past → we're "behind plan" by
+  // (today - jcsDate).
+  let slipDays = null;
+  if(budgetCost>0 && actualCost>=0){
+    const jcsDate = findJCSDateAt(job, actualCost);
+    if(jcsDate){
+      slipDays = insightsDaysBetween(jcsDate, today);
+      // semantics: positive = behind plan (actual < what should be spent by now)
+      //            negative = ahead of plan (actual > what should be spent by now)
+    }
+  }
+
+  // Also compute project-span context for display (start/end, totalDays, elapsedDays).
+  const start = toDate(m.startDate);
+  const end   = toDate(m.endDate);
+  const totalDays  = (start&&end) ? Math.max(1, insightsDaysBetween(start,end)) : null;
+  const elapsedDays = (start&&totalDays!==null)
+    ? Math.max(0, Math.min(totalDays, insightsDaysBetween(start,today)))
+    : null;
+  const schedPct = (totalDays&&totalDays>0) ? elapsedDays/totalDays : null;
   const actualPct = budgetCost>0 ? actualCost/budgetCost : 0;
-  // slipDays interpretation:
-  //   actualPct < schedPct → spending less than time elapsed implies → likely BEHIND (work not done)
-  //   actualPct > schedPct → spending more than time elapsed implies → over budget pace, BEHIND
-  //   actualPct ≈ schedPct → on pace
-  // We display only meaningful deviation:
-  //   slipDays = (schedPct - actualPct) × totalDays
-  //     positive = under-spending vs schedule (could mean behind or under-budget — caveat in label)
-  //     negative = over-spending vs schedule (over-budget)
-  // Both cases are "off pace," so the badge says BEHIND if |slipDays| ≥ 3 days.
-  const slipDays = Math.round((schedPct-actualPct)*totalDays);
+  const plannedPct = budgetCost>0 ? plannedToDate/budgetCost : 0;
 
   return {
     start, end, today,
     totalDays, elapsedDays,
-    schedPct: schedPct*100,
+    schedPct: schedPct!==null ? schedPct*100 : null,
     actualPct: actualPct*100,
-    slipDays,                 // +ve = behind, -ve = ahead
-    budgetCost, actualCost,
+    plannedPct: plannedPct*100,
+    slipDays,                 // +ve = behind plan, -ve = ahead of plan
+    budgetCost, actualCost, plannedToDate,
+    dollarVariance: actualCost - plannedToDate, // +ve = over-spent vs plan
   };
 }
 // Project finish date based on current burn rate (cost-driven).
@@ -7279,15 +7411,15 @@ function toggleNotifSubsOnly(checked){
 
 // One-line label helpers used by panels.
 // slipDays semantics (set by computeJobScheduleDivergence):
-//   positive  = under-spending vs % of time elapsed → likely BEHIND on installs
-//   negative  = over-spending vs % of time elapsed  → OVER BUDGET PACE
-//   ~zero     = burn matches schedule = on pace
-// Without per-task qty progress we can't say "ahead" — just call it pace variance.
+//   positive = BEHIND plan — JCS says we should have spent more by now
+//   negative = AHEAD of plan — actual cost matches a future point on the JCS curve
+//   ~zero    = on plan
+// Tolerant ±3 day band before flagging.
 function fmtSlipBadge(slipDays){
-  if(slipDays===null||slipDays===undefined) return '';
-  if(slipDays<=-3) return `<span style="color:var(--orange);font-weight:600;">${Math.abs(slipDays)}d over-burn</span>`;
-  if(slipDays>=3)  return `<span style="color:var(--red);font-weight:600;">${slipDays}d behind</span>`;
-  return `<span style="color:var(--green);font-weight:600;">on pace</span>`;
+  if(slipDays===null||slipDays===undefined) return '<span style="color:var(--text-light);">—</span>';
+  if(slipDays<=-3) return `<span style="color:var(--green);font-weight:600;">${Math.abs(slipDays)}d ahead of plan</span>`;
+  if(slipDays>=3)  return `<span style="color:var(--red);font-weight:600;">${slipDays}d behind plan</span>`;
+  return `<span style="color:var(--green);font-weight:600;">on plan</span>`;
 }
 function fmtForecastEndBadge(forecast, scheduledEnd){
   if(!forecast||!forecast.forecastEnd) return '<span style="color:var(--text-light);">—</span>';
@@ -7409,12 +7541,23 @@ function renderDashboard(){
     h+='<span style="font-size:11px;color:var(--text-light);">live · derived from schedule + actuals</span>';
     h+='</div>';
     h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;">';
-    // Tile 1: Schedule slip
+    // Tile 1: Pace vs Job Cost Schedule (JCS), not linear time elapsed.
+    // Honors front- vs back-loaded cost shapes — compares actual $ to JCS
+    // planned $ at today, and translates the variance to days using the
+    // JCS curve.
     if(__divergence){
+      const dv = __divergence.dollarVariance;
+      const dvLabel = dv>=0
+        ? `<span style="color:var(--red);font-weight:600;">+${fmtD(dv)}</span> over plan`
+        : `<span style="color:var(--green);font-weight:600;">${fmtD(dv)}</span> under plan`;
       h+=`<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;">`;
-      h+=`<div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Pace</div>`;
+      h+=`<div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Pace vs Cost Schedule</div>`;
       h+=`<div style="font-size:16px;">${fmtSlipBadge(__divergence.slipDays)}</div>`;
-      h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;">${__divergence.elapsedDays} of ${__divergence.totalDays} days · ${__divergence.actualPct.toFixed(0)}% spent vs ${__divergence.schedPct.toFixed(0)}% time elapsed</div>`;
+      h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;line-height:1.5;">`;
+      h+=`Planned: ${fmtD(__divergence.plannedToDate)} · Actual: ${fmtD(__divergence.actualCost)}`;
+      h+=`<br>${dvLabel}`;
+      if(__divergence.totalDays!==null) h+=` · ${__divergence.elapsedDays}/${__divergence.totalDays} days`;
+      h+=`</div>`;
       h+=`</div>`;
     }
     // Tile 2: Forecast end date
