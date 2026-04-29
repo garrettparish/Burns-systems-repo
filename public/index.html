@@ -6922,12 +6922,68 @@ function insightsDaysBetween(a,b){
   if(!A||!B) return 0;
   return Math.round((B.getTime()-A.getTime())/86400000);
 }
+// Pace mode persistence (strict-as-bid vs scope-adjusted). Strict honors the
+// original bid directTotals; scope-adjusted scales each phase's effective
+// $ by max(1, qtyInstalled/budgetQty), which makes the Pace metric honest
+// for unit-price jobs where field qtys exceeded the bid quantities.
+function getPaceScopeMode(){
+  try{
+    const v = localStorage.getItem('bdc_pace_scope_adjusted');
+    return v === '1' ? 'adjusted' : 'strict';
+  }catch(e){ return 'strict'; }
+}
+function setPaceScopeMode(mode){
+  try{ localStorage.setItem('bdc_pace_scope_adjusted', mode==='adjusted' ? '1' : '0'); }catch(e){}
+}
+function togglePaceScopeMode(){
+  const next = getPaceScopeMode()==='strict' ? 'adjusted' : 'strict';
+  setPaceScopeMode(next);
+  if(typeof renderActiveSubTab==='function') renderActiveSubTab();
+  return next;
+}
+// For unit-price jobs: aggregate qty installed per phase code, divide by sum
+// of bid qty for that phase, and only count factors > 1 (scope grew). Returns
+// a map {phaseCode → factor}. Used to re-scale activity directTotals so the
+// JCS planned curve reflects the real expected work, not the as-bid estimate.
+function computeScopeAdjustmentByPhase(job){
+  const out={};
+  if(!job||!job.activities) return out;
+  // 1. Aggregate bid qty per phase from activities
+  const bidQtyByPhase={};
+  for(const a of job.activities){
+    const ph = String(a.phaseCode||'');
+    if(!ph) continue;
+    bidQtyByPhase[ph] = (bidQtyByPhase[ph]||0) + (Number(a.quantity)||0);
+  }
+  // 2. Compare to actual qty installed (from job.actuals) per phase
+  for(const ph in bidQtyByPhase){
+    const bid = bidQtyByPhase[ph];
+    const installed = Number(job.actuals?.[ph]?.qtyInstalled)||0;
+    if(bid>0 && installed>bid){
+      out[ph] = installed/bid;
+    } else {
+      out[ph] = 1.0;
+    }
+  }
+  return out;
+}
 // Build per-activity date envelopes the same way renderJobCostSchedule does.
-// Returns activities annotated with {_barStart, _barEnd, directTotal} so we
-// can sum planned cost at any reference date.
-function buildActivityEnvelopes(job){
+// Returns activities annotated with {_barStart, _barEnd, directTotal,
+// _effectiveTotal} so we can sum planned cost at any reference date.
+// _effectiveTotal applies the scope adjustment (or equals directTotal in
+// strict mode).
+function buildActivityEnvelopes(job, opts){
+  opts = opts || {};
+  const scopeAdjusted = opts.scopeAdjusted === true;
+  const scopeMap = scopeAdjusted ? computeScopeAdjustmentByPhase(job) : {};
   if(!job||!job.activities||!job.activities.length) return [];
-  const acts=job.activities.slice().map(a=>({...a, _barStart:null, _barEnd:null}));
+  const acts=job.activities.slice().map(a=>({
+    ...a,
+    _barStart:null,
+    _barEnd:null,
+    _effectiveTotal: scopeAdjusted ? (Number(a.directTotal)||0) * (scopeMap[String(a.phaseCode||'')] || 1) : (Number(a.directTotal)||0),
+    _scopeFactor: scopeMap[String(a.phaseCode||'')] || 1,
+  }));
   const sched=job.schedule||[];
   const tm=job.taskMap||{};
   // 1. Bid-item date envelope from taskMap
@@ -6997,12 +7053,13 @@ function buildActivityEnvelopes(job){
 // This is the same curve renderJobCostSchedule visualizes — pace metric now
 // honors front- vs back-loaded cost shapes instead of pretending all jobs
 // burn linearly with calendar time.
-function computeJCSPlannedAt(job, refDate){
+function computeJCSPlannedAt(job, refDate, opts){
+  opts = opts || {};
   const ref=toDate(refDate)||insightsTodayUTC();
-  const acts=buildActivityEnvelopes(job);
+  const acts=buildActivityEnvelopes(job, opts);
   let planned=0;
   for(const a of acts){
-    const cost=Number(a.directTotal)||0;
+    const cost = (opts.scopeAdjusted ? a._effectiveTotal : a.directTotal) || 0;
     if(cost<=0||!a._barStart||!a._barEnd) continue;
     const s=a._barStart.getTime(), f=a._barEnd.getTime(), r=ref.getTime();
     if(r>=f) planned += cost;
@@ -7014,9 +7071,10 @@ function computeJCSPlannedAt(job, refDate){
 // Find the schedule date when JCS planned cost equals targetCost (= today's
 // actual cost). Used to translate $ variance into days-of-slip. Walks day by
 // day from project start to end; returns null if curve never reaches target.
-function findJCSDateAt(job, targetCost){
+function findJCSDateAt(job, targetCost, opts){
+  opts = opts || {};
   if(!(targetCost>0)) return null;
-  const acts=buildActivityEnvelopes(job);
+  const acts=buildActivityEnvelopes(job, opts);
   // Project span = min start to max finish
   let minStart=null, maxFinish=null;
   for(const a of acts){
@@ -7031,7 +7089,7 @@ function findJCSDateAt(job, targetCost){
   while(lo<hi){
     const mid=(lo+hi)>>1;
     const probeDate=new Date(minStart.getTime()+mid*86400000);
-    const pv=computeJCSPlannedAt(job, probeDate);
+    const pv=computeJCSPlannedAt(job, probeDate, opts);
     if(pv<targetCost) lo=mid+1; else hi=mid;
   }
   if(lo>=totalDays) return maxFinish;
@@ -7048,15 +7106,25 @@ function findJCSDateAt(job, targetCost){
 // "Ahead/behind" here is relative to the COST CURVE, which honors loading
 // shape. Front-loaded jobs that haven't ramped yet won't read as "behind"
 // anymore; back-loaded jobs that just started won't read as "ahead."
-function computeJobScheduleDivergence(job){
+function computeJobScheduleDivergence(job, opts){
+  opts = opts || {};
+  // Default to whatever the user has saved in their pace mode
+  if(opts.scopeAdjusted === undefined) opts.scopeAdjusted = (getPaceScopeMode()==='adjusted');
   const m=job&&job.meta; if(!m) return null;
   const today=insightsTodayUTC();
 
-  // Budget reference: total DIRECT COST from activities (preferred) or bid items
+  // Budget reference: total DIRECT COST from activities (preferred) or bid items.
+  // In scope-adjusted mode, sum the SCOPE-INFLATED activity totals so the
+  // budgetCost denominator reflects expected work, not the original bid.
   const acts = job.activities||[];
   const bids = job.bidItems||[];
+  const scopeMap = opts.scopeAdjusted ? computeScopeAdjustmentByPhase(job) : {};
   const budgetCost = acts.length
-    ? acts.reduce((s,a)=>s+(Number(a.directTotal)||0),0)
+    ? acts.reduce((s,a)=>{
+        const base=Number(a.directTotal)||0;
+        const factor = opts.scopeAdjusted ? (scopeMap[String(a.phaseCode||'')] || 1) : 1;
+        return s + base*factor;
+      },0)
     : bids.reduce((s,b)=>s+(Number(b.directTotal)||0),0);
 
   // Actual cost: sum across all cost codes that have any actuals data
@@ -7065,8 +7133,8 @@ function computeJobScheduleDivergence(job){
     actualCost += Number(job.actuals[code].actualCost)||0;
   }
 
-  // Planned cost from JCS curve at today
-  const plannedToDate = computeJCSPlannedAt(job, today);
+  // Planned cost from JCS curve at today (honors scopeAdjusted)
+  const plannedToDate = computeJCSPlannedAt(job, today, opts);
 
   // Translate $ variance to days using the JCS curve. Find the date when JCS
   // planned cost equals actualToDate. If actual exceeds planned, that date is
@@ -7075,11 +7143,25 @@ function computeJobScheduleDivergence(job){
   // (today - jcsDate).
   let slipDays = null;
   if(budgetCost>0 && actualCost>=0){
-    const jcsDate = findJCSDateAt(job, actualCost);
+    const jcsDate = findJCSDateAt(job, actualCost, opts);
     if(jcsDate){
       slipDays = insightsDaysBetween(jcsDate, today);
       // semantics: positive = behind plan (actual < what should be spent by now)
       //            negative = ahead of plan (actual > what should be spent by now)
+    }
+  }
+  // Track how many phases were scope-adjusted (factor > 1) for the badge.
+  let scopeBumpedCount = 0;
+  let scopeBudgetDelta = 0;
+  for(const ph in scopeMap){
+    if(scopeMap[ph] > 1.0001){
+      scopeBumpedCount++;
+      // Sum the $ delta this phase contributes to the budget
+      for(const a of acts){
+        if(String(a.phaseCode||'') === ph){
+          scopeBudgetDelta += (Number(a.directTotal)||0) * (scopeMap[ph] - 1);
+        }
+      }
     }
   }
 
@@ -7103,6 +7185,9 @@ function computeJobScheduleDivergence(job){
     slipDays,                 // +ve = behind plan, -ve = ahead of plan
     budgetCost, actualCost, plannedToDate,
     dollarVariance: actualCost - plannedToDate, // +ve = over-spent vs plan
+    scopeAdjusted: opts.scopeAdjusted === true,
+    scopeBumpedCount,         // how many phases were scope-adjusted
+    scopeBudgetDelta,         // $ added to the budget by scope inflation
   };
 }
 // Project finish date based on current burn rate (cost-driven).
@@ -7544,19 +7629,33 @@ function renderDashboard(){
     // Tile 1: Pace vs Job Cost Schedule (JCS), not linear time elapsed.
     // Honors front- vs back-loaded cost shapes — compares actual $ to JCS
     // planned $ at today, and translates the variance to days using the
-    // JCS curve.
+    // JCS curve. Toggle in upper-right swaps between strict (as-bid) and
+    // scope-adjusted (re-scaled by phase-level qty installed / qty bid).
     if(__divergence){
       const dv = __divergence.dollarVariance;
       const dvLabel = dv>=0
         ? `<span style="color:var(--red);font-weight:600;">+${fmtD(dv)}</span> over plan`
         : `<span style="color:var(--green);font-weight:600;">${fmtD(dv)}</span> under plan`;
+      const isAdjusted = __divergence.scopeAdjusted;
+      const toggleLabel = isAdjusted
+        ? `<span style="color:var(--orange);font-weight:600;">scope-adj</span>`
+        : `<span style="color:var(--text-light);">as-bid</span>`;
+      const toggleHelp = isAdjusted
+        ? `Click to switch to AS-BID (uses original directTotals from HeavyBid)`
+        : `Click to switch to SCOPE-ADJUSTED (re-scales $ by qty installed / qty bid for unit-price jobs)`;
       h+=`<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;">`;
-      h+=`<div style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Pace vs Cost Schedule</div>`;
+      h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">`;
+      h+=`<span style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;">Pace vs Cost Schedule</span>`;
+      h+=`<button onclick="togglePaceScopeMode()" title="${toggleHelp}" style="background:none;border:1px solid var(--border);border-radius:3px;font-size:10px;padding:1px 6px;cursor:pointer;color:var(--text);">${toggleLabel}</button>`;
+      h+=`</div>`;
       h+=`<div style="font-size:16px;">${fmtSlipBadge(__divergence.slipDays)}</div>`;
       h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;line-height:1.5;">`;
       h+=`Planned: ${fmtD(__divergence.plannedToDate)} · Actual: ${fmtD(__divergence.actualCost)}`;
       h+=`<br>${dvLabel}`;
       if(__divergence.totalDays!==null) h+=` · ${__divergence.elapsedDays}/${__divergence.totalDays} days`;
+      if(isAdjusted && __divergence.scopeBumpedCount>0){
+        h+=`<br><span style="color:var(--orange);">${__divergence.scopeBumpedCount} phase${__divergence.scopeBumpedCount>1?'s':''} scope-bumped (+${fmtD(__divergence.scopeBudgetDelta)})</span>`;
+      }
       h+=`</div>`;
       h+=`</div>`;
     }
