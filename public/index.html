@@ -3543,7 +3543,7 @@ async function hcssLoadIntoActiveJob(){
   }));
   // Merge with any locally-imported rows (XLSX fallback) so the app never loses data
   job.actualsDetail=mergeActualsDetail(job.actualsDetail||[],detail);
-  job.actuals=rollupActualsDetail(job.actualsDetail,job.actuals);
+  job.actuals=rollupActualsDetail(job.actualsDetail,job.actuals,job.activities);
   // Pull fresh BELMOS $ from hcss_job_costs (Pass 1 of the API-driven cost sync)
   // and merge per-code totals into job.actuals so Production Tracker can read $
   // without changes. Greater-of policy: only override an existing actual$ if the
@@ -4913,7 +4913,7 @@ function parseActualsDetailRaw(rows){
 }
 
 // Rollup daily detail rows into cost-code summary (for backward-compat with job.actuals)
-function rollupActualsDetail(detail,prevActuals){
+function rollupActualsDetail(detail,prevActuals,hbActivities){
   // Preserve all budget + authoritative totals from any prior Cost Code Summary import.
   // The Summary report is the only HJ source with real cost breakdowns; daily detail
   // cost fields are frequently zero, so we must not wipe Summary values on re-roll.
@@ -5033,15 +5033,58 @@ function rollupActualsDetail(detail,prevActuals){
     if(!b.lastDate||d.date>b.lastDate)b.lastDate=d.date;
     b.dayCount++;
   });
+  // Build a HeavyBid-side budget map keyed by phase/cost code. Used as the
+  // canonical fallback when Summary xlsx didn't provide a positive budget AND
+  // the per-day Detail "Expected" rollup is missing or NEGATIVE (which happens
+  // for phase codes that span multiple bid items including SA/CO deduct lines —
+  // HCSS's distribution math goes negative for those).
+  const _hbBudgetByCode = {};
+  for(const a of (hbActivities || [])){
+    const code = String(a.phaseCode || '').trim();
+    if(!code) continue;
+    if(!_hbBudgetByCode[code]) _hbBudgetByCode[code] = { labor:0, burden:0, equip:0, mat:0, sub:0, trucking:0, total:0, hours:0, qty:0 };
+    const slot = _hbBudgetByCode[code];
+    slot.labor += Number(a.labor)||0;
+    slot.burden += Number(a.burden)||0;
+    slot.equip += Number(a.totalEquipment) || ((Number(a.eqpOper)||0)+(Number(a.compEqp)||0)+(Number(a.outsideEqp)||0));
+    slot.mat += Number(a.totalMaterial) || ((Number(a.permMat)||0)+(Number(a.constMat)||0));
+    slot.sub += Number(a.subs)||0;
+    slot.trucking += Number(a.trucking)||0;
+    slot.total += Number(a.directTotal)||0;
+    slot.hours += Number(a.manHours)||0;
+    slot.qty += Number(a.quantity)||0;
+  }
+
   // Compute derivative fields
   Object.values(byCode).forEach(b=>{
-    // If Summary didn't provide a budget, use detail's accumulated expected values
-    if(b.budgetLabor===0&&b._detailBudgetLabor)b.budgetLabor=b._detailBudgetLabor;
-    if(b.budgetEquip===0&&b._detailBudgetEquip)b.budgetEquip=b._detailBudgetEquip;
-    if(b.budgetMat===0&&b._detailBudgetMat)b.budgetMat=b._detailBudgetMat;
-    if(b.budgetSub===0&&b._detailBudgetSub)b.budgetSub=b._detailBudgetSub;
-    if(b.budgetHours===0&&b._detailBudgetHours)b.budgetHours=b._detailBudgetHours;
+    // If Summary didn't provide a budget, fall back to detail's accumulated
+    // "Expected" values — but only if they're POSITIVE. Negative sums mean the
+    // HCSS Detail export distributed a deduct/SA line into per-day Expected
+    // values (we saw this on Stone Blvd 334120: 30 days each with tiny negative
+    // expected values summing to -$2,422 — clearly wrong). When negative, skip
+    // and let the HeavyBid fallback below take over.
+    if(b.budgetLabor===0 && (b._detailBudgetLabor||0) > 0) b.budgetLabor=b._detailBudgetLabor;
+    if(b.budgetEquip===0 && (b._detailBudgetEquip||0) > 0) b.budgetEquip=b._detailBudgetEquip;
+    if(b.budgetMat===0   && (b._detailBudgetMat||0)   > 0) b.budgetMat=b._detailBudgetMat;
+    if(b.budgetSub===0   && (b._detailBudgetSub||0)   > 0) b.budgetSub=b._detailBudgetSub;
+    if(b.budgetHours===0 && (b._detailBudgetHours||0) > 0) b.budgetHours=b._detailBudgetHours;
     if(b.budgetCost===0)b.budgetCost=b.budgetLabor+b.budgetEquip+b.budgetMat+b.budgetSub;
+    // HeavyBid fallback — runs whenever we still don't have a positive budget.
+    // HeavyBid Activities are the original truth for what was bid, including
+    // change orders (SA #1 lines etc.). Net activity totals per phase code.
+    const hb = _hbBudgetByCode[String(b.code)];
+    if(hb && hb.total > 0){
+      if(b.budgetCost <= 0){
+        b.budgetLabor = hb.labor + hb.burden;
+        b.budgetEquip = hb.equip;
+        b.budgetMat   = hb.mat;
+        b.budgetSub   = hb.sub + hb.trucking;
+        b.budgetCost  = hb.total;
+        b._budgetSource = 'heavybid-activities';
+      }
+      if((!b.budgetQty || b.budgetQty <= 0) && hb.qty > 0) b.budgetQty = hb.qty;
+      if((!b.budgetHours || b.budgetHours <= 0) && hb.hours > 0) b.budgetHours = hb.hours;
+    }
     // If detail gave zero cost actuals (common: HCSS sync has hours but not $), use Summary totals
     if(b.actualLabor===0&&b._prevActualLabor)b.actualLabor=b._prevActualLabor;
     if(b.actualEquip===0&&b._prevActualEquip)b.actualEquip=b._prevActualEquip;
@@ -5221,7 +5264,7 @@ function confirmStaging(){const{type,data}=Store.staging;const job=Store.jobs[St
     targetKeys.forEach(jk=>{
       const tj=Store.jobs[jk];if(!tj)return;
       tj.actualsDetail=mergeActualsDetail(tj.actualsDetail||[],byJob[jk]);
-      tj.actuals=rollupActualsDetail(tj.actualsDetail,tj.actuals);
+      tj.actuals=rollupActualsDetail(tj.actualsDetail,tj.actuals,tj.activities);
       tj.meta.lastActualsImport=now;
       // Capture EVA snapshot for each updated job
       if(typeof evaMaybeSnapshot==='function')evaMaybeSnapshot(tj);
