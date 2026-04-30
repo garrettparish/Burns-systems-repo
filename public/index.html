@@ -7554,6 +7554,212 @@ function toggleNotifSubsOnly(checked){
   if(badge){ badge.textContent = total; badge.style.display = total>0?'inline-block':'none'; }
 }
 
+// ═══════════════════════════════════════════
+// SELF-TEST — Layer 1 of the verification toolkit.
+// Runs a battery of invariants against the live in-memory state. Surfaces
+// any silent bugs (data corruption, missing functions, math drift) that
+// would otherwise slip through. Results render as a banner; pass/fail
+// counts persist to localStorage so the most recent run is always visible
+// in Settings. Invoke via:
+//   - ?selftest=1 URL param (auto-runs after load)
+//   - "Run Diagnostics" button in Settings → Notifications card
+//   - window.runSelfTest() from the console
+// ═══════════════════════════════════════════
+function _selfTestCheck(label, fn){
+  try{
+    const r = fn();
+    if(r === false) return { label, ok:false, message:'returned false' };
+    if(r && r.ok === false) return { label, ok:false, message:r.message||'failed', details:r.details };
+    if(r && r.ok === true) return { label, ok:true, message:r.message||'pass', details:r.details };
+    return { label, ok:true, message:String(r ?? 'pass') };
+  }catch(e){
+    return { label, ok:false, message:String(e.message||e), stack: e.stack?.split('\n').slice(0,3).join(' | ') };
+  }
+}
+function runSelfTest(){
+  const t = [];
+  const startedAt = new Date().toISOString();
+
+  // === Structural / shape invariants ===
+  t.push(_selfTestCheck('Store.jobs is populated', () => {
+    const n = Object.keys(Store.jobs||{}).length;
+    if(n===0) return { ok:false, message:'no jobs loaded — auth or fetch may have failed' };
+    return { ok:true, message:`${n} job${n>1?'s':''} loaded` };
+  }));
+  t.push(_selfTestCheck('every job.actuals is a clean array', () => {
+    const issues = [];
+    for(const id in Store.jobs){
+      const a = Store.jobs[id].actuals;
+      if(a == null) continue;                   // empty is fine
+      if(!Array.isArray(a)) issues.push(`${id}: not array (${typeof a})`);
+      else {
+        const nullEntries = a.filter(r => !r || typeof r !== 'object').length;
+        const noCodeEntries = a.filter(r => r && typeof r === 'object' && !r.code).length;
+        if(nullEntries) issues.push(`${id}: ${nullEntries} null entries`);
+        if(noCodeEntries) issues.push(`${id}: ${noCodeEntries} entries missing code`);
+      }
+    }
+    return issues.length
+      ? { ok:false, message:`${issues.length} job${issues.length>1?'s':''} corrupted`, details:issues }
+      : { ok:true };
+  }));
+  t.push(_selfTestCheck('every job.activities is an array of records', () => {
+    const issues = [];
+    for(const id in Store.jobs){
+      const a = Store.jobs[id].activities;
+      if(a == null) continue;
+      if(!Array.isArray(a)) issues.push(`${id}: not array`);
+    }
+    return issues.length ? { ok:false, message:issues.join(', ') } : { ok:true };
+  }));
+
+  // === Function existence ===
+  const requiredFns = [
+    'computeJobScheduleDivergence','computeJCSPlannedAt','findJCSDateAt',
+    'buildActivityEnvelopes','computeStuckCodes','computeBidVsActualUnitCost',
+    'computeUpcomingWorkAlerts','computeScopeAdjustmentByPhase',
+    'applyHcssJobCostsToActuals','loadHcssJobCosts','hcssSyncJobCosts',
+    'getNotifSettings','saveNotifSettings','renderNotifPanel','toggleNotifPanel',
+    'getPaceScopeMode','togglePaceScopeMode','fmtSlipBadge','fmtForecastEndBadge',
+  ];
+  t.push(_selfTestCheck('all daily-insights helpers exist on window', () => {
+    const missing = requiredFns.filter(n => typeof window[n] !== 'function');
+    return missing.length
+      ? { ok:false, message:`missing: ${missing.join(', ')}` }
+      : { ok:true, message:`${requiredFns.length} helpers present` };
+  }));
+
+  // === Per-job math invariants ===
+  for(const id in Store.jobs){
+    const job = Store.jobs[id];
+    const label = `${job.meta?.name||id} #${job.meta?.number||id}`;
+
+    t.push(_selfTestCheck(`[${label}] computeJobScheduleDivergence runs`, () => {
+      const d = computeJobScheduleDivergence(job);
+      if(!d) return { ok:false, message:'returned null' };
+      if(!isFinite(d.budgetCost)) return { ok:false, message:'budgetCost is not finite' };
+      if(!isFinite(d.actualCost)) return { ok:false, message:'actualCost is not finite' };
+      if(d.actualCost < 0) return { ok:false, message:`actualCost negative ($${d.actualCost})` };
+      return { ok:true, message:`planned $${Math.round(d.plannedToDate).toLocaleString()} · actual $${Math.round(d.actualCost).toLocaleString()}` };
+    }));
+
+    t.push(_selfTestCheck(`[${label}] tie-out: bidItems.directTotal ≈ activities.directTotal`, () => {
+      const bidsTotal = (job.bidItems||[]).reduce((s,b)=>s+(Number(b.directTotal)||0),0);
+      const actsTotal = (job.activities||[]).reduce((s,a)=>s+(Number(a.directTotal)||0),0);
+      if(bidsTotal === 0 || actsTotal === 0) return { ok:true, message:'one side empty (skipped)' };
+      const diff = Math.abs(bidsTotal - actsTotal);
+      const pct = diff / Math.max(bidsTotal, actsTotal) * 100;
+      if(pct > 1) return { ok:false, message:`bids=$${Math.round(bidsTotal).toLocaleString()} acts=$${Math.round(actsTotal).toLocaleString()} (${pct.toFixed(1)}% drift)` };
+      return { ok:true, message:`${pct.toFixed(2)}% drift` };
+    }));
+
+    t.push(_selfTestCheck(`[${label}] no actuals row has impossible values`, () => {
+      const issues = [];
+      for(const a of (job.actuals||[])){
+        if(!a) continue;
+        const ac = Number(a.actualCost);
+        const bc = Number(a.budgetCost);
+        if(!isFinite(ac)) issues.push(`${a.code}: actualCost=NaN`);
+        if(ac < 0) issues.push(`${a.code}: actualCost<0`);
+        if(bc < 0) issues.push(`${a.code}: budgetCost<0`);
+      }
+      return issues.length ? { ok:false, message:issues.slice(0,3).join('; '), details:issues } : { ok:true };
+    }));
+
+    t.push(_selfTestCheck(`[${label}] computeStuckCodes / computeBidVsActualUnitCost don't throw`, () => {
+      computeStuckCodes(job, 14);
+      computeBidVsActualUnitCost(job, {dollarThreshold:1, pctThreshold:15});
+      return { ok:true };
+    }));
+  }
+
+  // === Cross-job math ===
+  t.push(_selfTestCheck('computeUpcomingWorkAlerts spans all jobs without throwing', () => {
+    const r = computeUpcomingWorkAlerts(Store.jobs);
+    let total = 0;
+    for(const h of r.horizons) total += r.alertsByHorizon[h].length;
+    return { ok:true, message:`${total} alerts across ${Object.keys(Store.jobs).length} jobs` };
+  }));
+
+  // === Pace mode toggle ===
+  t.push(_selfTestCheck('Pace mode toggle persists', () => {
+    const before = getPaceScopeMode();
+    const after = togglePaceScopeMode();
+    const back = togglePaceScopeMode();
+    if(after === before || back !== before) return { ok:false, message:`flip path: ${before}→${after}→${back}` };
+    return { ok:true, message:`${before} ↔ ${after}` };
+  }));
+
+  // === Notification settings ===
+  t.push(_selfTestCheck('Notification settings round-trip', () => {
+    const orig = getNotifSettings();
+    const test = saveNotifSettings({horizons:[42], includeSubsOnly:true});
+    if(test.horizons[0] !== 42) return { ok:false, message:'horizons not saved' };
+    saveNotifSettings(orig); // restore
+    return { ok:true };
+  }));
+
+  const passed = t.filter(x => x.ok).length;
+  const failed = t.filter(x => !x.ok).length;
+  const result = {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    passed, failed,
+    tests: t,
+  };
+  try{ localStorage.setItem('bdc_selftest_last', JSON.stringify(result)); }catch(e){}
+  console.log(`%cSelf-test: ${passed} passed, ${failed} failed`, failed?'color:red;font-weight:bold':'color:green;font-weight:bold', result);
+  return result;
+}
+// Render a sticky banner at the top of the page with the latest result.
+function renderSelfTestBanner(result){
+  const existing = document.getElementById('selfTestBanner');
+  if(existing) existing.remove();
+  if(!result) return;
+  const div = document.createElement('div');
+  div.id = 'selfTestBanner';
+  const bg = result.failed === 0 ? '#E6F4EA' : '#FDECEA';
+  const border = result.failed === 0 ? '#1E8E3E' : '#D93025';
+  const icon = result.failed === 0 ? '&#10004;' : '&#10006;';
+  div.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9999;background:${bg};border-bottom:2px solid ${border};padding:8px 16px;font-family:Oswald,sans-serif;font-size:13px;display:flex;align-items:center;gap:10px;`;
+  div.innerHTML =
+    `<span style="font-size:16px;color:${border};">${icon}</span>` +
+    `<strong>Self-test: ${result.passed} passed, ${result.failed} failed</strong>` +
+    `<span style="color:var(--text-light);font-size:11px;">${new Date(result.finishedAt).toLocaleTimeString()}</span>` +
+    `<button onclick="document.getElementById('selfTestDetail').style.display=document.getElementById('selfTestDetail').style.display==='block'?'none':'block'" style="margin-left:auto;background:none;border:1px solid ${border};color:${border};padding:2px 10px;border-radius:3px;cursor:pointer;font-family:inherit;font-size:11px;">Details</button>` +
+    `<button onclick="document.getElementById('selfTestBanner').remove()" style="background:none;border:none;cursor:pointer;font-size:18px;color:${border};">&times;</button>` +
+    `<div id="selfTestDetail" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid var(--border);border-top:none;max-height:60vh;overflow-y:auto;font-size:12px;padding:10px 16px;">` +
+      result.tests.map(tt =>
+        `<div style="padding:4px 0;border-bottom:1px solid #f0eee9;display:flex;gap:8px;align-items:flex-start;">` +
+          `<span style="color:${tt.ok?'#1E8E3E':'#D93025'};font-weight:600;min-width:14px;">${tt.ok?'✓':'✗'}</span>` +
+          `<div style="flex:1;"><div>${tt.label}</div>` +
+          (tt.message?`<div style="color:var(--text-light);font-size:11px;">${tt.message}</div>`:'') +
+          (tt.stack?`<pre style="font-size:10px;color:#D93025;white-space:pre-wrap;margin:2px 0;">${tt.stack}</pre>`:'') +
+          `</div></div>`
+      ).join('') +
+    `</div>`;
+  document.body.appendChild(div);
+}
+// Auto-run on URL flag
+if(typeof window !== 'undefined' && location.search.includes('selftest=1') && !window._selftestScheduled){
+  window._selftestScheduled = true;
+  // Wait for jobs to load before running. loadJobs is async; poll briefly.
+  const tryRun = () => {
+    if(Object.keys(Store.jobs||{}).length > 0 && typeof computeJobScheduleDivergence === 'function'){
+      const r = runSelfTest();
+      renderSelfTestBanner(r);
+    } else {
+      setTimeout(tryRun, 500);
+    }
+  };
+  setTimeout(tryRun, 1500);
+}
+function runSelfTestAndShow(){
+  const r = runSelfTest();
+  renderSelfTestBanner(r);
+  return r;
+}
+
 // One-line label helpers used by panels.
 // slipDays semantics (set by computeJobScheduleDivergence):
 //   positive = BEHIND plan — JCS says we should have spent more by now
@@ -12145,6 +12351,21 @@ function renderSettings(){
   h+=`<button class="edit-btn" style="font-size:11px;padding:4px 8px;background:var(--orange);color:white;border-color:var(--orange);" onclick="saveNotifHorizonsFromUI()">Save</button>`;
   h+=`</div>`;
   h+=`<div style="font-size:11px;color:var(--text-light);margin-top:6px;">Default: 30, 15, 5. Up to 6 thresholds. Each fires when a task's start date is within ±1 day of the threshold.</div>`;
+  // Self-test (diagnostics)
+  let __lastSelfTest = null;
+  try{ __lastSelfTest = JSON.parse(localStorage.getItem('bdc_selftest_last')||'null'); }catch(e){}
+  h+=`<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);">`;
+  h+=`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-light);margin-bottom:6px;">Diagnostics</div>`;
+  h+=`<button class="edit-btn" style="font-size:11px;padding:5px 12px;" onclick="runSelfTestAndShow()">Run Self-Test</button>`;
+  if(__lastSelfTest){
+    const passClr = __lastSelfTest.failed===0 ? 'var(--green)' : 'var(--red)';
+    h+=` <span style="font-size:11px;margin-left:8px;color:${passClr};font-weight:600;">${__lastSelfTest.passed} pass · ${__lastSelfTest.failed} fail</span>`;
+    h+=` <span style="font-size:11px;color:var(--text-light);">— ${new Date(__lastSelfTest.finishedAt).toLocaleString()}</span>`;
+  } else {
+    h+=` <span style="font-size:11px;color:var(--text-light);margin-left:8px;">Never run</span>`;
+  }
+  h+=`<div style="font-size:11px;color:var(--text-light);margin-top:4px;">Validates Daily Insights math, data shapes, and tie-out invariants across all jobs. Add <code>?selftest=1</code> to the URL to auto-run on load.</div>`;
+  h+=`</div>`;
   h+=`<label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:12px;cursor:pointer;">`;
   h+=`<input type="checkbox" id="notifSubsOnly" ${__notif.includeSubsOnly?'checked':''} onchange="toggleNotifSubsOnly(this.checked)"> <span>Only alert on tasks assigned to subcontractors</span>`;
   h+=`</label>`;
