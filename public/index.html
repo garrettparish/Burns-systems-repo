@@ -2934,19 +2934,65 @@ function blendedActualsByCode(job, asOf){
   // HJ side — only rows on/after cutoffISO (i.e., the last ~30 days).
   // Two-pass: first aggregate raw sync values + hours, then fill in any code
   // whose cost columns came back $0 using activity budget rates × hours.
+  // Two HJ data paths exist — actualsDetail (timecard sync) and hcssJobCosts
+  // (newer /jobCosts/advancedRequest API). Both have BELMOS columns. We
+  // aggregate them separately and then take the GREATER per BELMOS component
+  // per code so we don't double-count overlapping rows but also don't miss
+  // codes that only exist on one side.
   const detail = (job && job.actualsDetail) || [];
+  const fromActualsDetail = {};
   detail.forEach(r => {
     if(!r || !r.date) return;
     if(r.date < cutoffISO) return; // older rows are already in Spectrum
-    const b = touch(r.costCode);
+    const k = String(r.costCode||'').trim();
+    if(!k) return;
+    if(!fromActualsDetail[k]) fromActualsDetail[k] = {labor:0, equip:0, mat:0, sub:0, hours:0, qty:0};
+    const x = fromActualsDetail[k];
+    x.labor += Number(r.actualLaborCost)||0;
+    x.equip += Number(r.actualEquipCost)||0;
+    x.mat   += Number(r.actualMatCost)  ||0;
+    x.sub   += Number(r.actualSubCost)  ||0;
+    x.hours += Number(r.actualLaborHours)||0;
+    x.qty   += Number(r.actualQty)       ||0;
+  });
+  // Second HJ source: hcssJobCosts (the /jobCosts/advancedRequest API path,
+  // populated by Pass 1 syncJobCosts). Filter to last 30 days.
+  const fromHcssJobCosts = {};
+  const jc = (job && job.hcssJobCosts) || [];
+  jc.forEach(r => {
+    if(!r || !r.date) return;
+    if(r.date < cutoffISO) return;
+    const k = String(r.cost_code||'').trim();
+    if(!k || k.startsWith('??')) return; // skip placeholder UUIDs
+    if(!fromHcssJobCosts[k]) fromHcssJobCosts[k] = {labor:0, equip:0, mat:0, sub:0, hours:0, qty:0};
+    const x = fromHcssJobCosts[k];
+    x.labor += Number(r.labor_cost)||0;
+    x.equip += Number(r.equip_cost)||0;
+    x.mat   += Number(r.mat_cost)||0;
+    // Trucking rolls into sub per the existing rollup convention
+    x.sub   += (Number(r.sub_cost)||0) + (Number(r.trucking_cost)||0);
+    x.hours += Number(r.labor_hours)||0;
+    x.qty   += Number(r.qty)||0;
+  });
+  // Merge the two HJ sources per code, taking the GREATER per BELMOS component.
+  const allHjCodes = new Set([...Object.keys(fromActualsDetail), ...Object.keys(fromHcssJobCosts)]);
+  const greater = (a,b) => (b>a)?b:a;
+  allHjCodes.forEach(k => {
+    const ad = fromActualsDetail[k] || {labor:0, equip:0, mat:0, sub:0, hours:0, qty:0};
+    const jc2 = fromHcssJobCosts[k] || {labor:0, equip:0, mat:0, sub:0, hours:0, qty:0};
+    const b = touch(k);
     if(!b) return;
-    b.hj.labor += Number(r.actualLaborCost)||0;
-    b.hj.equip += Number(r.actualEquipCost)||0;
-    b.hj.mat   += Number(r.actualMatCost)  ||0;
-    b.hj.sub   += Number(r.actualSubCost)  ||0;
-    b.hj.total += (Number(r.actualLaborCost)||0)+(Number(r.actualEquipCost)||0)+(Number(r.actualMatCost)||0)+(Number(r.actualSubCost)||0);
-    b.hj.hours += Number(r.actualLaborHours)||0;
-    b.hj.qty   += Number(r.actualQty)       ||0;
+    b.hj.labor = greater(ad.labor, jc2.labor);
+    b.hj.equip = greater(ad.equip, jc2.equip);
+    b.hj.mat   = greater(ad.mat,   jc2.mat);
+    b.hj.sub   = greater(ad.sub,   jc2.sub);
+    b.hj.total = b.hj.labor + b.hj.equip + b.hj.mat + b.hj.sub;
+    b.hj.hours = greater(ad.hours, jc2.hours);
+    b.hj.qty   = greater(ad.qty,   jc2.qty);
+    b.hj._sourceTags = {
+      detail: ad.labor>0 || ad.equip>0 || ad.mat>0 || ad.sub>0,
+      api:    jc2.labor>0 || jc2.equip>0 || jc2.mat>0 || jc2.sub>0,
+    };
     b.hasHJ = true;
   });
   // Rate-derived fallback for the HJ $0-cost bug.
@@ -2969,7 +3015,33 @@ function blendedActualsByCode(job, asOf){
       }
     }
   });
-  // Combine
+  // Combine + tag confidence per BELMOS component.
+  // Confidence levels:
+  //   clean       — HJ-side data is gospel (always Labor/Equip)
+  //   reconciled  — Spectrum has the data; HJ-30d adds nothing material
+  //   live        — HJ-only contribution; not yet reconciled to Spectrum (judgment required)
+  //   mixed       — Both sources contribute; sum is honest but parts are uncertain
+  //   none        — No data on either side
+  // Worst-case row grade is the lowest-trust component; the row banner uses that.
+  const confRank = { none:0, flagged:1, live:2, mixed:3, reconciled:4, clean:5 };
+  const pickComponentConf = (specVal, hjVal, isClean) => {
+    if(isClean){
+      // Labor + Equip: HJ-side is gospel by construction
+      return (hjVal>0 || specVal>0) ? 'clean' : 'none';
+    }
+    if(specVal>0 && hjVal>0) return 'mixed';
+    if(specVal>0) return 'reconciled';
+    if(hjVal>0)   return 'live';
+    return 'none';
+  };
+  const worstOf = (...grades) => {
+    let lowest = 'clean', lowestRank = confRank.clean;
+    for(const g of grades){
+      if(g === 'none') continue;
+      if((confRank[g] ?? 5) < lowestRank){ lowest = g; lowestRank = confRank[g]; }
+    }
+    return lowest;
+  };
   Object.values(map).forEach(b=>{
     b.labor = b.spectrum.labor + b.hj.labor;
     b.equip = b.spectrum.equip + b.hj.equip;
@@ -2977,10 +3049,29 @@ function blendedActualsByCode(job, asOf){
     b.sub   = b.spectrum.sub   + b.hj.sub;
     b.other = b.spectrum.other;
     b.total = b.spectrum.total + b.hj.total;
-    // Hours/qty: Spectrum provides JTD through cutoff, HJ adds the last 30 days.
-    // Together they form true cumulative JTD.
     b.hours = b.spectrum.hours + b.hj.hours;
     b.qty   = b.spectrum.qty   + b.hj.qty;
+    // Per-component confidence
+    b.confidence = {
+      labor: pickComponentConf(b.spectrum.labor, b.hj.labor, true),
+      equip: pickComponentConf(b.spectrum.equip, b.hj.equip, true),
+      mat:   pickComponentConf(b.spectrum.mat,   b.hj.mat,   false),
+      sub:   pickComponentConf(b.spectrum.sub,   b.hj.sub,   false),
+    };
+    b.confidenceGrade = worstOf(b.confidence.labor, b.confidence.equip, b.confidence.mat, b.confidence.sub);
+    // Source map for tooltips: which side actually contributed
+    b.sourceMap = {
+      labor: b.hj.labor>0 ? 'hj-gospel' : (b.spectrum.labor>0 ? 'spectrum-jtd' : 'none'),
+      equip: b.hj.equip>0 ? 'hj-gospel' : (b.spectrum.equip>0 ? 'spectrum-jtd' : 'none'),
+      mat:   b.spectrum.mat>0 && b.hj.mat>0 ? 'spectrum+hj-30d'
+           : b.spectrum.mat>0 ? 'spectrum-jtd'
+           : b.hj.mat>0       ? 'hj-30d-uncleaned'
+           : 'none',
+      sub:   b.spectrum.sub>0 && b.hj.sub>0 ? 'spectrum+hj-30d'
+           : b.spectrum.sub>0 ? 'spectrum-jtd'
+           : b.hj.sub>0       ? 'hj-30d-uncleaned'
+           : 'none',
+    };
   });
   return map;
 }
@@ -3392,10 +3483,59 @@ async function loadHcssJobCosts(jobCode){
 //    For hours and qty, we don't override (the timecard sync is the canonical
 //    source); we only fill in if the existing rollup is empty.
 function applyHcssJobCostsToActuals(job){
+  if(!job) return 0;
+  if(!Array.isArray(job.actuals)) job.actuals = [];
+  if(typeof blendedActualsByCode !== 'function'){
+    // Fallback to legacy greater-of merge if blend isn't available
+    return _legacyApplyHcssJobCostsToActuals(job);
+  }
+  // Source-aware merge using blendedActualsByCode (the canonical 30-day blend).
+  // Spectrum trumps for material/sub when posted (≥30d typical); HJ-30d fills
+  // the live edge; Labor/Equip always come from HJ. Each cost code carries
+  // per-BELMOS confidence tags so the UI can show which $ are trusted.
+  const blend = blendedActualsByCode(job, new Date());
+  if(!blend) return 0;
+  const idx = new Map();
+  for(let i=0; i<job.actuals.length; i++){
+    const r = job.actuals[i];
+    if(r && r.code) idx.set(String(r.code), i);
+  }
+  let touched = 0;
+  for(const code in blend){
+    const b = blend[code];
+    let a;
+    if(idx.has(code)){
+      a = job.actuals[idx.get(code)];
+    } else {
+      a = { code };
+      idx.set(code, job.actuals.length);
+      job.actuals.push(a);
+    }
+    // Replace greater-of with explicit blend assignment per BELMOS component.
+    // Keep budgets/units/desc as-is; we're only updating actuals here.
+    a.actualLabor = b.labor;
+    a.actualEquip = b.equip;
+    a.actualMat   = b.mat;
+    a.actualSub   = b.sub;
+    a.actualCost  = b.total;
+    if(!a.actualHours)   a.actualHours   = b.hours;
+    if(!a.actualEquipHrs) a.actualEquipHrs = b.spectrum.hours; // Spectrum stores equip hours separately on equip rows
+    if(!a.qtyInstalled)  a.qtyInstalled  = b.qty;
+    a._confidence = b.confidence;
+    a._confidenceGrade = b.confidenceGrade;
+    a._sourceMap = b.sourceMap;
+    a._spectrumComponents = { labor:b.spectrum.labor, equip:b.spectrum.equip, mat:b.spectrum.mat, sub:b.spectrum.sub };
+    a._hjComponents = { labor:b.hj.labor, equip:b.hj.equip, mat:b.hj.mat, sub:b.hj.sub };
+    a._hjEstimated = b.hj.estimated || false;
+    a._blendCutoff = b.cutoffDate;
+    touched++;
+  }
+  return touched;
+}
+// Legacy greater-of merge — kept as a fallback when blendedActualsByCode isn't
+// loaded yet (e.g., old session before page fully boots). New code path above.
+function _legacyApplyHcssJobCostsToActuals(job){
   if(!job||!job.hcssJobCosts||!job.hcssJobCosts.length)return 0;
-  // job.actuals is an ARRAY of cost-code records (built by rollupActualsDetail
-  // via Object.values(byCode)). Earlier this function treated it as a keyed
-  // object — corrupted the structure and broke renderJobCostSchedule.
   if(!Array.isArray(job.actuals)) job.actuals = [];
   // Build a lookup so we can find an existing actuals row for each cost code.
   const idx = new Map();
@@ -7664,6 +7804,7 @@ function runSelfTest(){
     'applyHcssJobCostsToActuals','loadHcssJobCosts','hcssSyncJobCosts',
     'getNotifSettings','saveNotifSettings','renderNotifPanel','toggleNotifPanel',
     'getPaceScopeMode','togglePaceScopeMode','fmtSlipBadge','fmtForecastEndBadge',
+    'blendedActualsByCode','confidencePill','confidenceTooltipFor',
   ];
   t.push(_selfTestCheck('all daily-insights helpers exist on window', () => {
     const missing = requiredFns.filter(n => typeof window[n] !== 'function');
@@ -7713,6 +7854,29 @@ function runSelfTest(){
       computeStuckCodes(job, 14);
       computeBidVsActualUnitCost(job, {dollarThreshold:1, pctThreshold:15});
       return { ok:true };
+    }));
+  }
+
+  // === Confidence tagging integrity ===
+  for(const id in Store.jobs){
+    const job = Store.jobs[id];
+    const label = `${job.meta?.name||id} #${job.meta?.number||id}`;
+    t.push(_selfTestCheck(`[${label}] blendedActualsByCode emits confidence tags`, () => {
+      const map = blendedActualsByCode(job, new Date());
+      if(!map) return { ok:true, message:'no codes' };
+      const codes = Object.keys(map);
+      if(codes.length === 0) return { ok:true, message:'no codes' };
+      const missing = [];
+      const tagged = [];
+      for(const code of codes){
+        const b = map[code];
+        if(!b.confidence || !b.confidenceGrade) missing.push(code);
+        else tagged.push(b.confidenceGrade);
+      }
+      if(missing.length) return { ok:false, message:`${missing.length}/${codes.length} codes missing confidence`, details:missing.slice(0,5) };
+      // Distribution snapshot
+      const dist = tagged.reduce((s,g)=>{ s[g]=(s[g]||0)+1; return s; }, {});
+      return { ok:true, message:Object.entries(dist).map(([g,n])=>`${g}:${n}`).join(' ') };
     }));
   }
 
@@ -7801,6 +7965,42 @@ function runSelfTestAndShow(){
   const r = runSelfTest();
   renderSelfTestBanner(r);
   return r;
+}
+
+// Confidence pill helper — used wherever a $ value is shown next to its
+// trust grade. Returns a small inline span. `grade` ∈ {clean, reconciled,
+// mixed, live, flagged, none}. Optionally takes a tooltip string.
+function confidencePill(grade, tooltipHtml){
+  if(!grade || grade === 'none') return '';
+  const palette = {
+    clean:      { bg:'#E6F4EA', fg:'#1E8E3E', border:'#1E8E3E', label:'CLEAN',     desc:'Trusted source — HJ for hours/labor/equip, Spectrum for mat/sub' },
+    reconciled: { bg:'#E8F0FE', fg:'#1A73E8', border:'#1A73E8', label:'RECONCILED',desc:'Spectrum has posted this — gold standard' },
+    mixed:      { bg:'#FEF7E0', fg:'#9A6700', border:'#F9AB00', label:'MIXED',     desc:'Both Spectrum and HJ-30d contributed — small overlap risk' },
+    live:       { bg:'#FFF3E0', fg:'#B45309', border:'#F26722', label:'LIVE',      desc:'HJ <30 days only — fresh but uncleaned, judgment required' },
+    flagged:    { bg:'#FDECEA', fg:'#B91C1C', border:'#D93025', label:'FLAGGED',   desc:'Data quality issue detected on this code' },
+  };
+  const p = palette[grade] || palette.live;
+  const titleAttr = tooltipHtml ? `title="${String(tooltipHtml).replace(/"/g,'&quot;')}"` : `title="${p.desc}"`;
+  return `<span ${titleAttr} style="display:inline-block;font-size:9px;font-family:Oswald,sans-serif;letter-spacing:.4px;background:${p.bg};color:${p.fg};border:1px solid ${p.border};border-radius:3px;padding:1px 5px;margin-left:4px;vertical-align:middle;">${p.label}</span>`;
+}
+// Build a per-row confidence tooltip string from a job.actuals[] row that
+// has been tagged via applyHcssJobCostsToActuals (carries _confidence,
+// _spectrumComponents, _hjComponents, _sourceMap, _blendCutoff).
+function confidenceTooltipFor(actualsRow){
+  if(!actualsRow || !actualsRow._confidence) return '';
+  const c = actualsRow._confidence;
+  const spec = actualsRow._spectrumComponents || {};
+  const hj = actualsRow._hjComponents || {};
+  const cut = actualsRow._blendCutoff || '';
+  const fmt = n => '$'+(Math.round(Number(n)||0)).toLocaleString();
+  const lines = [
+    `Confidence by component (cutoff ${cut}):`,
+    `  Labor: ${(c.labor||'-').toUpperCase()} (HJ ${fmt(hj.labor||0)})`,
+    `  Equip: ${(c.equip||'-').toUpperCase()} (HJ ${fmt(hj.equip||0)})`,
+    `  Material: ${(c.mat||'-').toUpperCase()} (Spectrum ${fmt(spec.mat||0)} + HJ-30d ${fmt(hj.mat||0)})`,
+    `  Subcontract: ${(c.sub||'-').toUpperCase()} (Spectrum ${fmt(spec.sub||0)} + HJ-30d ${fmt(hj.sub||0)})`,
+  ];
+  return lines.join('\n');
 }
 
 // One-line label helpers used by panels.
@@ -11071,6 +11271,13 @@ function renderProductionTracker(job){
       budgetCost,actualCost,costVar,costPctUsed,
       src:r.src,
       blend:r._blend||null,
+      // Confidence tagging — set by applyHcssJobCostsToActuals via blendedActualsByCode
+      _confidence:r._confidence||null,
+      _confidenceGrade:r._confidenceGrade||null,
+      _sourceMap:r._sourceMap||null,
+      _spectrumComponents:r._spectrumComponents||null,
+      _hjComponents:r._hjComponents||null,
+      _blendCutoff:r._blendCutoff||null,
       hasAny:r.budgetQty>0||r.budgetHrs>0||r.actualQty>0||r.actualHrs>0||budgetCost>0||actualCost>0};
   }).filter(r=>r.hasAny);
 
@@ -11159,6 +11366,35 @@ function renderProductionTracker(job){
        `<strong style="color:#dc2626;">${outlierCount} row${outlierCount>1?'s':''} flagged as bad qty data</strong> `+
        `<span style="color:var(--text-light);">— actual qty is more than 5× budget qty (likely wrong UOM or HJ entry error). These rows are excluded from rollup math but still shown in the table with a <span style="font-size:9px;background:#dc2626;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;">BAD QTY</span> badge. Fix in HCSS or map to the correct phase code.</span>`+
        `</div>`;
+  }
+  // Confidence aggregate banner — split actuals$ by trust grade so you can
+  // see at-a-glance how much of the rollup is gold vs judgment-required.
+  // Per-component ($ Labor + Equip from HJ are always "clean"; mat/sub
+  // depend on Spectrum coverage). Worst-of-row grade drives the row pill.
+  {
+    const tally = { clean:{$:0,n:0}, reconciled:{$:0,n:0}, mixed:{$:0,n:0}, live:{$:0,n:0}, flagged:{$:0,n:0}, none:{$:0,n:0} };
+    let confAvail = 0;
+    rows.forEach(r=>{
+      if(!r._confidenceGrade) return;
+      confAvail++;
+      const g = r._confidenceGrade;
+      const slot = tally[g] || tally.none;
+      slot.$ += Number(r.actualCost)||0;
+      slot.n += 1;
+    });
+    if(confAvail>0){
+      const totalAC = (tally.clean.$+tally.reconciled.$+tally.mixed.$+tally.live.$+tally.flagged.$);
+      const fmtSmall = n => '$'+Math.round(n).toLocaleString();
+      h+=`<div style="background:#FAF7F2;border:1px solid var(--border);padding:8px 12px;margin-bottom:12px;border-radius:4px;font-size:12px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;">`+
+         `<strong style="color:var(--olive);font-family:Oswald;letter-spacing:.4px;">DATA CONFIDENCE</strong>`+
+         (tally.clean.n     ? `<span>${confidencePill('clean')}<strong style="margin-left:4px;">${fmtSmall(tally.clean.$)}</strong> <span style="color:var(--text-light);">(${tally.clean.n} codes)</span></span>` : '')+
+         (tally.reconciled.n? `<span>${confidencePill('reconciled')}<strong style="margin-left:4px;">${fmtSmall(tally.reconciled.$)}</strong> <span style="color:var(--text-light);">(${tally.reconciled.n})</span></span>` : '')+
+         (tally.mixed.n     ? `<span>${confidencePill('mixed')}<strong style="margin-left:4px;">${fmtSmall(tally.mixed.$)}</strong> <span style="color:var(--text-light);">(${tally.mixed.n})</span></span>` : '')+
+         (tally.live.n      ? `<span>${confidencePill('live')}<strong style="margin-left:4px;">${fmtSmall(tally.live.$)}</strong> <span style="color:var(--text-light);">(${tally.live.n})</span></span>` : '')+
+         (tally.flagged.n   ? `<span>${confidencePill('flagged')}<strong style="margin-left:4px;">${fmtSmall(tally.flagged.$)}</strong> <span style="color:var(--text-light);">(${tally.flagged.n})</span></span>` : '')+
+         `<span style="margin-left:auto;color:var(--text-light);font-size:11px;">Total ${fmtSmall(totalAC)} · hover any pill for the rule</span>`+
+         `</div>`;
+    }
   }
 
   // Apply filter
@@ -11299,7 +11535,9 @@ function renderProductionTracker(job){
       : (flagOffBudget ? 'Off-budget: no HeavyBid estimate for this phase code — may need activity→phase mapping in Setup' : '');
     h+=`<tr style="cursor:${hasDetail?'pointer':'default'};${rowStyle}" ${hasDetail?`onclick="var el=document.getElementById('${rowId}');el.style.display=el.style.display==='none'?'':'none';var a=this.querySelector('.pt-arrow');if(a)a.textContent=el.style.display==='none'?'▸':'▾';"`:''} ${rowTitle?`title="${esc(rowTitle)}"`:''}>`;
     const outlierBadge = r.isOutlier ? ' <span style="font-size:9px;background:#dc2626;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">BAD QTY</span>' : '';
-    h+=`<td>${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(r.code)}${flagOffBudget?' <span style="font-size:9px;background:#1d4ed8;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">OFF-BUDGET</span>':''}${outlierBadge}</td>`;
+    const confTooltip = (typeof confidenceTooltipFor === 'function') ? confidenceTooltipFor(r) : '';
+    const confBadge = (typeof confidencePill === 'function' && r._confidenceGrade) ? confidencePill(r._confidenceGrade, confTooltip) : '';
+    h+=`<td>${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(r.code)}${flagOffBudget?' <span style="font-size:9px;background:#1d4ed8;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">OFF-BUDGET</span>':''}${outlierBadge}${confBadge}</td>`;
     h+=`<td>${esc(r.description)}</td>`;
     h+=`<td>${esc(r.unit)}</td>`;
     // Production group
