@@ -2832,20 +2832,35 @@ async function spectrumLoadJob(jobNumber) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BLENDED ACTUAL COST — Spectrum (through today−30d) + HJ (since today−30d)
-// Garrett's rule: "Spectrum is gospel up to 30 days old; the last 30 days
-// haven't settled in Spectrum yet so use HJ daily detail for that window."
+// BLENDED ACTUAL COST — per-BELMOS-bucket MAX(Spectrum JTD, HJ lifetime)
+// Garrett's rule (2026-05-04 rewrite): "the higher number is the correct one."
+//   • If Spectrum > HJ: trust Spectrum — it has burden added to labor/equip,
+//     plus AP-posted material/sub that field guys may not have logged in HJ.
+//     Tag = `cleaned`.
+//   • If HJ > Spectrum: trust HJ — costs are accruing in real time and
+//     Spectrum just hasn't caught up to them yet. Tag = `live` (likely
+//     accurate, but not yet reconciled — judgment required).
+//   • If they differ by >50% (factor of 2 apart): tag = `investigate` —
+//     real data anomaly, human should look.
+//   • If both ≈0: tag = `none`.
 // All consumers (EVA, Forecast, Production Tracker, Overview, JCS) pull their
 // 'actual cost' from here so the number matches everywhere.
 // ─────────────────────────────────────────────────────────────────────────────
-const BLEND_CUTOFF_DAYS = 30;
-// YYYY-MM-DD for (asOf − 30 days). Used as the HJ inclusion floor and the
-// Spectrum "through" label in tooltips.
+const BLEND_CUTOFF_DAYS = 30; // legacy reference — no longer slices the dollar
+// YYYY-MM-DD for (asOf − 30 days). Kept for tooltip context and any caller
+// that still wants to know the historical 30-day window. The dollar number
+// is now a per-bucket max(Spectrum JTD, HJ lifetime) and is no longer
+// date-sliced.
 function getBlendCutoffISO(asOf){
   const d = asOf instanceof Date ? new Date(asOf.getTime()) : new Date();
   d.setDate(d.getDate() - BLEND_CUTOFF_DAYS);
   return d.toISOString().slice(0,10);
 }
+// Threshold for the `investigate` tag: the smaller of the two values is less
+// than (1 − GAP) × the larger. 0.5 means "factor of 2 apart". Tunable.
+const BLEND_INVESTIGATE_GAP = 0.5;
+// Absolute floor for `investigate` — a 70% gap on $30 isn't worth flagging.
+const BLEND_INVESTIGATE_MIN_$ = 500;
 // Map Spectrum cost_type codes to BELMOS buckets. Spectrum uses single-letter
 // codes (L/E/M/S plus B=burden). Burden rolls into labor per construction
 // accounting convention. Unknown types fall into 'other'.
@@ -2958,19 +2973,20 @@ function blendedActualsByCode(job, asOf){
     if(q > b.spectrum.qty)   b.spectrum.qty   = q;
     b.hasSpectrum = true;
   });
-  // HJ side — only rows on/after cutoffISO (i.e., the last ~30 days).
-  // Two-pass: first aggregate raw sync values + hours, then fill in any code
-  // whose cost columns came back $0 using activity budget rates × hours.
-  // Two HJ data paths exist — actualsDetail (timecard sync) and hcssJobCosts
-  // (newer /jobCosts/advancedRequest API). Both have BELMOS columns. We
-  // aggregate them separately and then take the GREATER per BELMOS component
-  // per code so we don't double-count overlapping rows but also don't miss
-  // codes that only exist on one side.
+  // HJ side — full lifetime per cost code (no date filter). Under the new
+  // max() rule the HJ side needs to represent everything HJ has on this code,
+  // not just the recent window — otherwise max(spectrum_jtd, hj_30d) would
+  // almost always pick spectrum and we'd lose recent activity that hasn't
+  // posted to spectrum yet.
+  // Two HJ data paths exist — actualsDetail (timecard sync, last ~30-35 days)
+  // and hcssJobCosts (/jobCosts/advancedRequest API, fully backfilled). Both
+  // have BELMOS columns. Aggregate separately, then take the GREATER per
+  // BELMOS component per code (jobCosts API will dominate for backfilled jobs;
+  // actualsDetail is a safety net for jobs synced before the backfill).
   const detail = (job && job.actualsDetail) || [];
   const fromActualsDetail = {};
   detail.forEach(r => {
     if(!r || !r.date) return;
-    if(r.date < cutoffISO) return; // older rows are already in Spectrum
     const k = String(r.costCode||'').trim();
     if(!k) return;
     if(!fromActualsDetail[k]) fromActualsDetail[k] = {labor:0, equip:0, mat:0, sub:0, hours:0, qty:0};
@@ -2982,13 +2998,10 @@ function blendedActualsByCode(job, asOf){
     x.hours += Number(r.actualLaborHours)||0;
     x.qty   += Number(r.actualQty)       ||0;
   });
-  // Second HJ source: hcssJobCosts (the /jobCosts/advancedRequest API path,
-  // populated by Pass 1 syncJobCosts). Filter to last 30 days.
   const fromHcssJobCosts = {};
   const jc = (job && job.hcssJobCosts) || [];
   jc.forEach(r => {
     if(!r || !r.date) return;
-    if(r.date < cutoffISO) return;
     const k = String(r.cost_code||'').trim();
     if(!k || k.startsWith('??')) return; // skip placeholder UUIDs
     if(!fromHcssJobCosts[k]) fromHcssJobCosts[k] = {labor:0, equip:0, mat:0, sub:0, hours:0, qty:0};
@@ -3042,75 +3055,80 @@ function blendedActualsByCode(job, asOf){
       }
     }
   });
-  // Combine + tag confidence per BELMOS component.
-  // Confidence levels:
-  //   clean       — HJ-side data is gospel (always Labor/Equip)
-  //   reconciled  — Spectrum has the data; HJ-30d adds nothing material
-  //   live        — HJ-only contribution; not yet reconciled to Spectrum (judgment required)
-  //   mixed       — Both sources contribute; sum is honest but parts are uncertain
-  //   none        — No data on either side
-  // Worst-case row grade is the lowest-trust component; the row banner uses that.
-  const confRank = { none:0, flagged:1, live:2, mixed:3, reconciled:4, clean:5 };
-  const pickComponentConf = (specVal, hjVal, isClean) => {
-    if(isClean){
-      // Labor + Equip: HJ-side is gospel by construction
-      return (hjVal>0 || specVal>0) ? 'clean' : 'none';
+  // Combine via per-bucket MAX(spectrum, hj_lifetime) and tag confidence.
+  // Tags (Garrett's 2026-05-04 scheme):
+  //   cleaned     — Spectrum > HJ; trust Spectrum (burden / AP / sub posted)
+  //   live        — HJ > Spectrum; real costs accruing, Spectrum hasn't caught
+  //                 up. Likely accurate, just not reconciled — judgment required
+  //   investigate — values differ wildly (>50% gap, factor of 2 apart) AND the
+  //                 absolute gap is over $500. Real data anomaly worth a look
+  //   none        — both sides have $0 on this bucket
+  // Worst-of-row grade: investigate < live < cleaned. The row pill uses worst.
+  const confRank = { none:0, investigate:1, live:2, cleaned:3 };
+  const pickComponentConf = (specVal, hjVal) => {
+    const s = Number(specVal)||0, h = Number(hjVal)||0;
+    if(s===0 && h===0) return 'none';
+    const hi = Math.max(s, h), lo = Math.min(s, h);
+    const gap = hi - lo;
+    if(gap >= BLEND_INVESTIGATE_MIN_$ && (gap / hi) > BLEND_INVESTIGATE_GAP){
+      return 'investigate';
     }
-    if(specVal>0 && hjVal>0) return 'mixed';
-    if(specVal>0) return 'reconciled';
-    if(hjVal>0)   return 'live';
-    return 'none';
+    return s > h ? 'cleaned' : 'live'; // ties go to live (HJ side)
   };
   const worstOf = (...grades) => {
-    let lowest = 'clean', lowestRank = confRank.clean;
+    let lowest = 'cleaned', lowestRank = confRank.cleaned;
     for(const g of grades){
       if(g === 'none') continue;
-      if((confRank[g] ?? 5) < lowestRank){ lowest = g; lowestRank = confRank[g]; }
+      if((confRank[g] ?? 99) < lowestRank){ lowest = g; lowestRank = confRank[g]; }
     }
     return lowest;
   };
   Object.values(map).forEach(b=>{
-    b.labor = b.spectrum.labor + b.hj.labor;
-    b.equip = b.spectrum.equip + b.hj.equip;
-    b.mat   = b.spectrum.mat   + b.hj.mat;
-    b.sub   = b.spectrum.sub   + b.hj.sub;
+    // Per-bucket MAX. The higher number is canonical per Garrett's rule.
+    b.labor = Math.max(b.spectrum.labor, b.hj.labor);
+    b.equip = Math.max(b.spectrum.equip, b.hj.equip);
+    b.mat   = Math.max(b.spectrum.mat,   b.hj.mat);
+    b.sub   = Math.max(b.spectrum.sub,   b.hj.sub);
     b.other = b.spectrum.other;
-    b.total = b.spectrum.total + b.hj.total;
-    b.hours = b.spectrum.hours + b.hj.hours;
-    b.qty   = b.spectrum.qty   + b.hj.qty;
+    b.total = b.labor + b.equip + b.mat + b.sub + b.other;
+    // Hours and qty: same rule — take the higher of the two. Spectrum hours
+    // include posted timesheets; HJ hours include not-yet-posted.
+    b.hours = Math.max(b.spectrum.hours, b.hj.hours);
+    b.qty   = Math.max(b.spectrum.qty,   b.hj.qty);
     // Per-component confidence
     b.confidence = {
-      labor: pickComponentConf(b.spectrum.labor, b.hj.labor, true),
-      equip: pickComponentConf(b.spectrum.equip, b.hj.equip, true),
-      mat:   pickComponentConf(b.spectrum.mat,   b.hj.mat,   false),
-      sub:   pickComponentConf(b.spectrum.sub,   b.hj.sub,   false),
+      labor: pickComponentConf(b.spectrum.labor, b.hj.labor),
+      equip: pickComponentConf(b.spectrum.equip, b.hj.equip),
+      mat:   pickComponentConf(b.spectrum.mat,   b.hj.mat),
+      sub:   pickComponentConf(b.spectrum.sub,   b.hj.sub),
     };
     b.confidenceGrade = worstOf(b.confidence.labor, b.confidence.equip, b.confidence.mat, b.confidence.sub);
-    // Source map for tooltips: which side actually contributed
+    // Source map: which side won the max() per bucket
+    const winner = (s,h) => {
+      const a = Number(s)||0, x = Number(h)||0;
+      if(a===0 && x===0) return 'none';
+      return a >= x ? 'spectrum-reconciled' : 'hj-canonical';
+    };
     b.sourceMap = {
-      labor: b.hj.labor>0 ? 'hj-gospel' : (b.spectrum.labor>0 ? 'spectrum-jtd' : 'none'),
-      equip: b.hj.equip>0 ? 'hj-gospel' : (b.spectrum.equip>0 ? 'spectrum-jtd' : 'none'),
-      mat:   b.spectrum.mat>0 && b.hj.mat>0 ? 'spectrum+hj-30d'
-           : b.spectrum.mat>0 ? 'spectrum-jtd'
-           : b.hj.mat>0       ? 'hj-30d-uncleaned'
-           : 'none',
-      sub:   b.spectrum.sub>0 && b.hj.sub>0 ? 'spectrum+hj-30d'
-           : b.spectrum.sub>0 ? 'spectrum-jtd'
-           : b.hj.sub>0       ? 'hj-30d-uncleaned'
-           : 'none',
+      labor: winner(b.spectrum.labor, b.hj.labor),
+      equip: winner(b.spectrum.equip, b.hj.equip),
+      mat:   winner(b.spectrum.mat,   b.hj.mat),
+      sub:   winner(b.spectrum.sub,   b.hj.sub),
     };
   });
   return map;
 }
-// Format Spectrum+HJ breakdown as a tooltip string — used anywhere a single
-// "Actual Cost" number is displayed.
+// Format Spectrum vs HJ breakdown as a tooltip string. Under the max() rule
+// the displayed Actual = whichever side is higher per BELMOS bucket; the
+// tooltip shows both sides so the user can see why the chosen number won.
 function formatBlendTooltip(b){
   if(!b) return '';
   const f = n => '$'+Math.round(Number(n)||0).toLocaleString();
-  const cut = b.cutoffDate || getBlendCutoffISO(new Date());
-  const cutFmt = (()=>{ const d=new Date(cut); return (d.getUTCMonth()+1)+'/'+d.getUTCDate()+'/'+String(d.getUTCFullYear()).slice(2); })();
+  const specTotal = (b.spectrum && b.spectrum.total) || 0;
+  const hjTotal   = (b.hj && b.hj.total) || 0;
+  const total     = b.total != null ? b.total : Math.max(specTotal, hjTotal);
   const estTag = b.hj && b.hj.estimated ? ' (est. from hours × budget rate)' : '';
-  return `Spectrum ${f(b.spectrum.total)} (through ${cutFmt}) + HJ ${f(b.hj.total)}${estTag} (since ${cutFmt}) = ${f(b.total)}`;
+  return `Spectrum ${f(specTotal)} (JTD) · HJ ${f(hjTotal)}${estTag} (lifetime) → using ${f(total)} (greater per bucket)`;
 }
 
 // Save a single job to Supabase
@@ -3516,10 +3534,10 @@ function applyHcssJobCostsToActuals(job){
     // Fallback to legacy greater-of merge if blend isn't available
     return _legacyApplyHcssJobCostsToActuals(job);
   }
-  // Source-aware merge using blendedActualsByCode (the canonical 30-day blend).
-  // Spectrum trumps for material/sub when posted (≥30d typical); HJ-30d fills
-  // the live edge; Labor/Equip always come from HJ. Each cost code carries
-  // per-BELMOS confidence tags so the UI can show which $ are trusted.
+  // Source-aware merge using blendedActualsByCode. Per-bucket max picks the
+  // higher of Spectrum JTD vs HJ lifetime; per-component confidence tags
+  // (`cleaned`/`live`/`investigate`) tell the UI which side won and how
+  // far apart the two sources are.
   const blend = blendedActualsByCode(job, new Date());
   if(!blend) return 0;
   const idx = new Map();
@@ -4327,12 +4345,14 @@ async function renderJobCost(){
     specByCode[key] = p;
   });
 
-  // Group HJ actuals by cost_code — ONLY rows on/after the blend cutoff (last ~30 days).
-  // Older HJ rows are already baked into Spectrum's JTD, so including them would double-count.
-  const jcsCutoffISO = getBlendCutoffISO(new Date());
+  // Group HJ actuals by cost_code — full lifetime per the new max() rule
+  // (no date filter). Per Garrett's 2026-05-04 rewrite, Actual = max(Spectrum
+  // JTD, HJ lifetime) per BELMOS bucket, so we need HJ's full history here,
+  // not just the recent window.
+  const jcsCutoffISO = getBlendCutoffISO(new Date()); // kept for tooltip context only
   const hjByCode = {};
   hjActuals.forEach(r => {
-    if(!r || !r.date || r.date < jcsCutoffISO) return;
+    if(!r || !r.date) return;
     const key = (r.cost_code||'');
     if(!hjByCode[key]) hjByCode[key] = { cost_code: r.cost_code, cost_code_desc: r.cost_code_desc, actual_labor_cost:0, actual_equip_cost:0, actual_mat_cost:0, actual_sub_cost:0, actual_labor_hours:0, actual_qty:0, latest_date: r.date };
     const agg = hjByCode[key];
@@ -4365,7 +4385,13 @@ async function renderJobCost(){
     const hjMatch = hjByCode[p.phase_code] || null;
     const hjTotal = hjMatch ? (hjMatch.actual_labor_cost + hjMatch.actual_equip_cost + hjMatch.actual_mat_cost + hjMatch.actual_sub_cost) : 0;
 
-    // Variance between sources
+    // Blended Actual (2026-05-04 rule): max(spectrum_jtd_total, hj_lifetime_total)
+    // for the row-level display. Per-bucket max happens in blendedActualsByCode;
+    // here we only have phase-totals in Spectrum (JTD is already a total per row),
+    // so apply max at the row total level.
+    const blendedRowActual = Math.max(jtd, hjTotal);
+
+    // Variance between sources (still useful as a "how far apart" signal)
     const variance = hjMatch ? (hjTotal - jtd) : null;
 
     specTotals.jtd += jtd;
@@ -4385,9 +4411,8 @@ async function renderJobCost(){
       description: p.description||'',
       jtd, projected, estimate, hrs, qty, estQty, estHrs,
       hjTotal, variance,
-      // Blended Actual (Garrett's rule): Spectrum JTD (gospel through cutoff) + HJ since cutoff
-      blendedActual: jtd + hjTotal,
-      blendTooltip: formatBlendTooltip({spectrum:{total:jtd},hj:{total:hjTotal},total:jtd+hjTotal,cutoffDate:jcsCutoffISO}),
+      blendedActual: blendedRowActual,
+      blendTooltip: formatBlendTooltip({spectrum:{total:jtd},hj:{total:hjTotal},total:blendedRowActual,cutoffDate:jcsCutoffISO}),
       hasHJ: !!hjMatch,
       status: p.status_code||''
     });
@@ -4413,10 +4438,14 @@ async function renderJobCost(){
     ${specJob.job_description||''} &middot; PM: ${specJob.project_manager||'—'} &middot; Status: ${specJob.status_code||'—'}
   </span>` : '';
 
-  // Remaining budget — uses blended actual so Spectrum + last 30 days of HJ are both accounted for.
-  const totalHJ30 = Object.values(hjByCode).reduce((s,h)=>s+h.actual_labor_cost+h.actual_equip_cost+h.actual_mat_cost+h.actual_sub_cost,0);
-  const totalBlendedActual = specTotals.jtd + totalHJ30;
-  const totalBlendTooltip = formatBlendTooltip({spectrum:{total:specTotals.jtd},hj:{total:totalHJ30},total:totalBlendedActual,cutoffDate:jcsCutoffISO});
+  // Total blended actual = sum of per-row max(spectrum_jtd, hj_lifetime).
+  // Per-row max prevents Spectrum's burdened-old-work being washed out by HJ
+  // recent-only-work (and vice versa) at the rollup. Note this is NOT
+  // max(Σspectrum, Σhj) — that would double-count phases where Spectrum is
+  // higher on labor but HJ is higher on mat/sub.
+  const totalHJLifetime = Object.values(hjByCode).reduce((s,h)=>s+h.actual_labor_cost+h.actual_equip_cost+h.actual_mat_cost+h.actual_sub_cost,0);
+  const totalBlendedActual = costRows.reduce((s,r)=>s+(r.blendedActual||0),0);
+  const totalBlendTooltip = formatBlendTooltip({spectrum:{total:specTotals.jtd},hj:{total:totalHJLifetime},total:totalBlendedActual,cutoffDate:jcsCutoffISO});
   const remaining = specTotals.estimate - totalBlendedActual;
   const pctComplete = specTotals.estimate > 0 ? ((totalBlendedActual / specTotals.estimate) * 100).toFixed(1) : '0.0';
 
@@ -4458,7 +4487,7 @@ async function renderJobCost(){
     if(!phaseGroupsMap[k]) phaseGroupsMap[k] = {
       phaseCode:k, description:r.description||'',
       jtd:0, projected:0, estimate:0,
-      hj30:0,
+      hjLifetime:0,
       types:[],
     };
     const g = phaseGroupsMap[k];
@@ -4468,12 +4497,15 @@ async function renderJobCost(){
     if(!g.description && r.description) g.description = r.description;
     g.types.push(r);
   });
-  // Attach the 30-day HJ top-up once per phase_code (not per cost_type, to avoid double-count)
+  // Per-phase blended actual = max(spectrum_jtd_total, hj_lifetime_total).
+  // (Per-bucket max requires per-bucket Spectrum totals, which we have via
+  // cost_type rows — but for the phase-level rollup the total-level max is
+  // close enough and matches how renderProductionTracker displays the row.)
   Object.values(phaseGroupsMap).forEach(g => {
     const hj = hjByCode[g.phaseCode];
-    g.hj30 = hj ? (hj.actual_labor_cost + hj.actual_equip_cost + hj.actual_mat_cost + hj.actual_sub_cost) : 0;
-    g.blendedActual = g.jtd + g.hj30;
-    g.blendTooltip = formatBlendTooltip({spectrum:{total:g.jtd},hj:{total:g.hj30},total:g.blendedActual,cutoffDate:jcsCutoffISO});
+    g.hjLifetime = hj ? (hj.actual_labor_cost + hj.actual_equip_cost + hj.actual_mat_cost + hj.actual_sub_cost) : 0;
+    g.blendedActual = Math.max(g.jtd, g.hjLifetime);
+    g.blendTooltip = formatBlendTooltip({spectrum:{total:g.jtd},hj:{total:g.hjLifetime},total:g.blendedActual,cutoffDate:jcsCutoffISO});
   });
   // (totalBlendedActual + totalBlendTooltip already computed above for the KPI strip.)
   const phaseGroups = Object.values(phaseGroupsMap).sort((a,b) =>
@@ -4505,7 +4537,7 @@ async function renderJobCost(){
       <thead><tr>
         <th style="width:24px;"></th>
         <th>Phase</th><th>Type</th><th>Description</th>
-        <th style="text-align:right;" title="Blended: Spectrum JTD through 30 days ago + HJ daily detail since then">Actual (blended)</th>
+        <th style="text-align:right;" title="Blended: max(Spectrum JTD, HJ lifetime) per phase code">Actual (blended)</th>
         <th style="text-align:right;">Projected</th>
         <th style="text-align:right;">Estimate</th>
         <th style="text-align:right;" title="Estimate − JTD (budget left to spend)">Remaining</th>
@@ -6294,8 +6326,8 @@ function computeEVA(job,asOf){
   // Build BAC map from HeavyBid activities (authoritative source)
   const bacMap=evaBuildBACMap(job);
   const haveActivities=Object.keys(bacMap.bac).length>0;
-  // Blended actuals (Spectrum through today−30d + HJ since cutoff). If
-  // Spectrum hasn't loaded yet, Spectrum side is zero and we still have HJ.
+  // Blended actuals (per-bucket max of Spectrum JTD and HJ lifetime). If
+  // Spectrum hasn't loaded yet, Spectrum side is zero and we fall through to HJ.
   const blendMap = (typeof blendedActualsByCode==='function') ? blendedActualsByCode(job, asOf) : {};
   const haveBlend = Object.keys(blendMap).length>0;
   // Build a lookup of actuals by cost code for easy join.
@@ -8018,16 +8050,14 @@ function runSelfTestAndShow(){
 }
 
 // Confidence pill helper — used wherever a $ value is shown next to its
-// trust grade. Returns a small inline span. `grade` ∈ {clean, reconciled,
-// mixed, live, flagged, none}. Optionally takes a tooltip string.
+// trust grade. Returns a small inline span. `grade` ∈ {cleaned, live,
+// investigate, none}. Optionally takes a tooltip string.
 function confidencePill(grade, tooltipHtml){
   if(!grade || grade === 'none') return '';
   const palette = {
-    clean:      { bg:'#E6F4EA', fg:'#1E8E3E', border:'#1E8E3E', label:'CLEAN',     desc:'Trusted source — HJ for hours/labor/equip, Spectrum for mat/sub' },
-    reconciled: { bg:'#E8F0FE', fg:'#1A73E8', border:'#1A73E8', label:'RECONCILED',desc:'Spectrum has posted this — gold standard' },
-    mixed:      { bg:'#FEF7E0', fg:'#9A6700', border:'#F9AB00', label:'MIXED',     desc:'Both Spectrum and HJ-30d contributed — small overlap risk' },
-    live:       { bg:'#FFF3E0', fg:'#B45309', border:'#F26722', label:'LIVE',      desc:'HJ <30 days only — fresh but uncleaned, judgment required' },
-    flagged:    { bg:'#FDECEA', fg:'#B91C1C', border:'#D93025', label:'FLAGGED',   desc:'Data quality issue detected on this code' },
+    cleaned:     { bg:'#E8F0FE', fg:'#1A73E8', border:'#1A73E8', label:'CLEANED',     desc:'Spectrum > HJ — burden / AP / sub posted; trust this number' },
+    live:        { bg:'#FFF3E0', fg:'#B45309', border:'#F26722', label:'LIVE',        desc:'HJ > Spectrum — costs are accruing, Spectrum hasn\'t posted yet. Likely accurate, just unreconciled' },
+    investigate: { bg:'#FDECEA', fg:'#B91C1C', border:'#D93025', label:'INVESTIGATE', desc:'Spectrum and HJ differ by >50% — real anomaly worth checking' },
   };
   const p = palette[grade] || palette.live;
   const titleAttr = tooltipHtml ? `title="${String(tooltipHtml).replace(/"/g,'&quot;')}"` : `title="${p.desc}"`;
@@ -8035,20 +8065,20 @@ function confidencePill(grade, tooltipHtml){
 }
 // Build a per-row confidence tooltip string from a job.actuals[] row that
 // has been tagged via applyHcssJobCostsToActuals (carries _confidence,
-// _spectrumComponents, _hjComponents, _sourceMap, _blendCutoff).
+// _spectrumComponents, _hjComponents, _sourceMap).
 function confidenceTooltipFor(actualsRow){
   if(!actualsRow || !actualsRow._confidence) return '';
   const c = actualsRow._confidence;
   const spec = actualsRow._spectrumComponents || {};
   const hj = actualsRow._hjComponents || {};
-  const cut = actualsRow._blendCutoff || '';
   const fmt = n => '$'+(Math.round(Number(n)||0)).toLocaleString();
+  const line = (k, label) => `  ${label}: ${(c[k]||'-').toUpperCase()} — Spectrum ${fmt(spec[k]||0)} · HJ ${fmt(hj[k]||0)}`;
   const lines = [
-    `Confidence by component (cutoff ${cut}):`,
-    `  Labor: ${(c.labor||'-').toUpperCase()} (HJ ${fmt(hj.labor||0)})`,
-    `  Equip: ${(c.equip||'-').toUpperCase()} (HJ ${fmt(hj.equip||0)})`,
-    `  Material: ${(c.mat||'-').toUpperCase()} (Spectrum ${fmt(spec.mat||0)} + HJ-30d ${fmt(hj.mat||0)})`,
-    `  Subcontract: ${(c.sub||'-').toUpperCase()} (Spectrum ${fmt(spec.sub||0)} + HJ-30d ${fmt(hj.sub||0)})`,
+    `Per-component (using max of the two):`,
+    line('labor', 'Labor'),
+    line('equip', 'Equip'),
+    line('mat',   'Material'),
+    line('sub',   'Subcontract'),
   ];
   return lines.join('\n');
 }
@@ -11245,10 +11275,10 @@ function renderProductionTracker(job){
     delete row._bid;
   });
 
-  // 6) BLENDED ACTUAL OVERRIDE — Spectrum (through today−30d) + HJ (since cutoff)
-  // becomes the authoritative actual for cost, hours, AND qty. Spectrum's JTD
-  // totals give true cumulative values; summing actualsDetail alone only covers
-  // the current sync window (14–35 days) and undercounts older jobs.
+  // 6) BLENDED ACTUAL OVERRIDE — per-bucket max(Spectrum JTD, HJ lifetime)
+  // becomes the authoritative actual for cost, hours, AND qty. The higher
+  // number wins per BELMOS bucket (Garrett's 2026-05-04 rule), capturing
+  // burden added by Spectrum and field-logged costs that haven't posted yet.
   // Ensures Production Tracker matches Forecast/EVA/JCS everywhere.
   if(typeof blendedActualsByCode==='function' && job._spectrumPhases && job._spectrumPhases.length){
     const blend = blendedActualsByCode(job, new Date());
@@ -11442,11 +11472,10 @@ function renderProductionTracker(job){
        `</div>`;
   }
   // Confidence aggregate banner — split actuals$ by trust grade so you can
-  // see at-a-glance how much of the rollup is gold vs judgment-required.
-  // Per-component ($ Labor + Equip from HJ are always "clean"; mat/sub
-  // depend on Spectrum coverage). Worst-of-row grade drives the row pill.
+  // see at-a-glance how much of the rollup is reconciled vs live vs needs
+  // a human look. Worst-of-row grade drives the row pill.
   {
-    const tally = { clean:{$:0,n:0}, reconciled:{$:0,n:0}, mixed:{$:0,n:0}, live:{$:0,n:0}, flagged:{$:0,n:0}, none:{$:0,n:0} };
+    const tally = { cleaned:{$:0,n:0}, live:{$:0,n:0}, investigate:{$:0,n:0}, none:{$:0,n:0} };
     let confAvail = 0;
     rows.forEach(r=>{
       if(!r._confidenceGrade) return;
@@ -11457,15 +11486,13 @@ function renderProductionTracker(job){
       slot.n += 1;
     });
     if(confAvail>0){
-      const totalAC = (tally.clean.$+tally.reconciled.$+tally.mixed.$+tally.live.$+tally.flagged.$);
+      const totalAC = (tally.cleaned.$+tally.live.$+tally.investigate.$);
       const fmtSmall = n => '$'+Math.round(n).toLocaleString();
       h+=`<div style="background:#FAF7F2;border:1px solid var(--border);padding:8px 12px;margin-bottom:12px;border-radius:4px;font-size:12px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;">`+
          `<strong style="color:var(--olive);font-family:Oswald;letter-spacing:.4px;">DATA CONFIDENCE</strong>`+
-         (tally.clean.n     ? `<span>${confidencePill('clean')}<strong style="margin-left:4px;">${fmtSmall(tally.clean.$)}</strong> <span style="color:var(--text-light);">(${tally.clean.n} codes)</span></span>` : '')+
-         (tally.reconciled.n? `<span>${confidencePill('reconciled')}<strong style="margin-left:4px;">${fmtSmall(tally.reconciled.$)}</strong> <span style="color:var(--text-light);">(${tally.reconciled.n})</span></span>` : '')+
-         (tally.mixed.n     ? `<span>${confidencePill('mixed')}<strong style="margin-left:4px;">${fmtSmall(tally.mixed.$)}</strong> <span style="color:var(--text-light);">(${tally.mixed.n})</span></span>` : '')+
-         (tally.live.n      ? `<span>${confidencePill('live')}<strong style="margin-left:4px;">${fmtSmall(tally.live.$)}</strong> <span style="color:var(--text-light);">(${tally.live.n})</span></span>` : '')+
-         (tally.flagged.n   ? `<span>${confidencePill('flagged')}<strong style="margin-left:4px;">${fmtSmall(tally.flagged.$)}</strong> <span style="color:var(--text-light);">(${tally.flagged.n})</span></span>` : '')+
+         (tally.cleaned.n     ? `<span>${confidencePill('cleaned')}<strong style="margin-left:4px;">${fmtSmall(tally.cleaned.$)}</strong> <span style="color:var(--text-light);">(${tally.cleaned.n} codes)</span></span>` : '')+
+         (tally.live.n        ? `<span>${confidencePill('live')}<strong style="margin-left:4px;">${fmtSmall(tally.live.$)}</strong> <span style="color:var(--text-light);">(${tally.live.n})</span></span>` : '')+
+         (tally.investigate.n ? `<span>${confidencePill('investigate')}<strong style="margin-left:4px;">${fmtSmall(tally.investigate.$)}</strong> <span style="color:var(--text-light);">(${tally.investigate.n})</span></span>` : '')+
          `<span style="margin-left:auto;color:var(--text-light);font-size:11px;">Total ${fmtSmall(totalAC)} · hover any pill for the rule</span>`+
          `</div>`;
     }
