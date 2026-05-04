@@ -66,6 +66,32 @@ body{font-family:'Source Serif 4',Georgia,serif;background:var(--bg);color:var(-
 .kpi-value{font-family:Oswald,sans-serif;font-size:28px;font-weight:600;color:var(--midnight)}
 .kpi-label{font-size:12px;color:var(--text-light);margin-top:4px}
 .table-wrap{overflow-x:auto}
+/* Production Tracker — sticky first 3 columns (cost code / description / unit) */
+.prod-tracker-tbl{border-collapse:separate;border-spacing:0;}
+.prod-tracker-tbl .pt-sticky-1,
+.prod-tracker-tbl .pt-sticky-2,
+.prod-tracker-tbl .pt-sticky-3,
+.prod-tracker-tbl .pt-sticky-group{position:sticky;z-index:2;}
+.prod-tracker-tbl .pt-sticky-1{left:0;min-width:165px;max-width:165px;}
+.prod-tracker-tbl .pt-sticky-2{left:165px;min-width:270px;max-width:270px;}
+.prod-tracker-tbl .pt-sticky-3{left:435px;min-width:50px;max-width:50px;}
+.prod-tracker-tbl .pt-sticky-group{left:0;min-width:485px;max-width:485px;}
+.prod-tracker-tbl thead .pt-sticky-1,
+.prod-tracker-tbl thead .pt-sticky-2,
+.prod-tracker-tbl thead .pt-sticky-3,
+.prod-tracker-tbl thead .pt-sticky-group{z-index:4;}
+.prod-tracker-tbl tbody td.pt-sticky-1,
+.prod-tracker-tbl tbody td.pt-sticky-2,
+.prod-tracker-tbl tbody td.pt-sticky-3{background:#FFFFFF;}
+.prod-tracker-tbl tbody tr:hover td.pt-sticky-1,
+.prod-tracker-tbl tbody tr:hover td.pt-sticky-2,
+.prod-tracker-tbl tbody tr:hover td.pt-sticky-3{background:#FAF7F2;}
+.prod-tracker-tbl thead .pt-sticky-1,
+.prod-tracker-tbl thead .pt-sticky-2,
+.prod-tracker-tbl thead .pt-sticky-3{background:var(--card);}
+/* Right-edge shadow on the rightmost sticky to mark where the pinned area ends */
+.prod-tracker-tbl .pt-sticky-3,
+.prod-tracker-tbl .pt-sticky-group{box-shadow:2px 0 4px -2px rgba(0,0,0,.12);}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{font-family:Oswald,sans-serif;font-size:12px;letter-spacing:1px;text-transform:uppercase;background:var(--green);color:var(--white);padding:10px 12px;text-align:left;position:sticky;top:0;white-space:nowrap}
 td{padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
@@ -759,12 +785,13 @@ function sortHdr(tid,col,label,renderFn,extra){
   const stl='cursor:pointer;user-select:none;white-space:nowrap;'+(active?'color:var(--blue);':'');
   return '<th class="num" style="'+stl+(extra||'')+'" onclick="var s=_tblSort[\''+tid+'\']||{};_tblSort[\''+tid+'\']={col:\''+col+'\',dir:(s.col===\''+col+'\'&&s.dir===\'asc\')?\'desc\':\'asc\'};'+renderFn+'();">'+label+arrow+'</th>';
 }
-function sortHdrL(tid,col,label,renderFn,extra){
+function sortHdrL(tid,col,label,renderFn,extra,extraClass){
   // Left-aligned version (no .num class)
   const s=_tblSort[tid]||{};const active=s.col===col;
   const arrow=active?(s.dir==='asc'?' ▲':' ▼'):'';
   const stl='cursor:pointer;user-select:none;white-space:nowrap;'+(active?'color:var(--blue);':'');
-  return '<th style="'+stl+(extra||'')+'" onclick="var s=_tblSort[\''+tid+'\']||{};_tblSort[\''+tid+'\']={col:\''+col+'\',dir:(s.col===\''+col+'\'&&s.dir===\'asc\')?\'desc\':\'asc\'};'+renderFn+'();">'+label+arrow+'</th>';
+  const cls = extraClass ? ' class="'+extraClass+'"' : '';
+  return '<th'+cls+' style="'+stl+(extra||'')+'" onclick="var s=_tblSort[\''+tid+'\']||{};_tblSort[\''+tid+'\']={col:\''+col+'\',dir:(s.col===\''+col+'\'&&s.dir===\'asc\')?\'desc\':\'asc\'};'+renderFn+'();">'+label+arrow+'</th>';
 }
 function doSort(arr,tid,defs){
   const s=_tblSort[tid];if(!s||!s.col)return arr;
@@ -7304,6 +7331,29 @@ function computeJCSPlannedAt(job, refDate, opts){
   }
   return planned;
 }
+// Per-cost-code Job Cost Schedule planned-to-date map. Same logic as
+// computeJCSPlannedAt but bucketed by phaseCode. Used by Production Tracker
+// to compute "what we should have spent on this code by now" vs actual.
+// Returns {phaseCode → plannedToDate$}. Activities with no phaseCode roll
+// up under '__unmapped'.
+function computeJCSPlannedByCode(job, refDate, opts){
+  opts = opts || {};
+  const ref = toDate(refDate) || insightsTodayUTC();
+  const acts = buildActivityEnvelopes(job, opts);
+  const out = {};
+  for(const a of acts){
+    const cost = (opts.scopeAdjusted ? a._effectiveTotal : a.directTotal) || 0;
+    if(cost<=0||!a._barStart||!a._barEnd) continue;
+    const code = String(a.phaseCode||'__unmapped');
+    const s=a._barStart.getTime(), f=a._barEnd.getTime(), r=ref.getTime();
+    let portion = 0;
+    if(r>=f) portion = cost;
+    else if(r<=s) portion = 0;
+    else portion = cost*((r-s)/Math.max(f-s,86400000));
+    out[code] = (out[code]||0) + portion;
+  }
+  return out;
+}
 // Find the schedule date when JCS planned cost equals targetCost (= today's
 // actual cost). Used to translate $ variance into days-of-slip. Walks day by
 // day from project start to end; returns null if curve never reaches target.
@@ -11236,6 +11286,14 @@ function renderProductionTracker(job){
   // cap their earnedHrs contribution so they don't blow up KPI rollups.
   const OUTLIER_QTY_PCT = 500;
   const EARNED_HRS_CAP_MULT = 1.5;
+  // Job Cost Schedule — per-cost-code planned-to-date $. Lets us replace the
+  // useless budget−actual variance with "JCS expected by now − actual" so the
+  // PM sees pace-against-plan, not just bid-vs-spent. Garrett's framing:
+  // "cost we should have accrued based off JCS vs what we actually have."
+  const _jcsByCode = (typeof computeJCSPlannedByCode === 'function')
+    ? computeJCSPlannedByCode(job, new Date())
+    : {};
+
   const rows=Object.values(byPhase).map(r=>{
     const remainingQty=Math.max(0,r.budgetQty-r.actualQty);
     const qtyPct=r.budgetQty>0?(r.actualQty/r.budgetQty*100):0;
@@ -11269,6 +11327,10 @@ function renderProductionTracker(job){
       budgetMat:r.budgetMat,actualMat:r.actualMat,matVar,
       budgetSub:r.budgetSub,actualSub:r.actualSub,subVar,
       budgetCost,actualCost,costVar,costPctUsed,
+      // JCS planned-to-date for this code (per-activity pro-rata between barStart/barEnd at today).
+      // Variance = JCS expected − actual: positive = under JCS plan (good), negative = over plan.
+      jcsPlanned: Number(_jcsByCode[String(r.code)]||0),
+      jcsVariance: Number(_jcsByCode[String(r.code)]||0) - actualCost,
       src:r.src,
       blend:r._blend||null,
       // Confidence tagging — set by applyHcssJobCostsToActuals via blendedActualsByCode
@@ -11355,7 +11417,19 @@ function renderProductionTracker(job){
   h+=tile('Productivity',overallProductivity>0?(overallProductivity.toFixed(0)+'%'):'—',prodCls,overallProductivity>=100?'Beating budget':(overallProductivity>=90?'On pace':(overallProductivity>0?'Behind pace':'No data')));
   h+=tile('Hours Variance',totActualHrs>0?((totHrsVar>=0?'+':'')+fmt(totHrsVar)+' hrs'):'—',totActualHrs>0?hrsVarCls:'',totActualHrs>0?(totHrsVar>=0?'Hours saved vs earned':'Hours lost vs earned'):'Needs actuals');
   h+=tile('Cost Used',totBudgetCost>0?`${fmtD(totActualCost)} / ${fmtD(totBudgetCost)}`:(totActualCost>0?fmtD(totActualCost):'—'),totBudgetCost>0?(costPctUsed<=overallPct+5?'good':(costPctUsed<=overallPct+15?'':'warn')):'',totBudgetCost>0?(costPctUsed.toFixed(0)+'% of budget'):'Needs budget');
-  h+=tile('Cost Variance',totBudgetCost>0?((totCostVar>=0?'+':'')+fmtD(totCostVar)):'—',totBudgetCost>0?costVarCls:'',totBudgetCost>0?(totCostVar>=0?'Under budget':'Over budget'):'');
+  // JCS-vs-actual variance — replaces budget−actual which was misleading.
+  // Shows: how much we should have spent by now per Job Cost Schedule vs
+  // what we have actually spent. Positive = under JCS plan, negative = over.
+  const totJCSPlanned = rows.reduce((s,r)=>s+(Number(r.jcsPlanned)||0),0);
+  const totJCSVar = totJCSPlanned - totActualCost;
+  const jcsVarCls = totJCSVar >= 0 ? 'good' : 'warn';
+  h+=tile('JCS Variance',
+    totJCSPlanned>0 ? ((totJCSVar>=0?'+':'')+fmtD(totJCSVar)) : '—',
+    totJCSPlanned>0 ? jcsVarCls : '',
+    totJCSPlanned>0
+      ? `${fmtD(totJCSPlanned)} planned · ${fmtD(totActualCost)} actual`
+      : 'JCS not computable — map activities to schedule'
+  );
   h+=tile('Production Days',String(prodDays),'',prodDays>0?'unique work dates':'');
   h+=tile('Top Avg/Day',topProd&&topProd.ratePerDay?fmt(topProd.ratePerDay):'—','',topProd?topProd.code:'');
   h+='</div>';
@@ -11475,15 +11549,15 @@ function renderProductionTracker(job){
   const _gSty='padding:6px 8px;font-family:Oswald;font-size:10px;letter-spacing:1px;text-transform:uppercase;text-align:center;color:var(--text-light);border-bottom:1px solid var(--border);';
   h+='<thead>';
   h+='<tr>';
-  h+=`<th colspan="3" style="${_gSty}background:var(--ash);">Phase</th>`;
+  h+=`<th class="pt-sticky-group" colspan="3" style="${_gSty}background:var(--ash);">Phase</th>`;
   h+=`<th colspan="5" style="${_gSty}background:rgba(34,139,34,0.10);color:#1f6b2a;">Production</th>`;
   h+=`<th colspan="6" style="${_gSty}background:rgba(242,103,34,0.08);color:#a94612;">Hours</th>`;
-  h+=`<th colspan="3" style="${_gSty}background:rgba(29,78,216,0.08);color:#1e3a8a;">Cost</th>`;
+  h+=`<th colspan="4" style="${_gSty}background:rgba(29,78,216,0.08);color:#1e3a8a;">Cost (vs Job Cost Schedule)</th>`;
   h+='</tr>';
   h+='<tr>';
-  h+=sortHdrL('prod-tracker','code','Cost Code','renderProduction');
-  h+=sortHdrL('prod-tracker','description','Description','renderProduction');
-  h+=sortHdrL('prod-tracker','unit','Unit','renderProduction');
+  h+=sortHdrL('prod-tracker','code','Cost Code','renderProduction','','pt-sticky-1');
+  h+=sortHdrL('prod-tracker','description','Description','renderProduction','','pt-sticky-2');
+  h+=sortHdrL('prod-tracker','unit','Unit','renderProduction','','pt-sticky-3');
   h+=sortHdr('prod-tracker','budgetQty','Budget Qty','renderProduction');
   h+=sortHdr('prod-tracker','actualQty','Actual Qty','renderProduction');
   h+=sortHdr('prod-tracker','remainingQty','Remaining','renderProduction');
@@ -11496,8 +11570,9 @@ function renderProductionTracker(job){
   h+=sortHdr('prod-tracker','productivityPct','Productivity','renderProduction');
   h+=sortHdr('prod-tracker','hrsVar','Hrs Var','renderProduction');
   h+=sortHdr('prod-tracker','budgetCost','Budget $','renderProduction');
+  h+=sortHdr('prod-tracker','jcsPlanned','JCS Plan $','renderProduction');
   h+=sortHdr('prod-tracker','actualCost','Actual $','renderProduction');
-  h+=sortHdr('prod-tracker','costVar','Cost Var','renderProduction');
+  h+=sortHdr('prod-tracker','jcsVariance','JCS Var','renderProduction');
   h+='</tr></thead><tbody>';
 
   // Light tint classes for group columns
@@ -11537,9 +11612,9 @@ function renderProductionTracker(job){
     const outlierBadge = r.isOutlier ? ' <span style="font-size:9px;background:#dc2626;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">BAD QTY</span>' : '';
     const confTooltip = (typeof confidenceTooltipFor === 'function') ? confidenceTooltipFor(r) : '';
     const confBadge = (typeof confidencePill === 'function' && r._confidenceGrade) ? confidencePill(r._confidenceGrade, confTooltip) : '';
-    h+=`<td>${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(r.code)}${flagOffBudget?' <span style="font-size:9px;background:#1d4ed8;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">OFF-BUDGET</span>':''}${outlierBadge}${confBadge}</td>`;
-    h+=`<td>${esc(r.description)}</td>`;
-    h+=`<td>${esc(r.unit)}</td>`;
+    h+=`<td class="pt-sticky-1">${hasDetail?'<span class="pt-arrow" style="display:inline-block;width:14px;font-size:10px;color:var(--text-light);">▸</span>':'<span style="display:inline-block;width:14px;"></span>'}${esc(r.code)}${flagOffBudget?' <span style="font-size:9px;background:#1d4ed8;color:#fff;padding:1px 5px;border-radius:3px;font-family:Oswald;letter-spacing:.4px;margin-left:4px;">OFF-BUDGET</span>':''}${outlierBadge}${confBadge}</td>`;
+    h+=`<td class="pt-sticky-2" style="white-space:normal;overflow:hidden;text-overflow:ellipsis;">${esc(r.description)}</td>`;
+    h+=`<td class="pt-sticky-3">${esc(r.unit)}</td>`;
     // Production group
     h+=`<td class="num" style="${_prodTint}">${r.budgetQty>0?fmt(r.budgetQty):'—'}</td>`;
     h+=`<td class="num" style="${_prodTint}">${r.actualQty>0?fmt(r.actualQty):'—'}</td>`;
@@ -11553,15 +11628,23 @@ function renderProductionTracker(job){
     h+=`<td class="num" style="${_hrsTint}">${r.actualRate>0?fmt(r.actualRate):'—'}</td>`;
     h+=`<td class="num ${prodBadge}" style="${_hrsTint}">${r.productivityPct>0?r.productivityPct.toFixed(0)+'%':'—'}</td>`;
     h+=`<td class="num ${(r.actualHrs>0&&r.budgetRate>0)?hrsVarBadge:''}" style="${_hrsTint}">${(r.actualHrs>0&&r.budgetRate>0)?((r.hrsVar>=0?'+':'')+fmt(r.hrsVar)):'—'}</td>`;
-    // Cost group
+    // Cost group — Budget total | JCS Plan to date | Actual to date | JCS variance
+    // The JCS variance replaces the (mostly useless) budget − actual.
+    // jcsVariance = jcsPlanned − actual: positive = under JCS plan (good), negative = over plan.
     const _acTip = r.blend ? formatBlendTooltip(r.blend) : '';
+    const jcsVarBadge = r.jcsVariance >= 0 ? 'good' : 'warn';
+    const jcsHasData  = r.jcsPlanned > 0 || r.actualCost > 0;
+    const jcsPlanTip = r.jcsPlanned > 0
+      ? `JCS planned-to-date for this code, summed pro-rata across mapped activities (${fmtD(r.jcsPlanned)} of ${fmtD(r.budgetCost)} budget)`
+      : (r.budgetCost>0 ? 'No mapped activity envelope yet — map this code in Set Up to enable JCS planning' : '');
     h+=`<td class="num" style="${_costTint}">${r.budgetCost>0?fmtD(r.budgetCost):'—'}</td>`;
+    h+=`<td class="num" style="${_costTint};color:#1e3a8a;" title="${esc(jcsPlanTip)}">${r.jcsPlanned>0?fmtD(r.jcsPlanned):'—'}</td>`;
     h+=`<td class="num" style="${_costTint}" title="${_acTip?esc(_acTip):''}">${r.actualCost>0?fmtD(r.actualCost):'—'}</td>`;
-    h+=`<td class="num ${(r.budgetCost>0||r.actualCost>0)?costVarBadge:''}" style="${_costTint}">${(r.budgetCost>0||r.actualCost>0)?((r.costVar>=0?'+':'')+fmtD(r.costVar)):'—'}</td>`;
+    h+=`<td class="num ${jcsHasData?jcsVarBadge:''}" style="${_costTint}" title="JCS Plan − Actual: positive = under plan, negative = over plan">${jcsHasData?((r.jcsVariance>=0?'+':'')+fmtD(r.jcsVariance)):'—'}</td>`;
     h+=`</tr>`;
 
     if(hasDetail){
-      h+=`<tr id="${rowId}" style="display:none;"><td colspan="17" style="padding:0;border:none;">`;
+      h+=`<tr id="${rowId}" style="display:none;"><td colspan="18" style="padding:0;border:none;">`;
       h+=`<div style="background:var(--ash);padding:10px 14px 12px 28px;border-bottom:2px solid var(--sand);">`;
 
       // BELMOS cost breakdown (Labor / Equipment / Material / Subcontract) — only if any data
