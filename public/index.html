@@ -349,6 +349,7 @@ tr:hover{background:#FAF8F5}
     </div>
     <button onclick="switchToSubTab('setup')" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:18px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Project Set Up" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#9881;</button>
     <button onclick="showAdminPinModal()" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:15px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Admin Password" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#x1f511;</button>
+    <button onclick="showBugReportModal()" style="background:none;border:none;cursor:pointer;color:var(--sand);font-size:15px;padding:4px 8px;border-radius:4px;transition:all .2s;" title="Report a bug" onmouseover="this.style.color='var(--orange)'" onmouseout="this.style.color='var(--sand)'">&#x1f41e;</button>
     <div id="userMenu" style="display:none;position:relative;">
       <button id="userMenuBtn" onclick="toggleUserMenu()" style="background:none;border:1px solid rgba(255,255,255,.2);cursor:pointer;color:var(--sand);font-size:12px;padding:4px 10px;border-radius:4px;font-family:'Source Serif 4',serif;display:flex;align-items:center;gap:6px;" title="Account">
         <span style="width:20px;height:20px;border-radius:50%;background:var(--orange);color:white;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;" id="userMenuInitial"></span>
@@ -763,6 +764,23 @@ tr:hover{background:#FAF8F5}
   </div>
 </div>
 
+<!-- BUG REPORT MODAL (Control Plane) -->
+<div class="modal-bg" id="bugReportModal">
+  <div class="modal">
+    <h3>Report a Bug</h3>
+    <p style="font-size:12px;color:var(--text-light);margin-bottom:12px;margin-top:-8px;">Goes straight to the Control Plane bug tracker. Include what you were doing when it happened.</p>
+    <label>Title*</label>
+    <input type="text" id="bugReportTitle" placeholder="Short summary of the issue" maxlength="200">
+    <label>Description</label>
+    <textarea id="bugReportDescription" placeholder="What happened? What did you expect?" rows="5" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-family:'Source Serif 4',serif;font-size:14px;margin-bottom:12px;box-sizing:border-box;resize:vertical;"></textarea>
+    <div id="bugReportMsg" style="font-size:12px;margin-top:-6px;margin-bottom:10px;min-height:16px;"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeBugReportModal()">Cancel</button>
+      <button class="btn-primary" id="bugReportSubmitBtn" onclick="submitBugReport()">Submit</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════
 // DATA STORE
@@ -882,6 +900,48 @@ function saveAdminPin(){
   localStorage.setItem('bdc_admin_pin',newPin);
   closeAdminPinModal();
   log('Admin password updated.');
+}
+
+// Bug report — Control Plane
+function showBugReportModal(){
+  document.getElementById('bugReportTitle').value='';
+  document.getElementById('bugReportDescription').value='';
+  const msgEl=document.getElementById('bugReportMsg');
+  msgEl.textContent='';
+  msgEl.style.color='';
+  document.getElementById('bugReportModal').classList.add('show');
+}
+function closeBugReportModal(){
+  document.getElementById('bugReportModal').classList.remove('show');
+}
+async function submitBugReport(){
+  const title=document.getElementById('bugReportTitle').value.trim();
+  const description=document.getElementById('bugReportDescription').value.trim();
+  const msgEl=document.getElementById('bugReportMsg');
+  const btn=document.getElementById('bugReportSubmitBtn');
+  if(!title){
+    msgEl.style.color='var(--red)';
+    msgEl.textContent='Title is required.';
+    return;
+  }
+  btn.disabled=true; btn.textContent='Submitting…';
+  msgEl.style.color='';
+  msgEl.textContent='';
+  const context={
+    url: window.location.href,
+    activeJob: (Store && Store.activeJob) || null,
+    activeSubTab: (typeof _activeSubTab!=='undefined' ? _activeSubTab : null)
+  };
+  const result=await reportBug(CP_TOOL_SLUG, title, description, context, _currentUser && _currentUser.email);
+  btn.disabled=false; btn.textContent='Submit';
+  if(result.ok){
+    msgEl.style.color='var(--teal)';
+    msgEl.textContent='Thanks — bug reported.';
+    setTimeout(closeBugReportModal, 1200);
+  } else {
+    msgEl.style.color='var(--red)';
+    msgEl.textContent='Failed to submit: '+(result.error||'unknown error');
+  }
 }
 
 // ═══════════════════════════════════════════
@@ -2575,6 +2635,49 @@ const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // ═══════════════════════════════════════════
+// CONTROL PLANE TELEMETRY — usage ping + bug report
+// Calls the shared "spine" Supabase project's Edge Functions (NOT this app's
+// own Supabase project above). Public, CORS-open, no auth required. Both
+// helpers are fire-and-forget-safe: they never throw and never block the UI.
+// ═══════════════════════════════════════════
+const CP_SPINE_URL = 'https://fcadwdbbbijuutrhzewv.supabase.co';
+const CP_TOOL_SLUG = 'burns-project-controls';
+
+function pingUsage(toolSlug, actorEmail){
+  try{
+    const today = new Date().toISOString().slice(0,10);
+    const key = `cp_usage_ping:${toolSlug}:${today}`;
+    if(sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+    fetch(CP_SPINE_URL + '/functions/v1/usage-ping', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ tool_slug: toolSlug, actor_email: actorEmail || undefined })
+    }).catch(()=>{});
+  }catch(e){ /* never break the app over telemetry */ }
+}
+
+async function reportBug(toolSlug, title, description, context, reporterEmail){
+  try{
+    const res = await fetch(CP_SPINE_URL + '/functions/v1/bug-report', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        tool_slug: toolSlug,
+        title: title,
+        description: description || undefined,
+        context: context || undefined,
+        reporter_email: reporterEmail || undefined
+      })
+    });
+    if(!res.ok) return { ok:false, error: 'HTTP ' + res.status };
+    return { ok:true };
+  }catch(e){
+    return { ok:false, error: e.message || 'Network error' };
+  }
+}
+
+// ═══════════════════════════════════════════
 // AUTH — email+password login with reset flow, gates app startup
 // ═══════════════════════════════════════════
 let _currentUser = null;
@@ -2735,6 +2838,7 @@ function bootApp(){
   _appBooted = true;
   hideLoginOverlay();
   updateUserMenu(_currentUser);
+  pingUsage(CP_TOOL_SLUG, _currentUser && _currentUser.email);
   // The existing loadJobs() call at the end of the script already fires on
   // initial load; if it ran before the session was available (rare), invoke
   // it explicitly here. loadJobs is safe to call multiple times — later
