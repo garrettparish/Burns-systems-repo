@@ -798,6 +798,15 @@ let _prodView='tracker'; // Production tab view: 'tracker' or 'log'
 let _resTimeRange='3m'; // Resource view time range: '1m', '3m', '6m', 'full'
 let _editingCrewId=null; // Currently editing crew ID
 
+// ── HTML escaping (security) ──
+// Shared helper for any uploaded/user-entered string (HeavyBid xlsx
+// description fields, notes, names, etc.) interpolated into a template
+// literal that gets assigned to .innerHTML. Escapes &<>"' so the string
+// can never break out of its surrounding tag/attribute context.
+// `esc()` (defined later in this file) is kept as an alias for existing
+// call sites — both point at the same implementation, do not fork them.
+function escapeHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+
 // ── Generic table sort system ──
 const _tblSort={};
 function sortHdr(tid,col,label,renderFn,extra){
@@ -2645,8 +2654,8 @@ function renderEditLog(){
     const d=new Date(e.timestamp);
     const ts=d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
     h+=`<div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:12px;">`;
-    h+=`<span style="min-width:120px;font-weight:500;">${e.user}</span>`;
-    h+=`<span style="flex:1;">${e.action}</span>`;
+    h+=`<span style="min-width:120px;font-weight:500;">${esc(e.user)}</span>`;
+    h+=`<span style="flex:1;">${esc(e.action)}</span>`;
     h+=`<span style="min-width:100px;text-align:right;color:var(--text-light);font-size:12px;">${ts}</span>`;
     h+=`</div>`;
   });
@@ -3396,8 +3405,17 @@ async function loadJobs(){
 // for on-demand sync / BU discovery. Does NOT hold the service_role key —
 // instead it calls the deployed function using the anon key, which works
 // because we deploy with --no-verify-jwt so pg_cron can dispatch.
-// If you later want to lock the function down, swap this for a signed user JWT.
 const HCSS_FN_URL = SUPABASE_URL.replace('.supabase.co','.functions.supabase.co') + '/hcss-sync-actuals';
+// Shared-secret token the Edge Function checks (see hcss-sync-actuals/index.ts
+// isAuthorizedSyncRequest). Must match the HCSS_SYNC_TOKEN Edge Function
+// secret AND the app.hcss_sync_secret DB setting the cron job sends — see
+// supabase/migrations/20260409_hcss_sync.sql. SECURITY NOTE: like SUPABASE_ANON
+// below, this lives in a publicly-served static file, so it is not truly
+// confidential — it stops casual/automated discovery of this function's URL
+// from triggering syncs, it does not stop someone who reads this file's
+// source. REPLACE_BEFORE_DEPLOY: set this to the real shared secret (not
+// this placeholder) before shipping this fix.
+const HCSS_SYNC_TOKEN = 'REPLACE_WITH_REAL_SHARED_SECRET';
 
 // Format an ISO timestamp as a short "2h ago" / "3d ago" relative string.
 function _syncRelTime(iso){
@@ -3486,7 +3504,7 @@ function startSyncStatusAutoRefresh(){
 async function hcssCallFn(body){
   const res=await fetch(HCSS_FN_URL,{
     method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPABASE_ANON},
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+HCSS_SYNC_TOKEN},
     body:JSON.stringify(body||{trigger:'manual'}),
   });
   const j=await res.json().catch(()=>({ok:false,error:'Non-JSON response'}));
@@ -3569,7 +3587,7 @@ async function hcssSyncDiscover(){
     // Show full diagnostic info for debugging HCSS auth issues
     let msg='Discovery failed: '+e.message;
     try{
-      const res=await fetch(HCSS_FN_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+SUPABASE_ANON},body:JSON.stringify({discover:true})});
+      const res=await fetch(HCSS_FN_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+HCSS_SYNC_TOKEN},body:JSON.stringify({discover:true})});
       const diag=await res.json().catch(()=>null);
       if(diag&&(diag.requestedScopes||diag.grantedScope)){
         msg+='\n\nRequested scopes: '+(diag.requestedScopes||'?');
@@ -4691,9 +4709,9 @@ async function renderJobCost(){
       const typeCount = g.types.length;
       html += `<tr class="jc-phase-row" style="cursor:pointer;background:#FAF7F2;font-weight:600;" onclick="jcToggleExpand('${esc(g.phaseCode)}')">
         <td style="text-align:center;color:var(--text-light);font-size:11px;">${chev}</td>
-        <td style="font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;">${g.phaseCode}</td>
+        <td style="font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;">${esc(g.phaseCode)}</td>
         <td style="color:var(--text-light);font-weight:400;font-size:11px;">${typeCount} type${typeCount===1?'':'s'}</td>
-        <td>${g.description||''}</td>
+        <td>${esc(g.description||'')}</td>
         <td class="num" title="${esc(g.blendTooltip)}">${fmtD(g.blendedActual)}</td>
         <td class="num">${fmtD(g.projected)}</td>
         <td class="num">${fmtD(g.estimate)}</td>
@@ -4709,8 +4727,8 @@ async function renderJobCost(){
           html += `<tr class="jc-type-row" style="background:white;">
             <td></td>
             <td style="padding-left:20px;color:var(--text-light);font-size:11px;">↳</td>
-            <td><span style="display:inline-block;min-width:22px;padding:1px 6px;border-radius:3px;background:var(--ash);font-family:Oswald,sans-serif;font-size:11px;text-align:center;" title="${_typeLabel[r.costType]||r.costType||''}">${r.costType||'—'}</span></td>
-            <td style="color:var(--text-light);font-size:12px;">${_typeLabel[r.costType]||r.description||''}</td>
+            <td><span style="display:inline-block;min-width:22px;padding:1px 6px;border-radius:3px;background:var(--ash);font-family:Oswald,sans-serif;font-size:11px;text-align:center;" title="${esc(_typeLabel[r.costType]||r.costType||'')}">${esc(r.costType||'—')}</span></td>
+            <td style="color:var(--text-light);font-size:12px;">${esc(_typeLabel[r.costType]||r.description||'')}</td>
             <td class="num">${fmtD(r.jtd)}</td>
             <td class="num">${fmtD(r.projected)}</td>
             <td class="num">${fmtD(r.estimate)}</td>
@@ -4729,9 +4747,9 @@ async function renderJobCost(){
       const fvPct = r.estimate > 0 ? (fv / r.estimate * 100) : 0;
       html += `<tr>
         <td></td>
-        <td style="font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;">${r.phaseCode}</td>
-        <td>${r.costType}</td>
-        <td>${r.description}</td>
+        <td style="font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;">${esc(r.phaseCode)}</td>
+        <td>${esc(r.costType)}</td>
+        <td>${esc(r.description)}</td>
         <td class="num">${fmtD(r.jtd)}</td>
         <td class="num">${fmtD(r.projected)}</td>
         <td class="num">${fmtD(r.estimate)}</td>
@@ -4889,7 +4907,7 @@ function switchJob(){
     }
   }
 }
-function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${id}">${Store.jobs[id].meta.name} #${Store.jobs[id].meta.number}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
+function refreshJobSelectors(){const opts=Object.keys(Store.jobs).map(id=>`<option value="${esc(id)}">${esc(Store.jobs[id].meta.name)} #${esc(Store.jobs[id].meta.number)}</option>`).join('');const base='<option value="">— Select a job —</option>'+opts;document.getElementById('jobSelect').innerHTML=base;document.getElementById('jobSelect').value=Store.activeJob||''}
 function updateImportPanel(){if(!Store.activeJob)return;updateImportZones();renderEditLog();renderHcssCostCodeBanner()}
 function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)return;['activities','biditems','schedule','actuals','actualsDetail'].forEach(type=>{const data=type==='biditems'?job.bidItems:job[type];const zone=document.getElementById('zone-'+type),st=document.getElementById('status-'+type);if(!zone||!st)return;if(data&&data.length){zone.classList.add('loaded');const extra=(type==='activities'&&job.bidItems.length)?' ('+job.bidItems.length+' pay items built)':'';if(type==='biditems'){st.className='status loaded';st.textContent=data.length+' bid items loaded (OH+P included)'}else if(type==='actuals'){st.className='status loaded';st.textContent=data.length+' actuals loaded'}else if(type==='actualsDetail'){st.className='status loaded';const freshness=job.meta.lastActualsImport?' — updated '+new Date(job.meta.lastActualsImport).toLocaleDateString():'';st.textContent=data.length+' daily rows'+freshness}else{st.className='status loaded';st.textContent=data.length+' records loaded'+extra}}else{zone.classList.remove('loaded');st.className='status pending';st.textContent='Drop .xlsx or click'}});
   const mapBtn=document.getElementById('mapScheduleBtn');
@@ -4904,7 +4922,7 @@ function updateImportZones(){const job=Store.jobs[Store.activeJob];if(!job)retur
   if(cfArea){if(job.activities.length&&job.schedule.length){cfArea.style.display='block';renderCashFlowConfig()}else{cfArea.style.display='none'}}
   updateNavBadges()}
 function updateNavBadges(){/* badges removed from sub-tabs for cleaner look */}
-function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${msg}</div>`;el.scrollTop=el.scrollHeight}
+function log(msg){const el=document.getElementById('importLog');el.innerHTML+=`<div><strong>${new Date().toLocaleTimeString()}</strong> — ${escapeHtml(msg)}</div>`;el.scrollTop=el.scrollHeight}
 
 // ═══════════════════════════════════════════
 // IMPORT → STAGING
@@ -5467,18 +5485,18 @@ function renderStaging(){
   h+='<div class="card"><div class="table-wrap"><table>';
   if(type==='activities'){
     h+='<tr><th></th><th>Code</th><th>Phase Code</th><th>Bid Item</th><th>Description</th><th>Crew</th><th class="num">Qty</th><th>Units</th><th class="num">Man Hrs</th><th class="num">Direct Total</th><th></th></tr>';
-    data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.phaseCode||'—'}</td><td>${a.biditem}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.directTotal)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+    data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${esc(a.code)}</td><td>${esc(a.phaseCode||'—')}</td><td>${esc(a.biditem)}</td><td>${esc(a.description)}</td><td>${esc(a.crew||'—')}</td><td class="num">${fmt(a.quantity)}</td><td>${esc(a.units)}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.directTotal)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
   }else if(type==='biditems'){
     h+='<tr><th></th><th>#</th><th>Description</th><th>Units</th><th class="num">Bid Qty</th><th class="num">Unit Price</th><th class="num">Direct</th><th class="num">Overhead</th><th class="num">Profit</th><th class="num">Contract</th><th></th></tr>';
-    data.forEach((b,i)=>{if(!b._selected)return;const oh=(b.indirects||0)+(b.addonBond||0);h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${b.biditem}</td><td>${b.description}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(b.takeoffTotal)}</strong></td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+    data.forEach((b,i)=>{if(!b._selected)return;const oh=(b.indirects||0)+(b.addonBond||0);h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${esc(b.biditem)}</td><td>${esc(b.description)}</td><td>${esc(b.units)}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num">${fmtD(oh)}</td><td class="num">${fmtD(b.markup)}</td><td class="num"><strong>${fmtD(b.takeoffTotal)}</strong></td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
   }else if(type==='actuals'){
     const hasBreakdown=data.some(a=>a.budgetLabor||a.actualLabor);
     if(hasBreakdown){
       h+='<tr><th></th><th>Code</th><th>Description</th><th class="num">Budget</th><th class="num">Actual</th><th class="num">Variance</th><th class="num">Qty</th><th class="num">% Comp</th><th class="num">Act Labor</th><th class="num">Act Equip</th><th class="num">Act Mat</th><th class="num">Act Sub</th><th></th></tr>';
-      data.forEach((a,i)=>{if(!a._selected)return;const variance=a.budgetCost-a.actualCost;const vCls=variance<0?'color:var(--red)':'color:var(--green)';h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num" style="${vCls}">${fmtD(variance)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td class="num">${fmtD(a.actualLabor)}</td><td class="num">${fmtD(a.actualEquip)}</td><td class="num">${fmtD(a.actualMat)}</td><td class="num">${fmtD(a.actualSub)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+      data.forEach((a,i)=>{if(!a._selected)return;const variance=a.budgetCost-a.actualCost;const vCls=variance<0?'color:var(--red)':'color:var(--green)';h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${esc(a.code)}</td><td>${esc(a.description)}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num" style="${vCls}">${fmtD(variance)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td class="num">${fmtD(a.actualLabor)}</td><td class="num">${fmtD(a.actualEquip)}</td><td class="num">${fmtD(a.actualMat)}</td><td class="num">${fmtD(a.actualSub)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
     } else {
       h+='<tr><th></th><th>Code</th><th>Description</th><th class="num">Budget Cost</th><th class="num">Actual Cost</th><th class="num">Qty Inst</th><th class="num">% Complete</th><th></th></tr>';
-      data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${a.code}</td><td>${a.description}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+      data.forEach((a,i)=>{if(!a._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${esc(a.code)}</td><td>${esc(a.description)}</td><td class="num">${fmtD(a.budgetCost)}</td><td class="num">${fmtD(a.actualCost)}</td><td class="num">${fmt(a.qtyInstalled)}</td><td class="num">${fmtPct(a.pctComplete/100)}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
     }
   }else if(type==='actualsDetail'){
     // Group by target job for multi-job auto-detect
@@ -5512,11 +5530,11 @@ function renderStaging(){
     h+='<tr><th></th><th>Date</th><th>Cost Code</th><th>Description</th><th>Unit</th><th class="num">Qty</th><th class="num">Lab Hrs</th><th class="num">Labor $</th><th class="num">Equip $</th><th class="num">Mat $</th><th class="num">Sub $</th><th class="num">Total</th><th>Crew Leader</th></tr>';
     // Only show first 200 rows in staging for perf
     const showMax=200;
-    data.slice(0,showMax).forEach((d,i)=>{if(!d._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td style="font-size:11px;">${d.date}</td><td><strong>${d.costCode}</strong></td><td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${d.costCodeDesc}</td><td>${d.unit}</td><td class="num">${fmt(d.actualQty)}</td><td class="num">${d.actualLaborHours.toFixed(1)}</td><td class="num">${fmtD(d.actualLaborCost)}</td><td class="num">${fmtD(d.actualEquipCost)}</td><td class="num">${fmtD(d.actualMatCost)}</td><td class="num">${fmtD(d.actualSubCost)}</td><td class="num"><strong>${fmtD(d.actualAllCost)}</strong></td><td style="font-size:10px;color:var(--text-light);">${d.foreman||'—'}</td></tr>`});
+    data.slice(0,showMax).forEach((d,i)=>{if(!d._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td style="font-size:11px;">${esc(d.date)}</td><td><strong>${esc(d.costCode)}</strong></td><td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${esc(d.costCodeDesc)}</td><td>${esc(d.unit)}</td><td class="num">${fmt(d.actualQty)}</td><td class="num">${d.actualLaborHours.toFixed(1)}</td><td class="num">${fmtD(d.actualLaborCost)}</td><td class="num">${fmtD(d.actualEquipCost)}</td><td class="num">${fmtD(d.actualMatCost)}</td><td class="num">${fmtD(d.actualSubCost)}</td><td class="num"><strong>${fmtD(d.actualAllCost)}</strong></td><td style="font-size:10px;color:var(--text-light);">${esc(d.foreman||'—')}</td></tr>`});
     if(data.length>showMax)h+=`<tr><td colspan="13" style="text-align:center;padding:12px;color:var(--text-light);font-style:italic;">... and ${(data.length-showMax).toLocaleString()} more rows (all will be imported)</td></tr>`;
   }else{
     h+='<tr><th></th><th>#</th><th>Task</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th><th>Crew</th><th></th></tr>';
-    data.forEach((t,i)=>{if(!t._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${t.id}</td><td>${t.name}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${t.durationStr}</td><td>${t.status||'—'}</td><td>${t.crew||'—'}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
+    data.forEach((t,i)=>{if(!t._selected)return;h+=`<tr><td><input type="checkbox" checked onchange="toggleStagingRow(${i},this.checked)"></td><td>${esc(t.id)}</td><td>${esc(t.name)}</td><td>${fmtDate(t.start)}</td><td>${fmtDate(t.finish)}</td><td>${esc(t.durationStr)}</td><td>${esc(t.status||'—')}</td><td>${esc(t.crew||'—')}</td><td><button class="edit-btn" onclick="editStagingRow(${i})">Edit</button> <button class="del-btn" onclick="delStagingRow(${i})">Del</button></td></tr>`});
   }
   const sel=data.filter(d=>d._selected).length;
   h+=`</table></div><div style="font-size:12px;color:var(--text-light);margin-top:8px;">${sel} of ${data.length} selected</div></div>`;
@@ -6251,13 +6269,13 @@ function renderMapping(){
       const sovItem=(job.sovItems||[]).find(si=>String(si.id)===String(b.biditem));
       const pcCount=sovItem&&sovItem.phaseCodes?sovItem.phaseCodes.length:0;
       h+=`<tr style="background:#FFF8F0;">`;
-      h+=`<td><strong>${b.biditem}</strong></td>`;
-      h+=`<td>${b.description||'—'}</td>`;
+      h+=`<td><strong>${esc(b.biditem)}</strong></td>`;
+      h+=`<td>${esc(b.description||'—')}</td>`;
       h+=`<td>${pcCount} phase${pcCount!==1?'s':''}</td>`;
       h+=`<td>${actCount} activit${actCount!==1?'ies':'y'}</td>`;
       h+=`<td><strong>${calcDays}d</strong></td>`;
       h+=`<td>${fmtD(actCost)}</td>`;
-      h+=`<td><button class="btn-primary btn-sm" style="background:var(--orange);white-space:nowrap;" onclick="showAddTaskForBid('${b.biditem}','${(b.description||'').replace(/'/g,"\\'")}')">+ Add Task</button></td>`;
+      h+=`<td><button class="btn-primary btn-sm" style="background:var(--orange);white-space:nowrap;" onclick="showAddTaskForBid('${esc(escJS(b.biditem))}','${esc(escJS(b.description||''))}')">+ Add Task</button></td>`;
       h+='</tr>';
     });
     h+='</table></div>';
@@ -7867,10 +7885,10 @@ function renderNotifPanel(){
       h += `<div style="padding:10px 14px;background:#FAF7F2;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">${horizon}-DAY HORIZON · ${list.length} task${list.length>1?'s':''}</div>`;
       for(const alert of list.slice(0, 8)){
         const subBadge = alert.isSubTask ? `<span style="font-size:10px;background:#8E44AD;color:white;border-radius:3px;padding:1px 5px;margin-left:6px;">SUB</span>` : '';
-        h += `<div style="padding:10px 14px;border-bottom:1px solid #f0eee9;cursor:pointer;" onclick="Store.activeJob='${alert.jobCode}';refreshJobSelectors();switchToSubTab('schedule');toggleNotifPanel(false);">`;
+        h += `<div style="padding:10px 14px;border-bottom:1px solid #f0eee9;cursor:pointer;" onclick="Store.activeJob='${esc(escJS(alert.jobCode))}';refreshJobSelectors();switchToSubTab('schedule');toggleNotifPanel(false);">`;
         h += `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">`;
-        h += `<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:var(--text);">${alert.taskName}${subBadge}</div>`;
-        h += `<div style="font-size:11px;color:var(--text-light);margin-top:2px;">Job ${alert.jobCode} · ${alert.jobName}</div></div>`;
+        h += `<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:var(--text);">${esc(alert.taskName)}${subBadge}</div>`;
+        h += `<div style="font-size:11px;color:var(--text-light);margin-top:2px;">Job ${esc(alert.jobCode)} · ${esc(alert.jobName)}</div></div>`;
         h += `<div style="text-align:right;font-size:11px;"><div style="color:var(--orange);font-weight:600;">${alert.daysOut}d</div><div style="color:var(--text-light);">${alert.start}</div></div>`;
         h += `</div></div>`;
       }
@@ -8637,7 +8655,7 @@ function renderDashboard(){
   h+=sortHdr('ddisc','profit','Profit','renderDashboard');
   h+=sortHdr('ddisc','contract','Contract','renderDashboard');
   h+='</tr>';
-  _dlSorted.forEach(d=>{h+=`<tr><td><span class="disc-dot" style="background:${d.color}"></span>${d.name}</td><td class="num">${d.count}</td><td class="num">${fmtD(d.direct)}</td><td class="num">${fmtD(d.overhead)}</td><td class="num">${fmtD(d.profit)}</td><td class="num">${fmtD(d.contract)}</td></tr>`});
+  _dlSorted.forEach(d=>{h+=`<tr><td><span class="disc-dot" style="background:${d.color}"></span>${esc(d.name)}</td><td class="num">${d.count}</td><td class="num">${fmtD(d.direct)}</td><td class="num">${fmtD(d.overhead)}</td><td class="num">${fmtD(d.profit)}</td><td class="num">${fmtD(d.contract)}</td></tr>`});
   h+='</table></div></div>';
 
   // Pay Items (SOV) table — or fall back to raw bid items if SOV not built
@@ -8662,7 +8680,7 @@ function renderDashboard(){
     _sovSorted.forEach(({si,c,margin})=>{
       const mCls=margin<5?'negative':margin<10?'':'positive';
       tSV+=c.sv;tDC2+=c.dc;tOHP+=c.oh+c.profit;
-      h+=`<tr><td>${si.clientItemNo||si.id}</td><td>${esc(si.description)}</td><td>${si.unit}</td><td class="num">${fmt(si.contractQty)}</td><td class="num">${fmtD2(c.unitPrice)}</td><td class="num"><strong>${fmtD(c.sv)}</strong></td><td class="num">${fmtD(c.dc)}</td><td class="num">${fmtD(c.oh+c.profit)}</td><td class="num ${mCls}">${fmtPct(margin)}</td></tr>`;
+      h+=`<tr><td>${esc(si.clientItemNo||si.id)}</td><td>${esc(si.description)}</td><td>${esc(si.unit)}</td><td class="num">${fmt(si.contractQty)}</td><td class="num">${fmtD2(c.unitPrice)}</td><td class="num"><strong>${fmtD(c.sv)}</strong></td><td class="num">${fmtD(c.dc)}</td><td class="num">${fmtD(c.oh+c.profit)}</td><td class="num ${mCls}">${fmtPct(margin)}</td></tr>`;
     });
     const tMargin=tSV>0?((tSV-tDC2)/tSV*100):0;
     h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="5">TOTALS</td><td class="num">${fmtD(tSV)}</td><td class="num">${fmtD(tDC2)}</td><td class="num">${fmtD(tOHP)}</td><td class="num">${fmtPct(tMargin)}</td></tr>`;
@@ -8685,7 +8703,7 @@ function renderDashboard(){
       const bContract=b.takeoffTotal||0;
       const pPct=bContract>0?((b.markup||0)/bContract*100):0;
       const pClass=pPct<3?'negative':pPct<8?'':'positive';
-      h+=`<tr><td>${b.biditem}</td><td>${b.description}</td><td><span class="disc-dot" style="background:${b.discipline.color}"></span>${b.discipline.name}</td><td>${b.units}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num"><strong>${fmtD(bContract)}</strong></td><td class="num ${pClass}">${fmtPct(pPct)}</td></tr>`;
+      h+=`<tr><td>${esc(b.biditem)}</td><td>${esc(b.description)}</td><td><span class="disc-dot" style="background:${b.discipline.color}"></span>${esc(b.discipline.name)}</td><td>${esc(b.units)}</td><td class="num">${fmt(b.bidQuantity)}</td><td class="num">${fmtD2(b.unitPrice)}</td><td class="num">${fmtD(b.directTotal)}</td><td class="num"><strong>${fmtD(bContract)}</strong></td><td class="num ${pClass}">${fmtPct(pPct)}</td></tr>`;
     });
     h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">TOTALS</td><td class="num">${fmtD(totalDirect)}</td><td class="num">${fmtD(contract)}</td><td class="num">${fmtPct(profitPct)}</td></tr>`;
     h+='</table></div></div>';
@@ -8900,7 +8918,7 @@ function renderGantt(tasks,meta,baselineSchedule){
       if(drift>2) varInd=`<span style="font-size:9px;color:var(--red);font-weight:600;margin-left:4px;">+${drift}d</span>`;
       else if(drift<-2) varInd=`<span style="font-size:9px;color:var(--teal);font-weight:600;margin-left:4px;">${drift}d</span>`;
     }
-    h+=`<div style="display:flex;align-items:center;margin-bottom:2px;"><div style="width:220px;min-width:220px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${t.name}">${t.name}${varInd}</div><div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;">${blBar}<div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${sc};border-radius:2px;opacity:.8;" title="${t.name}: ${fmtDate(t.start)} — ${fmtDate(t.finish)}"></div></div><div style="width:50px;min-width:50px;text-align:right;font-size:11px;color:var(--text-light);padding-left:6px;">${t.durationStr}</div></div>`;
+    h+=`<div style="display:flex;align-items:center;margin-bottom:2px;"><div style="width:220px;min-width:220px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;" title="${esc(t.name)}">${esc(t.name)}${varInd}</div><div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;">${blBar}<div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${sc};border-radius:2px;opacity:.8;" title="${esc(t.name)}: ${fmtDate(t.start)} — ${fmtDate(t.finish)}"></div></div><div style="width:50px;min-width:50px;text-align:right;font-size:11px;color:var(--text-light);padding-left:6px;">${esc(t.durationStr)}</div></div>`;
   });
   h+='</div></div></div>';return h;
 }
@@ -9025,7 +9043,7 @@ function renderOldResourceView(){
         const color=JOB_COLORS[jobIdx%JOB_COLORS.length];
         const l=Math.max(0,(s-minDate)/86400000)/timelineDays*100;
         const w=Math.max(((e-s)/86400000)/timelineDays*100,.5);
-        h+=`<div class="crew-timeline-bar" style="left:${l}%;width:${w}%;background:${color};border:1px solid ${color};opacity:.85;" title="${a.jobName}: ${a.headcount} HC · ${fmtDate(s)} to ${fmtDate(e)}"></div>`;
+        h+=`<div class="crew-timeline-bar" style="left:${l}%;width:${w}%;background:${color};border:1px solid ${color};opacity:.85;" title="${esc(a.jobName)}: ${a.headcount} HC · ${fmtDate(s)} to ${fmtDate(e)}"></div>`;
       });
 
       // Today line
@@ -9107,7 +9125,7 @@ function renderGlobalView(){
   let h='<div class="card"><div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">All Jobs — Timeline';
   h+=`<div style="display:flex;gap:4px;"><button class="btn-sm" style="font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:${!_byDisc?'var(--olive)':'var(--bg)'};color:${!_byDisc?'var(--white)':'var(--text)'};cursor:pointer;" onclick="_globalSchedByDisc=false;renderGlobalView();">By Job</button><button class="btn-sm" style="font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:${_byDisc?'var(--olive)':'var(--bg)'};color:${_byDisc?'var(--white)':'var(--text)'};cursor:pointer;" onclick="_globalSchedByDisc=true;renderGlobalView();">By Discipline</button></div>`;
   h+='</div>';
-  h+='<div class="legend">';Object.values(DISCIPLINES).forEach(d=>{if(d.name!=='General'||!h.includes(d.name))h+=`<div class="legend-item"><div class="legend-swatch" style="background:${d.color}"></div>${d.name}</div>`});h+='</div>';
+  h+='<div class="legend">';Object.values(DISCIPLINES).forEach(d=>{if(d.name!=='General'||!h.includes(d.name))h+=`<div class="legend-item"><div class="legend-swatch" style="background:${d.color}"></div>${esc(d.name)}</div>`});h+='</div>';
 
   let months='';const c=new Date(allMin);c.setDate(1);
   while(c<=allMax){const ms=Math.max(0,(c-allMin)/86400000);const nm=new Date(c);nm.setMonth(nm.getMonth()+1);const me=Math.min(td,(nm-allMin)/86400000);months+=`<div style="width:${(me-ms)/td*100}%;text-align:center;border-right:1px solid var(--border);padding:2px 0;font-family:Oswald;font-size:11px;color:var(--text-light);">${c.toLocaleDateString('en-US',{month:'short',year:'2-digit'})}</div>`;c.setMonth(c.getMonth()+1)}
@@ -9156,8 +9174,8 @@ function renderGlobalView(){
     ids.forEach(id=>{
       const j=Store.jobs[id],m=j.meta;
       const bars=_allJobDiscData[id].bars;const ct=_allJobDiscData[id].ct;
-      h+=`<div style="display:flex;align-items:flex-start;margin-bottom:2px;border-top:1px solid var(--border);padding-top:6px;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${id}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;">${m.name} #${m.number}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(ct)}</div></div><div style="flex:1;">`;
-      bars.forEach(bar=>{const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);h+=`<div style="display:flex;align-items:center;margin-bottom:1px;"><div style="flex:1;position:relative;height:14px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${bar.name}: ${fmtD(bar.cost)} (${bar.tasks.length} tasks)"></div></div><div style="width:80px;min-width:80px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${bar.name}</div></div>`});
+      h+=`<div style="display:flex;align-items:flex-start;margin-bottom:2px;border-top:1px solid var(--border);padding-top:6px;cursor:pointer;transition:background .2s;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${esc(escJS(id))}';refreshJobSelectors();switchToSubTab('overview');" title="Click to view job"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;">${esc(m.name)} #${esc(m.number)}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(ct)}</div></div><div style="flex:1;">`;
+      bars.forEach(bar=>{const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);h+=`<div style="display:flex;align-items:center;margin-bottom:1px;"><div style="flex:1;position:relative;height:14px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${esc(bar.name)}: ${fmtD(bar.cost)} (${bar.tasks.length} tasks)"></div></div><div style="width:80px;min-width:80px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${esc(bar.name)}</div></div>`});
       h+='</div></div>';
     });
   } else {
@@ -9169,12 +9187,12 @@ function renderGlobalView(){
       const totalCost=jobBars.reduce((s,jb)=>s+jb[1].cost,0);
       const totalTasks=jobBars.reduce((s,jb)=>s+jb[1].tasks.length,0);
       h+=`<div style="border-top:1px solid var(--border);padding-top:6px;margin-bottom:4px;">`;
-      h+=`<div style="display:flex;align-items:center;margin-bottom:4px;"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;"><div style="width:10px;height:10px;border-radius:2px;background:${disc.color};"></div>${disc.name}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(totalCost)} · ${totalTasks} tasks</div></div></div>`;
+      h+=`<div style="display:flex;align-items:center;margin-bottom:4px;"><div style="width:200px;min-width:200px;padding-right:8px;"><div style="font-family:Oswald;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;"><div style="width:10px;height:10px;border-radius:2px;background:${disc.color};"></div>${esc(disc.name)}</div><div style="font-size:11px;color:var(--text-light);">${fmtD(totalCost)} · ${totalTasks} tasks</div></div></div>`;
       jobBars.forEach(([jid,jb])=>{
         const l=Math.max(0,(jb.start-allMin)/86400000)/td*100;const w=Math.max(((jb.end-jb.start)/86400000)/td*100,.5);
-        h+=`<div style="display:flex;align-items:center;margin-bottom:1px;cursor:pointer;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${jid}';refreshJobSelectors();switchToSubTab('overview');">`;
-        h+=`<div style="flex:1;position:relative;height:14px;margin-left:200px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${disc.color};border-radius:2px;opacity:.85;" title="${jb.jobName}: ${fmtD(jb.cost)} (${jb.tasks.length} tasks)"></div></div>`;
-        h+=`<div style="width:140px;min-width:140px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${jb.jobName}</div></div>`;
+        h+=`<div style="display:flex;align-items:center;margin-bottom:1px;cursor:pointer;" onmouseover="this.style.background='#F9F7F4'" onmouseout="this.style.background=''" onclick="Store.activeJob='${esc(escJS(jid))}';refreshJobSelectors();switchToSubTab('overview');">`;
+        h+=`<div style="flex:1;position:relative;height:14px;margin-left:200px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${disc.color};border-radius:2px;opacity:.85;" title="${esc(jb.jobName)}: ${fmtD(jb.cost)} (${jb.tasks.length} tasks)"></div></div>`;
+        h+=`<div style="width:140px;min-width:140px;font-size:10px;color:var(--text-light);padding-left:6px;text-align:right;">${esc(jb.jobName)}</div></div>`;
       });
       h+=`</div>`;
     });
@@ -9204,7 +9222,7 @@ function renderGlobalView(){
   _gSorted.forEach(r=>{
     const ppC=r.pp<5?'negative':r.pp<10?'':'positive';
     _gTotDC+=r.dc;_gTotOH+=r.oh;_gTotPR+=r.pr;_gTotCT+=r.ct;_gTotActCost+=r.jActCost;_gTotBudCost+=r.jBudCost;
-    h+=`<tr><td><strong>${r.m.name} #${r.m.number}</strong></td><td>${r.m.client||'—'}</td><td>${r.m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(r.dc)}</td><td class="num">${fmtD(r.oh)}</td><td class="num">${fmtD(r.pr)}</td><td class="num"><strong>${fmtD(r.ct)}</strong></td><td class="num ${ppC}">${fmtPct(r.pp)}</td>`;
+    h+=`<tr><td><strong>${esc(r.m.name)} #${esc(r.m.number)}</strong></td><td>${esc(r.m.client||'—')}</td><td>${r.m.billingType==='unit-price'?'Unit Price':'% Complete'}</td><td class="num">${fmtD(r.dc)}</td><td class="num">${fmtD(r.oh)}</td><td class="num">${fmtD(r.pr)}</td><td class="num"><strong>${fmtD(r.ct)}</strong></td><td class="num ${ppC}">${fmtPct(r.pp)}</td>`;
     if(_gHasActuals){
       h+=`<td class="num">${r.hasJA?fmtD(r.jActCost):'—'}</td>`;
       h+=`<td class="num" style="color:${r.jVar>=0?'var(--green)':'var(--red)'}">${r.hasJA?fmtD(r.jVar):'—'}</td>`;
@@ -9290,7 +9308,7 @@ function renderGlobalView(){
             if(!_planJobColors[assign.jobCode]){_planJobColors[assign.jobCode]=_PLAN_PALETTE[_planColorIdx%_PLAN_PALETTE.length];_planColorIdx++}
             const color=_planJobColors[assign.jobCode];
             const jobLabel=getJobNumber(assign.jobCode);
-            h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;font-size:11px;${assign.multi?'border:2px solid var(--orange);':''}" title="${assign.jobName}${assign.multi?' + others':''}">${jobLabel}${assign.multi?'+':''}</td>`;
+            h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;font-size:11px;${assign.multi?'border:2px solid var(--orange);':''}" title="${esc(assign.jobName)}${assign.multi?' + others':''}">${esc(jobLabel)}${assign.multi?'+':''}</td>`;
           }else{
             h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);font-size:11px;">—</td>`;
           }
@@ -9571,7 +9589,7 @@ function renderGlobalCashFlow(jobIds){
   jobFlows.forEach((jf,ji)=>{
     if(jlx>svgW-100)return;
     h+=`<line x1="${jlx}" y1="${legY}" x2="${jlx+18}" y2="${legY}" stroke="${jobColors[ji%jobColors.length]}" stroke-width="1.5" stroke-dasharray="6,4"/>`;
-    h+=`<text x="${jlx+24}" y="${legY+4}" font-size="10" fill="var(--text-light)" font-family="Oswald">${jf.name||'#'+jf.number}</text>`;
+    h+=`<text x="${jlx+24}" y="${legY+4}" font-size="10" fill="var(--text-light)" font-family="Oswald">${esc(jf.name||'#'+jf.number)}</text>`;
     jlx+=Math.max((jf.name||'#'+jf.number).length*7+36,80);
   });
   h+=`</svg></div>`;
@@ -9590,7 +9608,7 @@ function renderGlobalCashFlow(jobIds){
         const jc=jobCostByMonth[jf.id][i]||0;
         if(jc<=0)return;
         const segH=Math.max(jc/maxMoCost*barChartH,2);
-        h+=`<div style="height:${segH}px;background:${jobColors[ji%jobColors.length]};border-radius:${ji===0?'3px 3px ':''}0 0;opacity:.85;" title="${jf.name} #${jf.number}: ${fmtD(jc)}"></div>`;
+        h+=`<div style="height:${segH}px;background:${jobColors[ji%jobColors.length]};border-radius:${ji===0?'3px 3px ':''}0 0;opacity:.85;" title="${esc(jf.name)} #${esc(jf.number)}: ${fmtD(jc)}"></div>`;
       });
       // Total label on top of bar
       if(tot>maxMoCost*0.05){
@@ -9610,7 +9628,7 @@ function renderGlobalCashFlow(jobIds){
   if(jobFlows.length>1){
     h+='<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px;">';
     jobFlows.forEach((jf,ji)=>{
-      h+=`<div style="display:flex;align-items:center;gap:5px;font-size:12px;font-family:Oswald;color:var(--text-light);"><div style="width:12px;height:12px;border-radius:2px;background:${jobColors[ji%jobColors.length]};opacity:.85;"></div>${jf.name} #${jf.number}</div>`;
+      h+=`<div style="display:flex;align-items:center;gap:5px;font-size:12px;font-family:Oswald;color:var(--text-light);"><div style="width:12px;height:12px;border-radius:2px;background:${jobColors[ji%jobColors.length]};opacity:.85;"></div>${esc(jf.name)} #${esc(jf.number)}</div>`;
     });
     h+='</div>';
   }
@@ -9827,7 +9845,7 @@ function renderBidItems(){
         const isLocked=!!job.sovItems[it.idx]._lockedProfit;
         h+=`<div class="fl-row${isLocked?' fl-locked':''}">`;
         h+=`<button class="fl-lock${isLocked?' locked':''}" onclick="toggleProfitLock(${it.idx})" title="${isLocked?'Unlock — allow redistribution':'Lock — freeze billing value'}">&#x1f512;</button>`;
-        h+=`<span style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(it.description)}">${it.clientItemNo||it.id} — ${it.description||''}</span>`;
+        h+=`<span style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(it.description)}">${esc(it.clientItemNo||it.id)} — ${esc(it.description||'')}</span>`;
         h+=`<input type="range" class="fl-slider" min="0" max="${Math.round(maxVal)}" step="100" value="${Math.round(c.sv)}" oninput="handleFrontLoadSlider(${it.idx},parseFloat(this.value))"${isLocked?' disabled':''}>`;
         h+=`<input type="number" class="fl-override" value="${Math.round(c.sv)}" step="100" onchange="handleFrontLoadOverride(${it.idx},parseFloat(this.value))" title="Enter exact billing value"${isLocked?' disabled':''}>`;
         h+=`<span style="text-align:right;font-family:Oswald;font-size:13px;${c.profit<0?'color:var(--red);':''}">${fmtD(c.profit)}</span>`;
@@ -9931,7 +9949,7 @@ function renderBidItems(){
 
     h+=`<tr style="${isOpen?'background:#EBF5FB;':''}">`;
     h+=`<td>${it.idx+1}</td>`;
-    h+=`<td>${it.clientItemNo||it.id}</td>`;
+    h+=`<td>${esc(it.clientItemNo||it.id)}</td>`;
     const _isCO=it._changeOrder||(job.bidItems||[]).some(b=>b.biditem===it.id&&b._changeOrder);
     h+=`<td><strong>${flag}${_isCO?'<span class="co-badge" style="margin-right:6px;">CO</span>':''}${esc(it.description)}</strong></td>`;
     h+=`<td>${it.unit}</td>`;
@@ -9979,13 +9997,13 @@ function renderBidItems(){
             const pgSubs=pg.acts.reduce((s,a)=>s+(a.subs||0),0);
             h+=`<div style="margin-bottom:10px;">`;
             h+=`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#E3EFF9;border-radius:4px;font-family:Oswald;font-size:12px;letter-spacing:.5px;">`;
-            h+=`<span style="color:var(--green);font-weight:700;">${pg.code}</span>`;
-            h+=`<span>${pg.desc}</span>`;
+            h+=`<span style="color:var(--green);font-weight:700;">${esc(pg.code)}</span>`;
+            h+=`<span>${esc(pg.desc)}</span>`;
             h+=`<span style="margin-left:auto;color:var(--text-light);">${pg.acts.length} activit${pg.acts.length===1?'y':'ies'} — ${fmtD(pgCost)}</span>`;
             h+=`</div>`;
             h+=`<table style="margin-top:2px;"><tr><th style="background:var(--blue);">Activity</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th></tr>`;
             pg.acts.forEach(a=>{
-              h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
+              h+=`<tr><td>${esc(a.code)}</td><td>${esc(a.description)}</td><td>${esc(a.crew||'—')}</td><td class="num">${fmt(a.quantity)}</td><td>${esc(a.units)}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
             });
             h+=`<tr style="background:#EDF4FB;font-weight:600;font-size:12px;"><td colspan="6">Phase ${pg.code} Subtotal</td><td class="num">${fmtD(pgLabor)}</td><td class="num">${fmtD(pgMat)}</td><td class="num">${fmtD(pgEqp)}</td><td class="num">${fmtD(pgSubs)}</td><td class="num">${fmtD(pgCost)}</td></tr>`;
             h+=`</table></div>`;
@@ -9994,7 +10012,7 @@ function renderBidItems(){
           h+=`<div class="card-title" style="color:var(--blue);border-bottom-color:#D0E3F5;">Activities in Pay Item ${esc(it.clientItemNo||it.id)} <span style="font-weight:300;font-size:12px;">(${c.acts.length} activities, ${fmtD(c.dc)} direct cost)</span></div>`;
           h+=`<table><tr><th style="background:var(--blue);">Code</th><th style="background:var(--blue);">Description</th><th style="background:var(--blue);">Crew</th><th style="background:var(--blue);" class="num">Qty</th><th style="background:var(--blue);">Units</th><th style="background:var(--blue);" class="num">Man Hrs</th><th style="background:var(--blue);" class="num">Labor</th><th style="background:var(--blue);" class="num">Material</th><th style="background:var(--blue);" class="num">Equip</th><th style="background:var(--blue);" class="num">Subs</th><th style="background:var(--blue);" class="num">Direct Total</th></tr>`;
           c.acts.forEach(a=>{
-            h+=`<tr><td>${a.code}</td><td>${a.description}</td><td>${a.crew||'—'}</td><td class="num">${fmt(a.quantity)}</td><td>${a.units}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
+            h+=`<tr><td>${esc(a.code)}</td><td>${esc(a.description)}</td><td>${esc(a.crew||'—')}</td><td class="num">${fmt(a.quantity)}</td><td>${esc(a.units)}</td><td class="num">${fmt(a.manHours)}</td><td class="num">${fmtD(a.labor)}</td><td class="num">${fmtD((a.permMat||0)+(a.constMat||0))}</td><td class="num">${fmtD((a.eqpOper||0)+(a.compEqp||0)+(a.outsideEqp||0))}</td><td class="num">${fmtD(a.subs)}</td><td class="num"><strong>${fmtD(a.directTotal)}</strong></td></tr>`;
           });
           h+=`<tr style="background:var(--ash);font-weight:600;"><td colspan="6">SUBTOTAL</td><td class="num">${fmtD(c.labor)}</td><td class="num">${fmtD(c.mat)}</td><td class="num">${fmtD(c.eqp)}</td><td class="num">${fmtD(c.subs)}</td><td class="num">${fmtD(c.dc)}</td></tr>`;
           h+='</table>';
@@ -10029,7 +10047,7 @@ function renderBidItems(){
   if(unbilled.length){
     h+=`<div class="card" style="border-color:var(--orange);"><div class="card-title" style="color:var(--orange);">&#9888; Unbilled Activities (${unbilled.length} — ${fmtD(unbilled.reduce((s,a)=>s+a.directTotal,0))} not in any pay item)</div>`;
     h+='<div class="table-wrap" style="max-height:200px;"><table><tr><th>Code</th><th>Bid Item</th><th>Description</th><th class="num">Direct Cost</th></tr>';
-    unbilled.forEach(a=>{h+=`<tr><td>${a.code}</td><td>${a.biditem}</td><td>${a.description}</td><td class="num">${fmtD(a.directTotal)}</td></tr>`});
+    unbilled.forEach(a=>{h+=`<tr><td>${esc(a.code)}</td><td>${esc(a.biditem)}</td><td>${esc(a.description)}</td><td class="num">${fmtD(a.directTotal)}</td></tr>`});
     h+='</table></div></div>';
   }
 
@@ -10941,9 +10959,10 @@ function renderJobCostSchedule(){
     const units=a.units||'';
     const rate=a.productivityRate?fmt(a.productivityRate)+(a.units?'/d':''):'—';
     const hrs=a.manHours?fmt(a.manHours):'—';
-    const shortName=a.description||(a.code||'Activity');
-    const barLabel=shortName.length>16?shortName.substring(0,14)+'…':shortName;
-    const pcBadge=a.phaseCode?`<span style="font-size:9px;color:var(--green);font-weight:700;margin-right:3px;">${a.phaseCode}</span>`:'';
+    const _rawShortName=a.description||(a.code||'Activity');
+    const shortName=esc(_rawShortName);
+    const barLabel=esc(_rawShortName.length>16?_rawShortName.substring(0,14)+'…':_rawShortName);
+    const pcBadge=a.phaseCode?`<span style="font-size:9px;color:var(--green);font-weight:700;margin-right:3px;">${esc(a.phaseCode)}</span>`:'';
     const directBadge=a._directMapped?`<span style="display:inline-block;font-size:9px;color:#1E5F91;background:#E8F0F7;border:1px solid #4A90D9;border-radius:2px;padding:0 3px;margin-right:3px;font-weight:700;letter-spacing:.3px;" title="Activity directly mapped to schedule task">ACT</span>`:'';
     const conflictBadge=a._conflict?`<span style="display:inline-block;font-size:9px;color:white;background:var(--orange);border-radius:2px;padding:0 3px;margin-right:3px;font-weight:700;letter-spacing:.3px;" title="Conflict: this activity is directly mapped AND its pay item is mapped to a different task. Direct mapping wins.">!</span>`:'';
 
@@ -10982,8 +11001,8 @@ function renderJobCostSchedule(){
     const _normParent=String(a.parentPhase||'').trim();
     const actualData=_actualsMap[_normCode]||_actualsMap[_normPhase]||(_normParent?_actualsMap[_normParent]:null);
     let r='<tr>';
-    r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+a.phaseCode+' — ':''} ${shortName}">${conflictBadge}${directBadge}${pcBadge}${shortName}</td>`;
-    r+=`<td>${qty}${units?' '+units:''}</td>`;
+    r+=`<td class="jcs-task-name" title="${a.phaseCode?'Phase: '+esc(a.phaseCode)+' — ':''} ${shortName}">${conflictBadge}${directBadge}${pcBadge}${shortName}</td>`;
+    r+=`<td>${qty}${units?' '+esc(units):''}</td>`;
     r+=`<td>${rate}</td>`;
     r+=`<td>${days}</td>`;
     r+=`<td>${hrs}</td>`;
@@ -12159,7 +12178,7 @@ function renderPlanning(){
           if(!_planJobColors[assign.jobCode]){_planJobColors[assign.jobCode]=_PLAN_PALETTE[_planColorIdx%_PLAN_PALETTE.length];_planColorIdx++}
           const color=_planJobColors[assign.jobCode];
           const jobLabel=getJobNumber(assign.jobCode);
-          h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;font-size:11px;${assign.multi?'border:2px solid var(--orange);':''}" title="${assign.jobName}${assign.multi?' + others':''}">${jobLabel}${assign.multi?'+':''}</td>`;
+          h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);background-color:${color};color:var(--white);text-align:center;font-weight:600;font-size:11px;${assign.multi?'border:2px solid var(--orange);':''}" title="${esc(assign.jobName)}${assign.multi?' + others':''}">${esc(jobLabel)}${assign.multi?'+':''}</td>`;
         }else{
           h+=`<td style="padding:4px 6px;border-bottom:1px solid var(--border);text-align:center;color:var(--text-light);font-size:11px;">—</td>`;
         }
@@ -12573,8 +12592,8 @@ function renderProjectTradeView(){
       const l=Math.max(0,(bar.start-allMin)/86400000)/td*100;
       const w=Math.max(((bar.end-bar.start)/86400000)/td*100,.5);
       h+=`<div style="display:flex;align-items:center;margin-bottom:1px;border-top:1px solid var(--border);padding-top:6px;">`;
-      h+=`<div style="width:220px;min-width:220px;padding-right:8px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${m.name} — ${bar.name}"><span style="font-weight:600;">${m.name} #${m.number}</span><br><span style="color:var(--text-light);font-size:11px;">${bar.name}</span></div>`;
-      h+=`<div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${bar.name}: ${fmtDate(bar.start)} — ${fmtDate(bar.end)}"></div></div>`;
+      h+=`<div style="width:220px;min-width:220px;padding-right:8px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(m.name)} — ${esc(bar.name)}"><span style="font-weight:600;">${esc(m.name)} #${esc(m.number)}</span><br><span style="color:var(--text-light);font-size:11px;">${esc(bar.name)}</span></div>`;
+      h+=`<div style="flex:1;position:relative;height:16px;background:rgba(0,0,0,.02);border-radius:2px;"><div style="position:absolute;left:${l}%;width:${w}%;height:100%;background:${bar.color};border-radius:2px;opacity:.85;" title="${esc(bar.name)}: ${fmtDate(bar.start)} — ${fmtDate(bar.end)}"></div></div>`;
       h+=`</div>`;
     });
   });
@@ -13130,9 +13149,9 @@ function renderDisciplineEditor(){
     h+=`<div style="flex:1;">`;
     h+=`<div style="font-family:Oswald;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;">`;
     if(!d.isBuiltIn){
-      h+=`<input type="text" value="${d.name}" onchange="renameCustomDiscipline(${i-Object.keys(builtInMap).length},this.value)" style="font-family:Oswald;font-size:13px;font-weight:600;border:none;border-bottom:1px dashed var(--border);background:transparent;width:120px;padding:0;">`;
+      h+=`<input type="text" value="${esc(d.name)}" onchange="renameCustomDiscipline(${i-Object.keys(builtInMap).length},this.value)" style="font-family:Oswald;font-size:13px;font-weight:600;border:none;border-bottom:1px dashed var(--border);background:transparent;width:120px;padding:0;">`;
     } else {
-      h+=`<span>${d.name}</span>`;
+      h+=`<span>${esc(d.name)}</span>`;
     }
     h+=`</div>`;
     h+=`<div style="font-size:11px;color:var(--text-light);">Codes: ${codeStr}${count?' · '+count+' activities':''}${overrides?' · '+overrides+' overrides':''}</div>`;
@@ -13349,7 +13368,7 @@ function renderSOVBuilder(){
     h+=`<div style="max-height:160px;overflow-y:auto;">`;
     unassignedActs.forEach(a=>{
       h+=`<div class="sov-act-row" style="background:#FFF8F0;">`;
-      h+=`<span class="act-desc">${a.code} — ${a.description||'(no desc)'} <span style="color:var(--text-light);">[BI: ${a.biditem}]</span></span>`;
+      h+=`<span class="act-desc">${esc(a.code)} — ${esc(a.description||'(no desc)')} <span style="color:var(--text-light);">[BI: ${esc(a.biditem)}]</span></span>`;
       h+=`<span class="act-cost" style="color:var(--red);">${fmtD(a.directTotal)}</span>`;
       h+=`<button class="sov-move-btn" onclick="showMoveActivity('${escJS(a.code)}',-1)">Assign</button>`;
       h+=`</div>`;
@@ -13368,14 +13387,14 @@ function renderSOVBuilder(){
     h+=`<div class="sov-bi-header ${isOpen?'open':''}" onclick="toggleSOVCard(${idx})">`;
     h+=`<div class="sov-bi-title">`;
     if(noActsFlag) h+=`<span style="color:var(--orange);font-size:14px;line-height:1;" title="No activities assigned">○</span> `;
-    h+=`<span style="color:var(--orange);">${si.clientItemNo||si.id}</span> — ${si.description||'(untitled)'}</div>`;
+    h+=`<span style="color:var(--orange);">${esc(si.clientItemNo||si.id)}</span> — ${esc(si.description||'(untitled)')}</div>`;
     h+=`<div class="sov-bi-meta">`;
     h+=`<span>${c.acts.length} activities</span>`;
     h+=`<span>Direct: ${fmtD(c.dc)}</span>`;
     h+=`<span>OH: ${fmtD(c.oh)}</span>`;
     h+=`<span>Profit: ${fmtD(c.profit)}</span>`;
     h+=`<span style="font-weight:600;">Value: ${fmtD(c.sv)}</span>`;
-    h+=`<span>${si.contractQty} ${si.unit}</span>`;
+    h+=`<span>${si.contractQty} ${esc(si.unit)}</span>`;
     h+=`</div></div>`;
 
     if(isOpen){
@@ -13417,7 +13436,7 @@ function renderSOVBuilder(){
           const pcActs=c.acts.filter(a=>a.phaseCode===pc.code);
           const pcCost=pcActs.reduce((s,a)=>s+(a.directTotal||0),0);
           h+=`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:11px;">`;
-          h+=`<strong style="color:var(--green);">${pc.code}</strong> ${pc.description||''} <span style="color:var(--text-light);">${fmtD(pcCost)}</span>`;
+          h+=`<strong style="color:var(--green);">${esc(pc.code)}</strong> ${esc(pc.description||'')} <span style="color:var(--text-light);">${fmtD(pcCost)}</span>`;
           h+=`</span>`;
         });
         h+=`</div>`;
@@ -13430,7 +13449,7 @@ function renderSOVBuilder(){
         c.acts.forEach(a=>{
           const actIdx=job.activities.indexOf(a);
           h+=`<div class="sov-act-row">`;
-          h+=`<span class="act-desc">${a.phaseCode?'<span style="color:var(--green);font-weight:600;font-size:10px;">'+a.phaseCode+'</span> ':''}${a.code} — ${a.description||'(no desc)'}</span>`;
+          h+=`<span class="act-desc">${a.phaseCode?'<span style="color:var(--green);font-weight:600;font-size:10px;">'+esc(a.phaseCode)+'</span> ':''}${esc(a.code)} — ${esc(a.description||'(no desc)')}</span>`;
           h+=`<span class="act-cost">${fmtD(a.directTotal)}</span>`;
           h+=`<button class="sov-move-btn" onclick="showMoveActivity('${escJS(a.code)}',${idx})">Move</button>`;
           h+=`<button class="sov-split-btn" onclick="showSplitActivity('${escJS(a.code)}',${idx})">Split</button>`;
@@ -13469,7 +13488,7 @@ function renderSOVBuilder(){
   area.innerHTML=h;
 }
 
-function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+function esc(s){return escapeHtml(s)}
 function escJS(s){return(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
 
 function toggleSOVCard(idx){
@@ -13906,11 +13925,11 @@ function showMoveActivity(actCode, fromIdx){
   const act=job.activities.find(a=>a.code===actCode);
   if(!act){closeSovModal();return}
 
-  let h=`<p style="font-size:13px;margin-bottom:12px;">Move <strong>${actCode} — ${act.description||'(no desc)'}</strong> (${fmtD(act.directTotal)}) to:</p>`;
+  let h=`<p style="font-size:13px;margin-bottom:12px;">Move <strong>${esc(actCode)} — ${esc(act.description||'(no desc)')}</strong> (${fmtD(act.directTotal)}) to:</p>`;
   job.sovItems.forEach((si,idx)=>{
     if(idx===fromIdx)return;
     h+=`<button style="display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;font-size:13px;" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='var(--border)'" onclick="execMoveActivity('${escJS(actCode)}',${fromIdx},${idx})">`;
-    h+=`<strong>${si.clientItemNo||si.id}</strong> — ${si.description||'(untitled)'}`;
+    h+=`<strong>${esc(si.clientItemNo||si.id)}</strong> — ${esc(si.description||'(untitled)')}`;
     h+=`</button>`;
   });
   content.innerHTML=h;
@@ -13940,7 +13959,7 @@ function showSplitActivity(actCode, fromIdx){
   const act=job.activities.find(a=>a.code===actCode);
   if(!act){closeSovModal();return}
 
-  let h=`<p style="font-size:13px;margin-bottom:8px;">Split <strong>${actCode} — ${act.description||''}</strong></p>`;
+  let h=`<p style="font-size:13px;margin-bottom:8px;">Split <strong>${esc(actCode)} — ${esc(act.description||'')}</strong></p>`;
   h+=`<p style="font-size:12px;color:var(--text-light);margin-bottom:12px;">Total Direct Cost: ${fmtD(act.directTotal)}</p>`;
   h+=`<div style="margin-bottom:12px;">`;
   h+=`<label style="font-size:12px;font-family:Oswald;letter-spacing:.5px;text-transform:uppercase;color:var(--text-light);display:block;margin-bottom:4px;">% to keep in current item</label>`;
@@ -13951,7 +13970,7 @@ function showSplitActivity(actCode, fromIdx){
   job.sovItems.forEach((si,idx)=>{
     if(idx===fromIdx)return;
     h+=`<button style="display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;font-size:13px;" onmouseover="this.style.borderColor='var(--blue)'" onmouseout="this.style.borderColor='var(--border)'" onclick="execSplitActivity('${escJS(actCode)}',${fromIdx},${idx})">`;
-    h+=`<strong>${si.clientItemNo||si.id}</strong> — ${si.description||'(untitled)'}`;
+    h+=`<strong>${esc(si.clientItemNo||si.id)}</strong> — ${esc(si.description||'(untitled)')}`;
     h+=`</button>`;
   });
   content.innerHTML=h;

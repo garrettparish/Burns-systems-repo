@@ -95,7 +95,20 @@ create policy "anon read sync_log" on public.sync_log
 -- the schedule can dispatch (we cannot put a real secret in a migration):
 --
 --   alter database postgres set "app.hcss_sync_url"    = 'https://<project>.functions.supabase.co/hcss-sync-actuals';
---   alter database postgres set "app.hcss_sync_secret" = '<service_role_jwt>';
+--   alter database postgres set "app.hcss_sync_secret" = '<shared-secret>';
+--
+-- SECURITY (added after audit finding — hcss-sync-actuals is deployed with
+-- --no-verify-jwt and was otherwise fully unauthenticated): the Edge Function
+-- now checks this same Bearer token against its HCSS_SYNC_TOKEN secret
+-- (see isAuthorizedSyncRequest in index.ts). <shared-secret> above MUST be
+-- set to the exact same value as:
+--   supabase secrets set HCSS_SYNC_TOKEN=<shared-secret>
+-- and the front-end's HCSS_SYNC_TOKEN constant in public/index.html.
+-- This previously held the service_role JWT — that still works (the
+-- function only compares strings, it doesn't care what the token is), but a
+-- dedicated random token is preferred: if it ever leaks it doesn't also
+-- grant full DB access the way the service_role key would. Rotate to a
+-- dedicated token when convenient; not required for the auth check itself.
 --
 -- Re-run this section after setting those values if the job doesn't appear.
 
