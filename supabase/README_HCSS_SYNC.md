@@ -38,6 +38,10 @@ Paste your **new, rotated** HCSS credentials. Nothing ever goes in git.
 ```bash
 supabase secrets set HCSS_CLIENT_ID=<your_new_client_id>
 supabase secrets set HCSS_CLIENT_SECRET=<your_new_client_secret>
+# Required — shared secret the function checks on every request (see Step 2's
+# app.hcss_sync_secret and the HCSS_SYNC_TOKEN constant in public/index.html;
+# all three must match exactly):
+supabase secrets set HCSS_SYNC_TOKEN=<a dedicated random shared secret>
 # Optional until you know your BU code — leave unset for discovery mode.
 # supabase secrets set HCSS_BUSINESS_UNIT_CODE=BURNS
 # Optional tweaks:
@@ -57,10 +61,19 @@ After it succeeds, **set the two pg_cron dispatch settings** (one-time, in the s
 alter database postgres set "app.hcss_sync_url"
   = 'https://sxzvlazmkxnbsoayhuln.functions.supabase.co/hcss-sync-actuals';
 alter database postgres set "app.hcss_sync_secret"
-  = '<your service_role JWT from Dashboard → Settings → API>';
+  = '<a dedicated random shared secret>';
 ```
 
 > These are required for the daily cron to POST to the Edge Function. Without them the cron line will no-op silently.
+
+> **SECURITY:** the function is deployed with `--no-verify-jwt` and checks this
+> Bearer token itself (see `HCSS_SYNC_TOKEN` in `index.ts`). `app.hcss_sync_secret`
+> must exactly match the `HCSS_SYNC_TOKEN` Edge Function secret (Step 1) AND the
+> `HCSS_SYNC_TOKEN` constant in `public/index.html` (used by the manual "Sync Now"
+> / "Backfill All" buttons). All three must hold the same value or the function
+> returns 401. This used to be undocumented/unchecked entirely — anyone with the
+> function URL could call it. Generate a real random value for local dev/prod,
+> don't ship the placeholder.
 
 Re-run the `cron.schedule` block at the bottom of the migration after you set those values, so the scheduled job picks them up.
 
@@ -81,7 +94,7 @@ supabase functions deploy hcss-sync-actuals --no-verify-jwt
 ```bash
 curl -X POST \
   'https://sxzvlazmkxnbsoayhuln.functions.supabase.co/hcss-sync-actuals' \
-  -H 'Authorization: Bearer <your service_role JWT>' \
+  -H 'Authorization: Bearer <your HCSS_SYNC_TOKEN value>' \
   -H 'Content-Type: application/json' \
   -d '{"discover": true}'
 ```
@@ -104,7 +117,7 @@ After this, the daily 5am cron sticks to the 14-day rolling window.
 ```bash
 curl -X POST \
   'https://sxzvlazmkxnbsoayhuln.functions.supabase.co/hcss-sync-actuals' \
-  -H 'Authorization: Bearer <your service_role JWT>' \
+  -H 'Authorization: Bearer <your HCSS_SYNC_TOKEN value>' \
   -H 'Content-Type: application/json' \
   -d '{"trigger": "manual", "fullHistory": true}'
 ```
@@ -113,7 +126,7 @@ For a routine rolling-window sync (what the cron runs):
 ```bash
 curl -X POST \
   'https://sxzvlazmkxnbsoayhuln.functions.supabase.co/hcss-sync-actuals' \
-  -H 'Authorization: Bearer <your service_role JWT>' \
+  -H 'Authorization: Bearer <your HCSS_SYNC_TOKEN value>' \
   -H 'Content-Type: application/json' \
   -d '{"trigger": "manual"}'
 ```
@@ -161,6 +174,7 @@ You should see Stone 765 with ~272+ rows and ~30 cost codes. If you only see 1 o
 | `GET .../business-units → 404` | HCSS moved the endpoint path. Edit `EP` at the top of `index.ts` and redeploy. |
 | `HCSS_BUSINESS_UNIT_CODE='X' not found` | Re-run discovery mode, pick a code that appears in the list. |
 | Cron row doesn't appear in `cron.job` | You didn't set `app.hcss_sync_url` / `app.hcss_sync_secret` before re-running the `cron.schedule` block. |
+| `{"ok":false,"error":"Unauthorized"}` / HTTP 401 | `app.hcss_sync_secret` (DB), `HCSS_SYNC_TOKEN` (Edge Function secret), and the `HCSS_SYNC_TOKEN` constant in `public/index.html` don't all match, or `HCSS_SYNC_TOKEN` was never set (fails closed by design). |
 | Rows have `0` for every cost | HCSS time-card JSON has different key names than expected. Check `sync_log.details.errors` and update the `pick()` arrays in `mergeJobRows`. |
 
 ---

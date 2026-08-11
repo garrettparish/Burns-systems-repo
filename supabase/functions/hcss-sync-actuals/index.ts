@@ -114,11 +114,66 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+// -------------------- AUTH --------------------
+// This function is deployed with `--no-verify-jwt` on purpose — it's invoked
+// by pg_cron (see supabase/migrations/20260409_hcss_sync.sql) and by manual
+// "Sync Now" / "Backfill All" buttons in public/index.html, neither of which
+// carries a real Supabase user session. Re-enabling verify_jwt would only
+// check that the caller presents SOME valid Supabase JWT (including the
+// public anon key), which provides no real protection — so instead we check
+// a dedicated shared secret here.
+//
+// The pg_cron job already sends `Authorization: Bearer <app.hcss_sync_secret>`
+// (see the cron.schedule() block in that migration) — this reuses that exact
+// header/scheme rather than inventing a second one (e.g. a new x-sync-token
+// header). Set the SAME value in both places:
+//   1. Edge Function secret:  supabase secrets set HCSS_SYNC_TOKEN=<random-value>
+//   2. DB setting used by cron: alter database postgres set "app.hcss_sync_secret" = '<same random-value>';
+// NOTE: `app.hcss_sync_secret` was previously documented as "your service_role
+// JWT" — that still works transparently (no cron SQL change needed, since the
+// migration already forwards whatever is in app.hcss_sync_secret as the
+// Bearer token), but a dedicated random token is preferred going forward:
+// least-privilege — if this token leaks, it does not also grant full DB
+// access the way the service_role key would.
+// Front-end manual-trigger calls must send the same header — see
+// HCSS_SYNC_TOKEN in public/index.html.
+function isAuthorizedSyncRequest(req: Request): boolean {
+  const expected = Deno.env.get('HCSS_SYNC_TOKEN');
+  if (!expected) return false; // fail closed — misconfiguration must not mean "open to anyone"
+  const authHeader = req.headers.get('authorization') || '';
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  const provided = match ? match[1] : '';
+  if (!provided) return false;
+  return timingSafeEqual(provided, expected);
+}
+
+// Constant-time string comparison (mitigates timing side-channels on the token check).
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  // Compare a fixed-size digest of both instead of the raw strings so the
+  // comparison time doesn't leak the true token length either.
+  const maxLen = Math.max(aBytes.length, bBytes.length, 32);
+  let diff = aBytes.length ^ bBytes.length;
+  for (let i = 0; i < maxLen; i++) {
+    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 // -------------------- MAIN HANDLER --------------------
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
+  }
+
+  if (!isAuthorizedSyncRequest(req)) {
+    return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
+      status: 401,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
   }
 
   const startedAt = Date.now();
