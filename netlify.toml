@@ -28,7 +28,9 @@
 [[headers]]
   for = "/*"
   [headers.values]
-    X-Frame-Options = "DENY"
+    # frame-ancestors replaces X-Frame-Options so this can be embedded by the
+    # BurnsOS shell (burnsos.netlify.app) while still blocking any other origin.
+    Content-Security-Policy = "frame-ancestors 'self' https://burnsos.netlify.app"
     X-XSS-Protection = "1; mode=block"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
