@@ -78,7 +78,26 @@ interface TokenResponse { access_token: string; token_type: string; expires_in: 
 // Module-level cache of the last minted token's granted scope string,
 // so discovery mode can surface it to the caller for debugging.
 let _lastGrantedScope: string | null = null;
-interface SyncRequest { trigger?: 'cron'|'manual'|'api'; discover?: boolean; syncMetadata?: boolean; syncJobCosts?: boolean; scanEndpoints?: boolean; lookbackDays?: number; jobNumber?: string; fullHistory?: boolean }
+// NOTE: batchIndex/batchCount were missing from this interface until
+// 2026-09-23, which is exactly why they were never honoured — the six cron
+// entries had been sending them since they were created, TypeScript had no
+// property to bind them to, and the sharding silently never happened. A caller
+// parameter that the receiver's type does not model is a parameter that does
+// not exist, and nothing in either half reports the mismatch.
+interface SyncRequest {
+  trigger?: 'cron'|'manual'|'api';
+  discover?: boolean;
+  syncMetadata?: boolean;
+  syncJobCosts?: boolean;
+  scanEndpoints?: boolean;
+  lookbackDays?: number;
+  jobNumber?: string;
+  fullHistory?: boolean;
+  /** 0-based shard index for this run. Sent by the cron entries. */
+  batchIndex?: number;
+  /** Total number of shards the active-job list is split across. */
+  batchCount?: number;
+}
 interface EquipObservation {
   code: string;
   description: string;
@@ -678,6 +697,31 @@ Deno.serve(async (req) => {
     // Active jobs only — skip closed/archived.
     const activeJobs = jobs.filter(j => isJobActive(j));
 
+    // ── Shard across the cron batches ──────────────────────────────────────
+    //
+    // The six cron entries (hcss-sync-actuals-daily + batch-1..5) have been
+    // sending batchIndex/batchCount since they were created, and nothing here
+    // ever read them. All six therefore ran the identical FULL sync, three
+    // minutes apart.
+    //
+    // That was survivable while one full pass fit inside the edge runtime's
+    // 150s idle limit. It stopped being survivable on 2026-08-11: every one of
+    // the six now returns 504 IDLE_TIMEOUT, and because the timeout kills the
+    // request before logRun() is reached, sync_log recorded NOTHING rather than
+    // a failure. hcss_equipment and hcss_equipment_history — written only on
+    // this code path — silently stopped updating, while hcss_job_costs stayed
+    // fresh because syncJobCosts returns earlier and finishes in time. The
+    // cron's own timeout_milliseconds := 300000 is irrelevant; the platform cap
+    // is what bites.
+    //
+    // Round-robin rather than contiguous slices: HCSS job order is roughly by
+    // age, so contiguous blocks would put all the big active jobs in one shard.
+    const batchCount = Math.max(1, Number(body.batchCount) || 1);
+    const batchIndex = Math.min(Math.max(0, Number(body.batchIndex) || 0), batchCount - 1);
+    const shardedJobs = batchCount > 1
+      ? activeJobs.filter((_, i) => i % batchCount === batchIndex)
+      : activeJobs;
+
     // 4. Pull data per job
     // If fullHistory, `since` is null → listTimeCards/listQuantities will omit startDate.
     const since = lookback == null ? null : isoDaysAgo(lookback);
@@ -691,7 +735,7 @@ Deno.serve(async (req) => {
     // past cells with the job each machine was actually on.
     const equipHistAcc = new Map<string, EquipHistoryRow>();
 
-    for (const job of activeJobs) {
+    for (const job of shardedJobs) {
       try {
         // CRITICAL: HCSS API requires UUID jobId, NOT the job code string.
         // job.id is the HCSS UUID from the jobs list response.
@@ -780,13 +824,18 @@ Deno.serve(async (req) => {
 
     const status = errors.length ? 'partial' : 'success';
     await logRun(status, {
-      jobs_synced: activeJobs.length,
+      jobs_synced: shardedJobs.length,
       rows_updated: updated,
       rows_inserted: inserted,
       details: {
         mode: fullHistory ? 'backfill' : 'sync',
         businessUnit: buCode,
         lookbackDays: lookback,
+        // Both numbers, always: jobsInSlice alone cannot distinguish a healthy
+        // shard from a sync that has quietly lost most of its population.
+        batchIndex,
+        batchCount,
+        jobsInSlice: shardedJobs.length,
         activeJobs: activeJobs.length,
         totalJobs: jobs.length,
         errors,
@@ -801,7 +850,10 @@ Deno.serve(async (req) => {
     return json({
       ok: true,
       status,
-      jobsSynced: activeJobs.length,
+      batchIndex,
+      batchCount,
+      jobsSynced: shardedJobs.length,
+      activeJobsTotal: activeJobs.length,
       totalJobsFound: jobs.length,
       rowsUpserted: updated,
       equipmentHistoryUpserted: equipHistUpserted,
