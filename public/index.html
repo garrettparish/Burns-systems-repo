@@ -370,6 +370,7 @@ tr:hover{background:#FAF8F5}
   <button class="nav-tab active" data-tab="financials" onclick="navSwitch('financials')">Schedule & Financials</button>
   <button class="nav-tab" data-tab="production-group" onclick="navSwitch('production')">Production</button>
   <button class="nav-tab" data-tab="setup" onclick="navSwitch('setup')">Set Up</button>
+  <button class="nav-tab" data-tab="health" onclick="navSwitch('health')">System Health<span class="badge" id="healthBadge" style="display:none;background:var(--red)"></span></button>
 </div>
 
 <!-- Sub-tab rows (one per group, shown/hidden based on active top tab) -->
@@ -431,6 +432,9 @@ tr:hover{background:#FAF8F5}
 
 <!-- GLOBAL VIEW -->
 <div id="panel-global" class="panel"><div id="globalContent"></div></div>
+
+<!-- SYSTEM HEALTH -->
+<div id="panel-health" class="panel"><div id="healthContent"></div></div>
 
 <!-- JOB DASHBOARD (with sub-tabs) -->
 <div id="panel-job" class="panel active">
@@ -4318,6 +4322,139 @@ const fmtPct=n=>n!=null?Number(n).toFixed(1)+'%':'—';
 const fmtDate=d=>{if(!d)return'—';const dt=d instanceof Date?d:new Date(d);return isNaN(dt)?'—':dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})};
 
 // ═══════════════════════════════════════════
+// SYSTEM HEALTH — every sync / cron / API / MCP in one board.
+// Data: rpc monitor_status() (migration 20261008120000_system_monitor.sql).
+// State is computed server-side; this page only filters and renders.
+// ═══════════════════════════════════════════
+let _health={rows:[],loaded:false,loading:false,err:null,tool:'',type:'',state:'flagged',q:'',open:new Set(),at:null};
+let _healthTimer=null;
+const HEALTH_STATE={
+  failing:{label:'Failing',color:'#C0392B',bg:'#FDF2F0',rank:0},
+  late:{label:'Late',color:'#D35400',bg:'#FEF5EC',rank:1},
+  silent:{label:'No data',color:'#8E44AD',bg:'#F5EEF8',rank:2},
+  warn:{label:'Warning',color:'#B7950B',bg:'#FEF9E7',rank:3},
+  disabled:{label:'Disabled',color:'#6B6B6B',bg:'#F0F0F0',rank:4},
+  ok:{label:'OK',color:'#3E4D3E',bg:'#EEF3EE',rank:5}
+};
+const HEALTH_TYPE={cron:'Cron',sync:'Sync',api:'API',mcp:'MCP',edge:'Edge fn',webhook:'Webhook'};
+
+async function loadSystemHealth(){
+  if(_health.loading)return;
+  _health.loading=true;
+  const {data,error}=await sb.rpc('monitor_status');
+  _health.loading=false;
+  if(error){_health.err=error.message;}
+  else{_health.err=null;_health.rows=data||[];_health.loaded=true;_health.at=new Date();}
+  updateHealthBadge();
+  if(_activeNavTab==='health')renderSystemHealth(true);
+}
+
+function updateHealthBadge(){
+  const b=document.getElementById('healthBadge');
+  if(!b)return;
+  const n=_health.rows.filter(r=>r.state!=='ok'&&r.state!=='disabled').length;
+  b.textContent=n;
+  b.style.display=n>0?'inline-block':'none';
+}
+
+function healthAgo(ts){
+  if(!ts)return 'never';
+  const m=Math.round((Date.now()-new Date(ts).getTime())/60000);
+  if(m<1)return 'just now';
+  if(m<60)return m+' min ago';
+  if(m<2880)return Math.round(m/60)+' h ago';
+  return Math.round(m/1440)+' d ago';
+}
+
+function healthSet(key,val){
+  _health[key]=val;
+  renderSystemHealth(true);
+}
+function healthToggle(k){
+  if(_health.open.has(k))_health.open.delete(k);else _health.open.add(k);
+  renderSystemHealth(true);
+}
+
+function renderSystemHealth(noFetch){
+  const el=document.getElementById('healthContent');
+  if(!el)return;
+  if(!noFetch){
+    loadSystemHealth();
+    clearInterval(_healthTimer);
+    _healthTimer=setInterval(()=>{if(_activeNavTab==='health')loadSystemHealth();else clearInterval(_healthTimer);},60000);
+  }
+  if(_health.err){
+    el.innerHTML='<div class="card"><div class="card-title">System Health</div><p style="color:var(--red)">Could not load monitor status: '+escapeHtml(_health.err)+'</p><p style="color:var(--text-light);font-size:13px;margin-top:8px">If this says the function does not exist, migration <code>20261008120000_system_monitor.sql</code> has not been applied yet.</p></div>';
+    return;
+  }
+  if(!_health.loaded){el.innerHTML='<div class="card"><p style="color:var(--text-light)">Loading system health…</p></div>';return;}
+
+  const rows=_health.rows;
+  const tools=[...new Set(rows.map(r=>r.tool))].sort();
+  const types=[...new Set(rows.map(r=>r.type))].sort();
+  const q=_health.q.trim().toLowerCase();
+  const filtered=rows.filter(r=>
+    (!_health.tool||r.tool===_health.tool)&&
+    (!_health.type||r.type===_health.type)&&
+    (_health.state==='all'||(_health.state==='flagged'?(r.state!=='ok'&&r.state!=='disabled'):r.state===_health.state))&&
+    (!q||(r.name+' '+r.tool+' '+r.source_key+' '+(r.reason||'')).toLowerCase().includes(q))
+  ).sort((a,b)=>HEALTH_STATE[a.state].rank-HEALTH_STATE[b.state].rank||a.tool.localeCompare(b.tool)||a.name.localeCompare(b.name));
+
+  const count=s=>rows.filter(r=>r.state===s).length;
+  const flagged=rows.filter(r=>r.state!=='ok'&&r.state!=='disabled').length;
+  const tile=(label,n,color,stateKey)=>'<div onclick="healthSet(\'state\',\''+stateKey+'\')" style="cursor:pointer;flex:1;min-width:110px;background:var(--card);border:1px solid var(--border);border-top:3px solid '+color+';border-radius:6px;padding:12px 16px;'+(_health.state===stateKey?'box-shadow:0 0 0 2px '+color+'33;':'')+'"><div style="font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light)">'+label+'</div><div style="font-family:Oswald,sans-serif;font-size:28px;color:'+color+'">'+n+'</div></div>';
+
+  // Per-tool rollup chips: worst state wins, click to filter.
+  const chips=tools.map(t=>{
+    const tr=rows.filter(r=>r.tool===t);
+    const worst=tr.map(r=>r.state).sort((a,b)=>HEALTH_STATE[a].rank-HEALTH_STATE[b].rank)[0];
+    const bad=tr.filter(r=>r.state!=='ok'&&r.state!=='disabled').length;
+    const st=HEALTH_STATE[worst];
+    const on=_health.tool===t;
+    return '<button onclick="healthSet(\'tool\',\''+(on?'':escapeHtml(t))+'\')" style="cursor:pointer;font-family:Oswald,sans-serif;font-size:12px;letter-spacing:.5px;padding:5px 12px;border-radius:14px;border:1px solid '+st.color+';background:'+(on?st.color:st.bg)+';color:'+(on?'#fff':st.color)+'">'+escapeHtml(t)+(bad?' · '+bad+' flagged':'')+'</button>';
+  }).join(' ');
+
+  const sel=(key,opts,all)=>'<select onchange="healthSet(\''+key+'\',this.value)" style="font-size:13px;padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:#fff"><option value="">'+all+'</option>'+opts.map(o=>'<option value="'+escapeHtml(o.v)+'"'+(_health[key]===o.v?' selected':'')+'>'+escapeHtml(o.l)+'</option>').join('')+'</select>';
+
+  const body=filtered.map(r=>{
+    const st=HEALTH_STATE[r.state];
+    const open=_health.open.has(r.source_key);
+    const recent=(r.recent||[]).map(x=>'<tr><td style="padding:2px 12px 2px 0;white-space:nowrap">'+new Date(x.at).toLocaleString()+'</td><td style="padding:2px 12px 2px 0;color:'+(x.status==='ok'?'var(--green)':x.status==='warn'?'#B7950B':'var(--red)')+'">'+escapeHtml(x.status)+'</td><td style="padding:2px 12px 2px 0">'+(x.ms!=null?(x.ms/1000).toFixed(1)+'s':'')+'</td><td style="padding:2px 0;color:var(--text-light)">'+escapeHtml(x.msg||'')+'</td></tr>').join('');
+    return '<tr onclick="healthToggle(\''+escapeHtml(r.source_key)+'\')" style="cursor:pointer;border-top:1px solid var(--border)">'
+      +'<td style="padding:8px 10px"><span style="display:inline-block;min-width:68px;text-align:center;font-family:Oswald,sans-serif;font-size:11px;letter-spacing:.8px;text-transform:uppercase;padding:2px 8px;border-radius:3px;color:'+st.color+';background:'+st.bg+';border:1px solid '+st.color+'55">'+st.label+'</span></td>'
+      +'<td style="padding:8px 10px">'+escapeHtml(r.tool)+'</td>'
+      +'<td style="padding:8px 10px;color:var(--text-light)">'+(HEALTH_TYPE[r.type]||escapeHtml(r.type))+'</td>'
+      +'<td style="padding:8px 10px;font-weight:600">'+escapeHtml(r.name)+(r.severity==='high'?' <span title="High severity" style="color:var(--orange)">●</span>':'')+'</td>'
+      +'<td style="padding:8px 10px;color:'+(r.state==='ok'?'var(--text-light)':st.color)+';font-size:13px">'+escapeHtml(r.reason||'')+'</td>'
+      +'<td style="padding:8px 10px;white-space:nowrap;font-size:13px" title="'+escapeHtml(r.last_run_at||'')+'">'+healthAgo(r.last_run_at)+'</td>'
+      +'<td style="padding:8px 10px;white-space:nowrap;font-size:13px">'+r.runs_24h+(r.fails_24h?' <span style="color:var(--red)">('+r.fails_24h+' failed)</span>':'')+'</td></tr>'
+      +(open?'<tr style="background:#FAF8F5"><td></td><td colspan="6" style="padding:8px 10px 14px;font-size:12px"><div style="color:var(--text-light);margin-bottom:6px">'+escapeHtml(r.description||'')+' · <code>'+escapeHtml(r.source_key)+'</code> · expected every '+r.expected_interval_min+' min'+(r.last_error?'<br>Last error: <span style="color:var(--red)">'+escapeHtml(r.last_error)+'</span>':'')+'</div>'+(recent?'<table style="border-collapse:collapse">'+recent+'</table>':'<em>No runs in the last 14 days.</em>')+'</td></tr>':'');
+  }).join('');
+
+  el.innerHTML=
+    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px"><h2 style="font-family:Oswald,sans-serif;font-size:20px;letter-spacing:1px;text-transform:uppercase;color:var(--green)">System Health</h2><span style="font-size:12px;color:var(--text-light)">'+rows.length+' monitored · '+(flagged?'<b style="color:var(--red)">'+flagged+' flagged</b>':'<b style="color:var(--green)">all clear</b>')+' · updated '+(_health.at?_health.at.toLocaleTimeString():'')+' · refreshes every 60s <button class="edit-btn" onclick="loadSystemHealth()">Refresh</button></span></div>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'
+      +tile('Flagged',flagged,'#C0392B','flagged')+tile('Failing',count('failing'),'#C0392B','failing')+tile('Late',count('late'),'#D35400','late')+tile('No data',count('silent'),'#8E44AD','silent')+tile('Warning',count('warn'),'#B7950B','warn')+tile('OK',count('ok'),'#3E4D3E','ok')
+    +'</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'+chips+'</div>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center">'
+      +sel('type',types.map(t=>({v:t,l:HEALTH_TYPE[t]||t})),'All types')
+      +sel('state',[{v:'flagged',l:'Flagged only'},{v:'all',l:'All states'},{v:'failing',l:'Failing'},{v:'late',l:'Late'},{v:'silent',l:'No data'},{v:'warn',l:'Warning'},{v:'ok',l:'OK'},{v:'disabled',l:'Disabled'}],'Flagged only').replace('<option value="">Flagged only</option>','')
+      +'<input type="search" placeholder="Search name, tool, reason…" value="'+escapeHtml(_health.q)+'" oninput="_health.q=this.value;renderSystemHealth(true);var i=document.querySelector(\'#healthContent input[type=search]\');i.focus();i.setSelectionRange(i.value.length,i.value.length)" style="font-size:13px;padding:6px 10px;border:1px solid var(--border);border-radius:4px;min-width:220px">'
+      +((_health.tool||_health.type||_health.q)?'<button class="edit-btn" onclick="_health.tool=\'\';_health.type=\'\';_health.q=\'\';renderSystemHealth(true)">Clear filters</button>':'')
+    +'</div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr style="text-align:left;font-family:Oswald,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-light)"><th style="padding:10px">State</th><th style="padding:10px">Tool</th><th style="padding:10px">Type</th><th style="padding:10px">Name</th><th style="padding:10px">Why</th><th style="padding:10px">Last run</th><th style="padding:10px">24h runs</th></tr></thead><tbody>'
+    +(body||'<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-light)">'+(rows.length?'Nothing matches these filters.':'No sources registered yet.')+'</td></tr>')
+    +'</tbody></table></div>'
+    +'<p style="font-size:12px;color:var(--text-light);margin-top:10px">Click a row for the last 10 runs. Sources outside this project (APIs, MCP servers, box jobs, other repos) register in <code>monitor_source</code> and report via the <code>monitor-report</code> Edge Function.</p>';
+}
+
+// Keep the nav badge fresh from page load (flags show even when the tab is closed).
+setTimeout(()=>{try{loadSystemHealth();}catch(e){}},4000);
+setInterval(()=>{try{if(_activeNavTab!=='health')loadSystemHealth();}catch(e){}},300000);
+
+
+// ═══════════════════════════════════════════
 // NAV TABS (two-tier: top nav + sub-tabs)
 // ═══════════════════════════════════════════
 let _activeSubTab='overview';
@@ -4362,6 +4499,9 @@ function navSwitch(tab){
   if(tab==='global'){
     document.getElementById('panel-global').classList.add('active');
     renderGlobalView();
+  }else if(tab==='health'){
+    document.getElementById('panel-health').classList.add('active');
+    renderSystemHealth();
   }else if(tab==='setup'){
     // Set Up shows the job panel with setup sub-tab, no sub-nav row
     document.getElementById('panel-job').classList.add('active');
