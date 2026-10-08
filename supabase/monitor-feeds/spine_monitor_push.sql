@@ -6,6 +6,8 @@
 -- responses into 15-minute buckets and POSTs them to monitor-report. Buckets are
 -- keyed (source_key, external_id) so re-sending is harmless.
 --
+-- Backfill once after install:  select public.monitor_push(336);   -- 14 days
+--
 -- One-time setup (token never lands in a file or chat):
 --   select vault.create_secret('<MONITOR_TOKEN>', 'monitor_token');
 --
@@ -26,6 +28,7 @@ declare
   token  text;
   events jsonb;
   req    bigint;
+  i      int;
 begin
   select decrypted_secret into token from vault.decrypted_secrets where name = 'monitor_token' limit 1;
   if token is null then
@@ -91,11 +94,17 @@ begin
     return null;
   end if;
 
-  select net.http_post(
-    url     := 'https://sxzvlazmkxnbsoayhuln.supabase.co/functions/v1/monitor-report',
-    headers := jsonb_build_object('Authorization', 'Bearer ' || token, 'Content-Type', 'application/json'),
-    body    := jsonb_build_object('events', events)
-  ) into req;
+  -- monitor-report takes at most 500 events per call; send in chunks of 400.
+  for i in 0 .. (jsonb_array_length(events) - 1) / 400 loop
+    select net.http_post(
+      url     := 'https://sxzvlazmkxnbsoayhuln.supabase.co/functions/v1/monitor-report',
+      headers := jsonb_build_object('Authorization', 'Bearer ' || token, 'Content-Type', 'application/json'),
+      body    := jsonb_build_object('events', (
+                   select coalesce(jsonb_agg(e), '[]'::jsonb)
+                     from jsonb_array_elements(events) with ordinality t(e, n)
+                    where n > i * 400 and n <= (i + 1) * 400))
+    ) into req;
+  end loop;
   return req;
 end;
 $$;

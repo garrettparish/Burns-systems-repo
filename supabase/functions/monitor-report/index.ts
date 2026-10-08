@@ -95,11 +95,11 @@ Deno.serve(async (req) => {
     }
     if (!knownKeys.has(source_key)) { unknown.add(source_key); continue; }
     // Pushed events may carry their own timestamp, but never from the future
-    // and never older than 3 days (stops a bad feed rewriting history).
+    // and never older than 15 days (backfill window; the status view reads 14 days).
     let at: string | undefined;
     if (typeof e.at === 'string') {
       const t = Date.parse(e.at);
-      if (Number.isFinite(t) && t <= now + 60_000 && t >= now - 3 * 86_400_000) at = new Date(t).toISOString();
+      if (Number.isFinite(t) && t <= now + 60_000 && t >= now - 15 * 86_400_000) at = new Date(t).toISOString();
     }
     rows.push({
       source_key,
