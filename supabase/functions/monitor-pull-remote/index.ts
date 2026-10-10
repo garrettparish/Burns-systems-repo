@@ -26,6 +26,21 @@ const PROBES = [
       bamboohr_timeoff: 'people:bamboohr-timeoff-sync',
     } as Record<string, string>,
   },
+  {
+    // Waste OS: the burnsbox waste-cw-pull job (and, until 2026-10-08, the Netlify jobs it replaced) log every
+    // run to cw_sync_runs / cw_inventory_sync_runs. The RPC drops all business numbers (see waste_monitor_rpc.sql).
+    name: 'waste-os',
+    rpc: 'https://xgrbfeeupeaadfwwospv.supabase.co/rest/v1/rpc/monitor_cw_runs',
+    // Public anon key (role=anon) of the Waste OS project, shipped in its own front end. Not a secret.
+    anonKey:
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhncmJmZWV1cGVhYWRmd3dvc3B2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ2MjY4NzAsImV4cCI6MjA5MDIwMjg3MH0.nAbaz6ZMyd4VrANPXMsm0E7vU3IvQMBEFkA36XzoPhw',
+    idPrefix: 'wlog',
+    sources: {
+      cw_dispatch: 'waste:cw-dispatch',
+      cw_ar: 'waste:cw-ar',
+      cw_inventory: 'waste:cw-inventory',
+    } as Record<string, string>,
+  },
 ];
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type' };
@@ -64,7 +79,7 @@ Deno.serve(async (req) => {
       });
       if (!res.ok) { report[p.name] = { error: `HTTP ${res.status}` }; continue; }
       const rows = (await res.json()) as Array<{
-        id: string; source: string; status: string; synced_at: string;
+        id: string | number; source: string; status: string; synced_at: string;
         records_synced: number | null; error_message: string | null; errors: number | null;
       }>;
       const events = rows
